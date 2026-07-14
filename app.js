@@ -19,9 +19,8 @@ const shows = [
 
 const shorts = [
   { title: 'Sintel — короткий фрагмент', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Проверяем, как вертикальное видео выглядит и работает внутри SakhaTube.', tone: 'linear-gradient(160deg,#17283c,#09111c 48%,#293e57)', mp4: demoMedia.clip, poster: demoMedia.poster },
-  { title: 'Никому не говори', category: 'СЦЕНА ИЗ «НУЛЕВОЙ ТОЧКИ»', text: 'Тот самый разговор, после которого уже нельзя вернуться назад.', tone: 'linear-gradient(160deg,#283a51,#0b1018 48%,#6c3a4e)' },
-  { title: 'Один звонок', category: 'ТИЗЕР · «ТИХИЙ СИГНАЛ»', text: 'Один мотив. Одна тайна. И дорога, которая ведёт дальше.', tone: 'linear-gradient(160deg,#4a2d36,#171017 48%,#b67a4c)' },
-  { title: 'Всё начинается здесь', category: 'НАРЕЗКА · «ПОСЛЕ ПОЛУНОЧИ»', text: 'Иногда тишина говорит громче любого признания.', tone: 'linear-gradient(160deg,#203a54,#0c1017 48%,#556d9c)' }
+  { title: 'Sintel — фрагмент 02', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Второй вертикальный фрагмент для проверки свайпов и предзагрузки.', tone: 'linear-gradient(160deg,#283a51,#0b1018 48%,#6c3a4e)', mp4: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/shorts/clip-02.mp4', poster: demoMedia.poster },
+  { title: 'Sintel — фрагмент 03', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Третий вертикальный фрагмент: можно проверить переходы ленты.', tone: 'linear-gradient(160deg,#4a2d36,#171017 48%,#b67a4c)', mp4: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/shorts/clip-03.mp4', poster: demoMedia.poster }
 ];
 
 const locales = {
