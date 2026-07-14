@@ -92,7 +92,7 @@
         </section>
 
         <section class="screen" id="profile-screen" data-screen="profile">
-          <div class="profile-hero"><div class="profile-avatar" data-profile-initial>А</div><div><p class="eyebrow" data-i18n="profile.eyebrow">МОЙ ПРОФИЛЬ</p><h1 data-profile-name>Алексей</h1><p data-profile-summary>Русский · 5 сериалов в избранном</p></div><button class="button button-ghost" data-action="profile-settings" data-i18n="profile.settings" type="button">Настроить</button></div>
+          <div class="profile-hero"><button class="profile-avatar" data-profile-initial data-action="profile-settings" type="button" aria-label="Изменить фото профиля">А</button><div><p class="eyebrow" data-i18n="profile.eyebrow">МОЙ ПРОФИЛЬ</p><h1 data-profile-name>Алексей</h1><p data-profile-summary>Русский · 5 сериалов в избранном</p></div><button class="button button-ghost" data-action="profile-settings" data-i18n="profile.settings" type="button">Настроить</button></div>
           <div class="profile-grid">
             <button class="profile-card" data-action="subscription" type="button"><span>Подписка</span><strong>Sakha+ активна</strong><small>до 14 августа 2026</small></button>
             <button class="profile-card" data-action="continue" type="button"><span>Продолжить</span><strong>1 сериал</strong><small>6 минут осталось</small></button>
@@ -132,6 +132,7 @@
       <form id="settings-form">
         <div class="dialog-header"><div><p class="eyebrow">АККАУНТ</p><h2 id="settings-title">Настройки профиля</h2></div><button class="dialog-close" data-close-dialog="settings-dialog" type="button" aria-label="Закрыть">×</button></div>
         <label class="field-label">Имя в профиле<input id="profile-name-input" name="profile-name" maxlength="28" required /></label>
+        <label class="avatar-upload" for="profile-avatar-input"><span class="avatar-upload-preview" id="avatar-upload-preview">А</span><span><strong>Фото профиля</strong><small>JPG, PNG или WebP · фото сжимается на устройстве</small></span><b>Выбрать</b><input id="profile-avatar-input" type="file" accept="image/jpeg,image/png,image/webp" /></label>
         <label class="field-label">Язык интерфейса<select id="profile-language-input" name="profile-language"><option value="ru">Русский</option><option value="en">English</option><option value="sah">Саха тыла</option></select></label>
         <label class="setting-switch"><span><strong>Автовоспроизведение</strong><small>Следующая серия включается автоматически</small></span><input id="autoplay-input" type="checkbox" checked /><i></i></label>
         <label class="setting-switch"><span><strong>Экономия трафика</strong><small>Начинать видео с умеренного качества</small></span><input id="data-saver-input" type="checkbox" /><i></i></label>

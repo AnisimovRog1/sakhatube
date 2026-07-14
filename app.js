@@ -49,7 +49,7 @@ const locales = {
   }
 };
 
-const defaultProfile = { name: 'Алексей', language: 'ru', autoplay: true, dataSaver: false };
+const defaultProfile = { name: 'Алексей', language: 'ru', avatar: '', autoplay: true, dataSaver: false };
 const recommendationNode = document.querySelector('#recommendations');
 const catalogNode = document.querySelector('#catalog-grid');
 const chipsNode = document.querySelector('#genre-chips');
@@ -72,6 +72,7 @@ let currentCarousel = 0;
 let toastTimer;
 let carouselTimer;
 let profile = loadProfile();
+let pendingAvatar;
 
 function loadProfile() {
   try {
@@ -186,9 +187,47 @@ function renderProfile() {
   const displayName = profile.name.trim() || defaultProfile.name;
   const initial = [...displayName][0].toLocaleUpperCase();
   document.querySelectorAll('[data-profile-name]').forEach((node) => { node.textContent = displayName; });
-  document.querySelectorAll('[data-profile-initial], .avatar-button').forEach((node) => { node.textContent = initial; });
+  document.querySelectorAll('[data-profile-initial], .avatar-button').forEach((node) => {
+    const hasImage = Boolean(profile.avatar);
+    node.textContent = hasImage ? '' : initial;
+    node.style.backgroundImage = hasImage ? `url("${profile.avatar}")` : '';
+    node.classList.toggle('has-image', hasImage);
+  });
   document.querySelectorAll('[data-profile-summary]').forEach((node) => { node.textContent = `${languageLabel()} · ${t('profile.summary')}`; });
   document.querySelector('.language-button').textContent = 'РУ · EN · САХА';
+}
+
+function renderAvatarUploadPreview(source = profile.avatar, name = profile.name) {
+  const preview = document.querySelector('#avatar-upload-preview');
+  if (!preview) return;
+  const hasImage = Boolean(source);
+  preview.textContent = hasImage ? '' : [...(name.trim() || defaultProfile.name)][0].toLocaleUpperCase();
+  preview.style.backgroundImage = hasImage ? `url("${source}")` : '';
+  preview.classList.toggle('has-image', hasImage);
+}
+
+function compressAvatar(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read'));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error('image'));
+      image.onload = () => {
+        const size = 320;
+        const crop = Math.min(image.naturalWidth, image.naturalHeight);
+        const startX = (image.naturalWidth - crop) / 2;
+        const startY = (image.naturalHeight - crop) / 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        canvas.getContext('2d').drawImage(image, startX, startY, crop, crop, 0, 0, size, size);
+        resolve(canvas.toDataURL('image/jpeg', 0.86));
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderShort() {
@@ -212,10 +251,13 @@ function navigate(route) {
 
 function openSettings() {
   closeDialog(notificationsDialog);
+  pendingAvatar = undefined;
   document.querySelector('#profile-name-input').value = profile.name;
   document.querySelector('#profile-language-input').value = profile.language;
   document.querySelector('#autoplay-input').checked = profile.autoplay;
   document.querySelector('#data-saver-input').checked = profile.dataSaver;
+  document.querySelector('#profile-avatar-input').value = '';
+  renderAvatarUploadPreview();
   openDialog(settingsDialog);
 }
 
@@ -390,11 +432,31 @@ carouselViewport.addEventListener('mouseleave', startCarousel);
 carouselViewport.addEventListener('pointerdown', stopCarousel);
 carouselViewport.addEventListener('pointerup', startCarousel);
 carouselViewport.addEventListener('pointercancel', startCarousel);
+document.querySelector('#profile-avatar-input').addEventListener('change', async (event) => {
+  const [file] = event.target.files;
+  if (!file) return;
+  if (file.size > 12 * 1024 * 1024) {
+    showToast('Выбери фото до 12 МБ.');
+    event.target.value = '';
+    return;
+  }
+  try {
+    pendingAvatar = await compressAvatar(file);
+    renderAvatarUploadPreview(pendingAvatar, document.querySelector('#profile-name-input').value);
+  } catch {
+    showToast('Не удалось обработать это фото. Попробуй другое.');
+    event.target.value = '';
+  }
+});
+document.querySelector('#profile-name-input').addEventListener('input', (event) => {
+  renderAvatarUploadPreview(pendingAvatar ?? profile.avatar, event.target.value);
+});
 settingsForm.addEventListener('submit', (event) => {
   event.preventDefault();
   profile = {
     name: document.querySelector('#profile-name-input').value.trim() || defaultProfile.name,
     language: document.querySelector('#profile-language-input').value,
+    avatar: pendingAvatar ?? profile.avatar,
     autoplay: document.querySelector('#autoplay-input').checked,
     dataSaver: document.querySelector('#data-saver-input').checked
   };
