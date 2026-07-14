@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#10131a" />
+    <title>SakhaTube Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="admin.css" />
+  </head>
+  <body>
+    <div class="studio-shell">
+      <aside class="studio-sidebar" aria-label="Навигация Studio">
+        <a class="studio-brand" href="admin.html" aria-label="SakhaTube Studio">
+          <span class="studio-mark">S</span>
+          <span>Sakha<span>Tube</span><small>STUDIO</small></span>
+        </a>
+        <div class="workspace-switcher"><span class="workspace-avatar">ST</span><span><strong>SakhaTube</strong><small>Рабочее пространство</small></span><b>⌄</b></div>
+        <nav class="studio-nav">
+          <button class="is-active" data-view="dashboard" type="button"><span>⌘</span>Обзор</button>
+          <button data-view="content" type="button"><span>▦</span>Контент</button>
+          <button data-view="home" type="button"><span>✦</span>Главная</button>
+          <button data-view="comments" type="button"><span>◌</span>Комментарии <i id="comment-badge">0</i></button>
+          <button data-view="uploads" type="button"><span>↑</span>Загрузки</button>
+        </nav>
+        <div class="studio-sidebar-bottom">
+          <a href="index.html"><span>↗</span>Открыть SakhaTube</a>
+          <button data-action="reset-demo" type="button"><span>↺</span>Сбросить демо-данные</button>
+        </div>
+        <div class="studio-user"><span>А</span><div><strong>Алексей</strong><small>Владелец</small></div><button aria-label="Настройки Studio" type="button">•••</button></div>
+      </aside>
+
+      <main class="studio-main">
+        <header class="studio-topbar">
+          <div><p class="studio-kicker" id="studio-kicker">STUDIO</p><h1 id="studio-page-title">Обзор</h1></div>
+          <div class="studio-actions"><span class="demo-badge">ДЕМО · данные на этом устройстве</span><button class="button button-secondary" data-action="new-series" type="button">+ Новый сериал</button><button class="button button-primary" data-action="upload" type="button">↑ Загрузить видео</button></div>
+        </header>
+
+        <section class="studio-view is-visible" data-studio-view="dashboard">
+          <div class="intro-row"><div><h2>Сегодня в SakhaTube</h2><p>Смотри ключевые цифры и контент, которому нужна реакция.</p></div><button class="period-button" type="button">Последние 7 дней ⌄</button></div>
+          <div class="metric-grid" id="metrics-grid"></div>
+          <div class="dashboard-grid">
+            <section class="studio-card chart-card"><div class="card-heading"><div><p class="studio-kicker">ПРОСМОТРЫ</p><h3>Динамика за неделю</h3></div><strong id="chart-total">0</strong></div><svg class="views-chart" viewBox="0 0 720 214" role="img" aria-label="График просмотров за неделю"><defs><linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#7eb5ff" stop-opacity=".3"/><stop offset="1" stop-color="#7eb5ff" stop-opacity="0"/></linearGradient></defs><path class="chart-grid-line" d="M0 42H720M0 106H720M0 170H720"/><path class="chart-area" d="M0 172 C64 160 80 121 126 133 S194 157 242 114 S320 74 362 92 S433 71 478 84 S548 47 596 56 S667 25 720 37 V214 H0Z"/><path class="chart-line" d="M0 172 C64 160 80 121 126 133 S194 157 242 114 S320 74 362 92 S433 71 478 84 S548 47 596 56 S667 25 720 37"/></svg><div class="chart-days"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div></section>
+            <section class="studio-card attention-card"><div class="card-heading"><div><p class="studio-kicker">ТРЕБУЕТ ВНИМАНИЯ</p><h3>На проверке</h3></div><button data-view="comments" type="button">Открыть</button></div><div class="attention-list" id="attention-list"></div></section>
+          </div>
+          <section class="studio-card top-content-card"><div class="card-heading"><div><p class="studio-kicker">КОНТЕНТ</p><h3>Лучшее за 7 дней</h3></div><button data-view="content" type="button">Весь контент →</button></div><div class="top-content-list" id="top-content-list"></div></section>
+        </section>
+
+        <section class="studio-view" data-studio-view="content">
+          <div class="intro-row"><div><h2>Контент</h2><p>Сериалы, эпизоды и короткие видео. Меняй карточки, доступ и публикацию из одного места.</p></div><button class="button button-primary" data-action="new-series" type="button">+ Добавить контент</button></div>
+          <div class="toolbar"><label class="studio-search"><span>⌕</span><input id="content-search" type="search" placeholder="Название или жанр" /></label><div class="filter-group" id="content-filter"><button class="is-active" data-filter="all" type="button">Все</button><button data-filter="published" type="button">Опубликовано</button><button data-filter="draft" type="button">Черновики</button></div></div>
+          <div class="studio-card table-card"><div class="content-table" id="content-table"></div></div>
+        </section>
+
+        <section class="studio-view" data-studio-view="home">
+          <div class="intro-row"><div><h2>Главная витрина</h2><p>Этот порядок увидит зритель в карусели. Изменения сохраняются сразу.</p></div><button class="button button-primary" data-action="save-home" type="button">Сохранить порядок</button></div>
+          <div class="studio-card home-note"><span>✦</span><p><strong>Премьеры сверху.</strong> Подними карточку, чтобы показать её первой. Скрытый контент не попадёт в витрину.</p></div>
+          <div class="home-order-grid" id="home-order-grid"></div>
+        </section>
+
+        <section class="studio-view" data-studio-view="comments">
+          <div class="intro-row"><div><h2>Комментарии</h2><p>Проверяй новые сообщения, скрывай спам и отвечай от имени редакции.</p></div><div class="filter-group" id="comment-filter"><button class="is-active" data-comment-filter="pending" type="button">На проверке</button><button data-comment-filter="all" type="button">Все</button><button data-comment-filter="hidden" type="button">Скрытые</button></div></div>
+          <div class="comment-list" id="comment-list"></div>
+        </section>
+
+        <section class="studio-view" data-studio-view="uploads">
+          <div class="intro-row"><div><h2>Загрузки</h2><p>Добавляй исходники. После обработки появятся качество, субтитры и статус публикации.</p></div></div>
+          <section class="upload-dropzone"><input id="video-upload" type="file" accept="video/*" /><span class="upload-icon">↑</span><h3>Перетащи видео сюда</h3><p>или выбери файл с устройства</p><button class="button button-primary" data-action="upload" type="button">Выбрать видео</button><small>Демо не отправляет файл в интернет. Настоящая загрузка появится после подключения серверного хранилища.</small></section>
+          <div class="studio-card upload-card"><div class="card-heading"><div><p class="studio-kicker">ОЧЕРЕДЬ</p><h3>Последние файлы</h3></div></div><div class="upload-list" id="upload-list"></div></div>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="studio-dialog" id="content-dialog" aria-labelledby="content-dialog-title">
+      <form id="content-form"><div class="dialog-heading"><div><p class="studio-kicker" id="content-dialog-eyebrow">НОВЫЙ КОНТЕНТ</p><h2 id="content-dialog-title">Добавить сериал</h2></div><button class="icon-button" data-close-dialog="content-dialog" type="button" aria-label="Закрыть">×</button></div><input id="content-id" type="hidden" /><div class="form-grid"><label>Название<input id="content-title" required maxlength="64" placeholder="Например, После полуночи" /></label><label>Жанр<select id="content-genre"><option>Драма</option><option>Мелодрама</option><option>Триллер</option><option>Мистика</option><option>Семейный</option></select></label><label>Тип<select id="content-kind"><option>Сериал</option><option>Короткое видео</option><option>Трейлер</option></select></label><label>Количество эпизодов<input id="content-episodes" type="number" min="1" max="999" value="1" /></label><label class="form-wide">Статус<select id="content-status"><option value="draft">Черновик</option><option value="published">Опубликовано</option><option value="hidden">Скрыто</option></select></label></div><div class="dialog-actions"><button class="button button-secondary" data-close-dialog="content-dialog" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить контент</button></div></form>
+    </dialog>
+
+    <dialog class="studio-dialog confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-heading"><div><p class="studio-kicker">УДАЛЕНИЕ</p><h2 id="confirm-title">Удалить контент?</h2></div><button class="icon-button" data-close-dialog="confirm-dialog" type="button" aria-label="Закрыть">×</button></div><p id="confirm-copy">Карточка исчезнет из Studio и витрины.</p><div class="dialog-actions"><button class="button button-secondary" data-close-dialog="confirm-dialog" type="button">Отмена</button><button class="button button-danger" id="confirm-delete" type="button">Удалить карточку</button></div></dialog>
+    <div class="studio-toast" id="studio-toast" role="status" aria-live="polite"></div>
+    <script src="admin.js"></script>
+  </body>
+</html>
