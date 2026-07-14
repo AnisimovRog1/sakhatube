@@ -266,8 +266,8 @@ function stopPlayer() {
 
 function openPlayer(title, source = {}) {
   playerTitle.textContent = title;
-  const playbackUrl = source.mp4 || source.hls;
-  playerMeta.textContent = source.playerMeta || 'КАТАЛОГ · ПРЕДПРОСМОТР';
+  const playbackUrl = source.mp4 || source.hls || demoMedia.preview;
+  playerMeta.textContent = source.playerMeta || 'ТЕСТОВЫЙ ПРЕДПРОСМОТР · CC BY 3.0';
   if (playbackUrl) {
     playerVideo.src = playbackUrl;
     playerVideo.hidden = false;
@@ -283,10 +283,12 @@ function openPlayer(title, source = {}) {
 }
 
 function openPlayerFrom(element) {
-  openPlayer(element.dataset.title || 'После полуночи', {
-    hls: element.dataset.hls,
-    mp4: element.dataset.mp4,
-    playerMeta: element.dataset.playerMeta
+  const title = element.dataset.title || 'После полуночи';
+  const isDemo = title.startsWith('Sintel');
+  openPlayer(title, {
+    hls: element.dataset.hls || (isDemo ? demoMedia.hls : undefined),
+    mp4: element.dataset.mp4 || (isDemo ? demoMedia.preview : undefined),
+    playerMeta: element.dataset.playerMeta || (isDemo ? 'ЛЕГАЛЬНЫЙ ТЕСТ · CC BY 3.0' : undefined)
   });
 }
 
