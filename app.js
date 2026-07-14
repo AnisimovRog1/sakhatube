@@ -19,26 +19,26 @@ const locales = {
   ru: {
     label: 'Русский',
     'nav.home': 'Главная', 'nav.catalog': 'Каталог', 'nav.foryou': 'Для вас', 'nav.offline': 'Офлайн', 'nav.profile': 'Профиль',
-    'brand.tagline': 'Смотри своё.', 'search.placeholder': 'Сериал, герой или жанр',
-    'home.premieres': 'Премьеры', 'home.catalogEyebrow': 'КАТАЛОГ', 'home.categories': 'Категории', 'home.viewAll': 'Смотреть всё →',
-    'home.continueEyebrow': 'ПРОДОЛЖИТЬ', 'home.keepMoment': 'Не теряй момент', 'home.allStory': 'Вся история →',
-    'home.forYouEyebrow': 'ДЛЯ ТЕБЯ', 'home.newStories': 'Новые истории', 'home.all': 'Все →',
-    'catalog.eyebrow': 'КАТАЛОГ', 'catalog.title': 'Выбери настроение', 'catalog.description': 'Сериалы, шоу и клипы — без лишнего шума.',
-    'foryou.eyebrow': 'ПЕРСОНАЛЬНАЯ ЛЕНТА', 'foryou.title': 'Для<br /><em>вас.</em>', 'foryou.description': 'Эпизоды, лучшие сцены и тизеры, подобранные по твоему просмотру.',
-    'downloads.eyebrow': 'ОФЛАЙН', 'downloads.title': 'Загрузки', 'downloads.description': 'Смотри в дороге и там, где сеть нестабильна.',
+    'brand.tagline': 'Истории, которые хочется досмотреть.', 'search.placeholder': 'Найти сериал или героя',
+    'home.premieres': 'Премьеры', 'home.catalogEyebrow': 'КАТАЛОГ', 'home.categories': 'Категории', 'home.viewAll': 'Открыть каталог →',
+    'home.continueEyebrow': 'ПРОДОЛЖИТЬ', 'home.keepMoment': 'Продолжить просмотр', 'home.allStory': 'В каталог →',
+    'home.forYouEyebrow': 'ДЛЯ ТЕБЯ', 'home.newStories': 'Выбрать на вечер', 'home.all': 'Все новинки →',
+    'catalog.eyebrow': 'КАТАЛОГ', 'catalog.title': 'Найди историю под настроение', 'catalog.description': 'Сериалы, шоу и короткие видео.<span>Всё на своём месте.</span>',
+    'foryou.eyebrow': 'ПЕРСОНАЛЬНАЯ ЛЕНТА', 'foryou.title': 'Для<br /><em>вас.</em>', 'foryou.description': 'Смотри дальше без поиска.<span>Сцены, тизеры и эпизоды по твоим интересам.</span>',
+    'downloads.eyebrow': 'ОФЛАЙН', 'downloads.title': 'Загрузки', 'downloads.description': 'Смотри без сети.<span>В дороге, в самолёте, где угодно.</span>',
     'profile.eyebrow': 'МОЙ ПРОФИЛЬ', 'profile.settings': 'Настроить', 'profile.summary': '5 сериалов в избранном',
     premiere: 'ПРЕМЬЕРА', all: 'Все', 'toast.language': 'Язык интерфейса: {language}', 'toast.settings': 'Настройки профиля сохранены'
   },
   en: {
     label: 'English',
     'nav.home': 'Home', 'nav.catalog': 'Catalog', 'nav.foryou': 'For you', 'nav.offline': 'Offline', 'nav.profile': 'Profile',
-    'brand.tagline': 'Watch what is yours.', 'search.placeholder': 'Series, character, or genre',
-    'home.premieres': 'Premieres', 'home.catalogEyebrow': 'CATALOG', 'home.categories': 'Categories', 'home.viewAll': 'View all →',
-    'home.continueEyebrow': 'CONTINUE', 'home.keepMoment': 'Keep the moment', 'home.allStory': 'Full story →',
-    'home.forYouEyebrow': 'FOR YOU', 'home.newStories': 'New stories', 'home.all': 'All →',
-    'catalog.eyebrow': 'CATALOG', 'catalog.title': 'Pick a mood', 'catalog.description': 'Series, shows, and clips — without the noise.',
-    'foryou.eyebrow': 'PERSONAL FEED', 'foryou.title': 'For<br /><em>you.</em>', 'foryou.description': 'Episodes, standout scenes, and teasers selected from your viewing.',
-    'downloads.eyebrow': 'OFFLINE', 'downloads.title': 'Downloads', 'downloads.description': 'Watch on the road and wherever your connection is unreliable.',
+    'brand.tagline': 'Stories worth finishing.', 'search.placeholder': 'Find a series or character',
+    'home.premieres': 'Premieres', 'home.catalogEyebrow': 'CATALOG', 'home.categories': 'Categories', 'home.viewAll': 'Open catalog →',
+    'home.continueEyebrow': 'CONTINUE', 'home.keepMoment': 'Continue watching', 'home.allStory': 'Go to catalog →',
+    'home.forYouEyebrow': 'FOR YOU', 'home.newStories': 'Pick for tonight', 'home.all': 'See new releases →',
+    'catalog.eyebrow': 'CATALOG', 'catalog.title': 'Find a story for your mood', 'catalog.description': 'Series, shows, and short videos.<span>Everything in its place.</span>',
+    'foryou.eyebrow': 'PERSONAL FEED', 'foryou.title': 'For<br /><em>you.</em>', 'foryou.description': 'Keep watching without searching.<span>Scenes, teasers, and episodes picked for you.</span>',
+    'downloads.eyebrow': 'OFFLINE', 'downloads.title': 'Downloads', 'downloads.description': 'Watch offline.<span>On the road, in the air, anywhere.</span>',
     'profile.eyebrow': 'MY PROFILE', 'profile.settings': 'Settings', 'profile.summary': '5 series saved',
     premiere: 'PREMIERE', all: 'All', 'toast.language': 'Interface language: {language}', 'toast.settings': 'Profile settings saved'
   },
@@ -101,7 +101,7 @@ function applyLocale() {
   document.documentElement.lang = language;
   document.querySelectorAll('[data-i18n]').forEach((node) => {
     const value = t(node.dataset.i18n);
-    if (node.dataset.i18n === 'foryou.title') node.innerHTML = value;
+    if (['foryou.title', 'foryou.description', 'catalog.description', 'downloads.description'].includes(node.dataset.i18n)) node.innerHTML = value;
     else node.textContent = value;
   });
   document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
@@ -279,7 +279,7 @@ function handleAction(action, trigger) {
       navigate('catalog');
       break;
     case 'details':
-      openAction('Нулевая точка', 'Драма на 12 серий. Первые две серии уже доступны без подписки. Полная карточка сериала, трейлер, эпизоды и доступ появятся в следующей продуктовой фазе.', 'СЕРИАЛ');
+      openAction('Нулевая точка', 'Драма, 12 серий. Первые две серии доступны без подписки. Здесь будут трейлер, все эпизоды и условия доступа.', 'СЕРИАЛ');
       break;
     case 'notifications':
       openNotifications();
@@ -294,25 +294,25 @@ function handleAction(action, trigger) {
       showToast(t('toast.language').replace('{language}', languageLabel()));
       break;
     case 'subscription':
-      openAction('Sakha+ активна', 'Подписка действует до 14 августа 2026. Здесь будут управление тарифом, восстановление покупок и прозрачная история платежей.', 'ПОДПИСКА');
+      openAction('Sakha+ активна', 'Подписка действует до 14 августа 2026. Здесь можно будет изменить тариф, восстановить покупки и посмотреть платежи.', 'ПОДПИСКА');
       break;
     case 'continue':
       openPlayer('После полуночи');
       break;
     case 'history':
-      openAction('История просмотров', 'В истории сохраняются позиции просмотра и можно продолжить сериал на любом устройстве. Управление историей появится вместе с авторизацией и синхронизацией.', 'БИБЛИОТЕКА');
+      openAction('История просмотров', 'Продолжай с того же места на любом устройстве. История станет доступна после входа в аккаунт.', 'БИБЛИОТЕКА');
       break;
     case 'saved':
-      openAction('Сохранённое', 'Здесь будут избранное, «посмотреть позже» и сохранённые клипы. Это отдельная библиотека, а не смешанный список рекомендаций.', 'БИБЛИОТЕКА');
+      openAction('Сохранённое', 'Избранное, «на потом» и сохранённые видео будут собраны в одном месте.', 'БИБЛИОТЕКА');
       break;
     case 'security':
-      openAction('Безопасность и устройства', 'В готовом приложении здесь будут активные устройства, завершение сеансов, смена способа входа и двухэтапная защита чувствительных действий.', 'БЕЗОПАСНОСТЬ');
+      openAction('Безопасность и устройства', 'Здесь можно будет посмотреть активные устройства, завершить сеанс и изменить способ входа.', 'БЕЗОПАСНОСТЬ');
       break;
     case 'download-actions':
-      openAction('Загрузка «После полуночи»', 'Здесь будут пауза, выбор качества, удаление файла и информация о свободном месте. Права на офлайн-видео всегда проверяются перед воспроизведением.', 'ОФЛАЙН');
+      openAction('Загрузка «После полуночи»', 'Пауза, качество и удаление файла. Офлайн-доступ проверяется перед просмотром.', 'ОФЛАЙН');
       break;
     default:
-      if (trigger) showToast('Действие подготовлено для следующей версии.');
+      if (trigger) showToast('Раздел появится в следующем обновлении.');
   }
 }
 
@@ -321,19 +321,19 @@ async function handleShortAction(action, button) {
   if (action === 'like') {
     const isActive = button.classList.toggle('is-active');
     button.textContent = isActive ? '♥' : '♡';
-    showToast(isActive ? 'Клип понравился' : 'Лайк убран');
+    showToast(isActive ? 'Добавлено в избранное' : 'Убрано из избранного');
   }
   if (action === 'save') {
     const isActive = button.classList.toggle('is-active');
     button.textContent = isActive ? '✓' : '⌑';
-    showToast(isActive ? 'Клип сохранён' : 'Клип убран из сохранённого');
+    showToast(isActive ? 'Сохранено на потом' : 'Убрано из сохранённого');
   }
   if (action === 'share') {
-    const shareData = { title: short.title, text: `SakhaTube — ${short.title}`, url: window.location.href };
+    const shareData = { title: short.title, text: `SakhaTube · ${short.title}`, url: window.location.href };
     try {
       if (navigator.share) await navigator.share(shareData);
       else if (navigator.clipboard) await navigator.clipboard.writeText(window.location.href);
-      showToast('Ссылка готова к отправке');
+      showToast('Можно отправлять');
     } catch (error) {
       if (error.name !== 'AbortError') showToast('Не удалось открыть меню отправки');
     }
@@ -474,7 +474,7 @@ document.querySelector('#global-search').addEventListener('input', (event) => {
     return;
   }
   navigate('catalog');
-  catalogNode.innerHTML = shows.filter((show) => `${show.title} ${show.meta} ${show.genre}`.toLocaleLowerCase().includes(query)).map(mediaCard).join('') || '<p class="empty-state">Ничего не найдено. Попробуйте другое слово.</p>';
+  catalogNode.innerHTML = shows.filter((show) => `${show.title} ${show.meta} ${show.genre}`.toLocaleLowerCase().includes(query)).map(mediaCard).join('') || '<div class="empty-state"><strong>Нет совпадений.</strong><span>Попробуй название, героя или жанр.</span></div>';
 });
 document.addEventListener('keydown', (event) => {
   if (event.target.closest('.continue-card') && ['Enter', ' '].includes(event.key)) {

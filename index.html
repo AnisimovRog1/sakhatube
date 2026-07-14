@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#08090b" />
-    <title>SakhaTube — истории рядом</title>
+    <title>SakhaTube · Истории рядом</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -13,7 +13,7 @@
   <body>
     <div class="app-shell">
       <aside class="sidebar" aria-label="Основная навигация">
-        <a class="brand" href="#home" data-route="home" aria-label="SakhaTube — главная">
+        <a class="brand" href="#home" data-route="home" aria-label="SakhaTube, главная">
           <span class="brand-mark" aria-hidden="true">S</span>
           <span>Sakha<span>Tube</span></span>
         </a>
@@ -26,13 +26,13 @@
         </nav>
         <div class="sidebar-bottom">
           <button class="language-button" data-action="language" type="button" aria-label="Изменить язык">САХА · РУ</button>
-          <p data-i18n="brand.tagline">Смотри своё.</p>
+          <p data-i18n="brand.tagline">Истории, которые хочется досмотреть.</p>
         </div>
       </aside>
 
       <main class="main-content" id="app-main">
         <header class="topbar">
-          <a class="mobile-brand" href="#home" data-route="home" aria-label="SakhaTube — главная">
+          <a class="mobile-brand" href="#home" data-route="home" aria-label="SakhaTube, главная">
             <span class="mobile-brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></svg></span>
             <span>Sakha<span>Tube</span></span>
           </a>
@@ -53,13 +53,13 @@
           </section>
 
           <section class="content-section home-categories">
-            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.catalogEyebrow">КАТАЛОГ</p><h2 data-i18n="home.categories">Категории</h2></div><button class="text-button" data-action="catalog" data-i18n="home.viewAll" type="button">Смотреть всё →</button></div>
+            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.catalogEyebrow">КАТАЛОГ</p><h2 data-i18n="home.categories">Категории</h2></div><button class="text-button" data-action="catalog" data-i18n="home.viewAll" type="button">Открыть каталог →</button></div>
             <div class="home-genre-row" id="home-genre-row"></div>
             <div class="home-featured-grid" id="home-featured"></div>
           </section>
 
           <section class="content-section">
-            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.continueEyebrow">ПРОДОЛЖИТЬ</p><h2 data-i18n="home.keepMoment">Не теряй момент</h2></div><button class="text-button" data-action="catalog" data-i18n="home.allStory" type="button">Вся история →</button></div>
+            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.continueEyebrow">ПРОДОЛЖИТЬ</p><h2 data-i18n="home.keepMoment">Продолжить просмотр</h2></div><button class="text-button" data-action="catalog" data-i18n="home.allStory" type="button">В каталог →</button></div>
             <div class="continue-card" role="button" tabindex="0" data-title="Сон у ледяной реки">
               <div class="continue-art art-river"></div>
               <div class="continue-info"><span class="badge">Серия 5 из 8</span><h3>После полуночи</h3><p>Осталось 6 минут</p><div class="progress-track"><span style="width: 62%"></span></div></div>
@@ -68,13 +68,13 @@
           </section>
 
           <section class="content-section">
-            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.forYouEyebrow">ДЛЯ ТЕБЯ</p><h2 data-i18n="home.newStories">Новые истории</h2></div><button class="text-button" data-action="catalog" data-i18n="home.all" type="button">Все →</button></div>
+            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.forYouEyebrow">ДЛЯ ТЕБЯ</p><h2 data-i18n="home.newStories">Выбрать на вечер</h2></div><button class="text-button" data-action="catalog" data-i18n="home.all" type="button">Все новинки →</button></div>
             <div class="media-grid" id="recommendations"></div>
           </section>
         </section>
 
         <section class="screen" id="catalog-screen" data-screen="catalog">
-          <div class="screen-intro"><p class="eyebrow" data-i18n="catalog.eyebrow">КАТАЛОГ</p><h1 data-i18n="catalog.title">Выбери настроение</h1><p data-i18n="catalog.description">Сериалы, шоу и клипы — без лишнего шума.</p></div>
+          <div class="screen-intro"><p class="eyebrow" data-i18n="catalog.eyebrow">КАТАЛОГ</p><h1 data-i18n="catalog.title">Найди историю под настроение</h1><p class="screen-copy" data-i18n="catalog.description">Сериалы, шоу и короткие видео.<span>Всё на своём месте.</span></p></div>
           <div class="chips" id="genre-chips" aria-label="Жанры"></div>
           <div class="catalog-grid" id="catalog-grid"></div>
         </section>
@@ -82,12 +82,12 @@
         <section class="screen" id="foryou-screen" data-screen="foryou">
           <div class="shorts-layout">
             <div class="shorts-stage" id="shorts-stage" aria-live="polite"></div>
-            <aside class="shorts-rail"><p class="eyebrow" data-i18n="foryou.eyebrow">ПЕРСОНАЛЬНАЯ ЛЕНТА</p><h1 data-i18n="foryou.title">Для<br /><em>вас.</em></h1><p data-i18n="foryou.description">Эпизоды, лучшие сцены и тизеры, подобранные по твоему просмотру.</p><div class="shorts-counter" id="shorts-counter"></div><div class="shorts-controls"><button class="round-control" id="shorts-prev" type="button" aria-label="Предыдущая рекомендация">↑</button><button class="round-control" id="shorts-next" type="button" aria-label="Следующая рекомендация">↓</button></div></aside>
+            <aside class="shorts-rail"><p class="eyebrow" data-i18n="foryou.eyebrow">ПЕРСОНАЛЬНАЯ ЛЕНТА</p><h1 data-i18n="foryou.title">Для<br /><em>вас.</em></h1><p class="shorts-description" data-i18n="foryou.description">Смотри дальше без поиска.<span>Сцены, тизеры и эпизоды по твоим интересам.</span></p><div class="shorts-counter" id="shorts-counter"></div><div class="shorts-controls"><button class="round-control" id="shorts-prev" type="button" aria-label="Предыдущая рекомендация">↑</button><button class="round-control" id="shorts-next" type="button" aria-label="Следующая рекомендация">↓</button></div></aside>
           </div>
         </section>
 
         <section class="screen" id="downloads-screen" data-screen="downloads">
-          <div class="screen-intro"><p class="eyebrow" data-i18n="downloads.eyebrow">ОФЛАЙН</p><h1 data-i18n="downloads.title">Загрузки</h1><p data-i18n="downloads.description">Смотри в дороге и там, где сеть нестабильна.</p></div>
+          <div class="screen-intro"><p class="eyebrow" data-i18n="downloads.eyebrow">ОФЛАЙН</p><h1 data-i18n="downloads.title">Загрузки</h1><p class="screen-copy" data-i18n="downloads.description">Смотри без сети.<span>В дороге, в самолёте, где угодно.</span></p></div>
           <div class="downloads-list"><article class="download-item"><div class="download-art art-river"></div><div><h3>После полуночи</h3><p>Серия 5 · HD · 184 МБ</p><div class="progress-track"><span style="width: 78%"></span></div></div><span class="download-percent">78%</span><button class="more-button" data-action="download-actions" aria-label="Действия с загрузкой" type="button">•••</button></article></div>
         </section>
 
@@ -99,10 +99,10 @@
             <button class="profile-card" data-route="downloads" type="button"><span>Загрузки</span><strong>1,4 ГБ</strong><small>из 10 ГБ</small></button>
           </div>
           <section class="profile-menu" aria-label="Управление профилем">
-            <button class="profile-menu-item" data-action="history" type="button"><span><strong>История просмотров</strong><small>Продолжай с того места, где остановился</small></span><b>›</b></button>
-            <button class="profile-menu-item" data-action="saved" type="button"><span><strong>Сохранённое</strong><small>Избранное и «посмотреть позже»</small></span><b>›</b></button>
-            <button class="profile-menu-item" data-action="notifications" type="button"><span><strong>Уведомления</strong><small>2 новых · управляй типами оповещений</small></span><b>›</b></button>
-            <button class="profile-menu-item" data-action="security" type="button"><span><strong>Безопасность и устройства</strong><small>Сеансы, вход и защита аккаунта</small></span><b>›</b></button>
+            <button class="profile-menu-item" data-action="history" type="button"><span><strong>История просмотров</strong><small>С того места, где остановился</small></span><b>›</b></button>
+            <button class="profile-menu-item" data-action="saved" type="button"><span><strong>Сохранённое</strong><small>Избранное и «на потом»</small></span><b>›</b></button>
+            <button class="profile-menu-item" data-action="notifications" type="button"><span><strong>Уведомления</strong><small>2 новых сообщения</small></span><b>›</b></button>
+            <button class="profile-menu-item" data-action="security" type="button"><span><strong>Безопасность и устройства</strong><small>Входы, устройства и защита</small></span><b>›</b></button>
           </section>
         </section>
       </main>
@@ -117,7 +117,7 @@
     </div>
 
     <dialog class="player-dialog" id="player-dialog" aria-labelledby="player-title">
-      <div class="player-stage"><button class="close-player" id="close-player" type="button" aria-label="Закрыть плеер">×</button><div class="player-poster"><span class="player-play">▶</span><p>Плеер готов к HLS-потоку</p></div></div>
+      <div class="player-stage"><button class="close-player" id="close-player" type="button" aria-label="Закрыть плеер">×</button><div class="player-poster"><span class="player-play">▶</span><p>Здесь появится видео</p></div></div>
       <div class="player-info"><div><p class="eyebrow">СЕРИЯ 1 · 12 МИН</p><h2 id="player-title">Нулевая точка</h2></div><button class="button button-primary" id="player-continue" type="button">Продолжить</button></div>
     </dialog>
     <dialog class="app-dialog" id="notifications-dialog" aria-labelledby="notifications-title">
@@ -132,10 +132,10 @@
       <form id="settings-form">
         <div class="dialog-header"><div><p class="eyebrow">АККАУНТ</p><h2 id="settings-title">Настройки профиля</h2></div><button class="dialog-close" data-close-dialog="settings-dialog" type="button" aria-label="Закрыть">×</button></div>
         <label class="field-label">Имя в профиле<input id="profile-name-input" name="profile-name" maxlength="28" required /></label>
-        <label class="avatar-upload" for="profile-avatar-input"><span class="avatar-upload-preview" id="avatar-upload-preview">А</span><span><strong>Фото профиля</strong><small>JPG, PNG или WebP · фото сжимается на устройстве</small></span><b>Выбрать</b><input id="profile-avatar-input" type="file" accept="image/jpeg,image/png,image/webp" /></label>
+        <label class="avatar-upload" for="profile-avatar-input"><span class="avatar-upload-preview" id="avatar-upload-preview">А</span><span><strong>Фото профиля</strong><small>JPG, PNG или WebP. Хранится только в этом браузере.</small></span><b>Выбрать</b><input id="profile-avatar-input" type="file" accept="image/jpeg,image/png,image/webp" /></label>
         <label class="field-label">Язык интерфейса<select id="profile-language-input" name="profile-language"><option value="ru">Русский</option><option value="en">English</option><option value="sah">Саха тыла</option></select></label>
         <label class="setting-switch"><span><strong>Автовоспроизведение</strong><small>Следующая серия включается автоматически</small></span><input id="autoplay-input" type="checkbox" checked /><i></i></label>
-        <label class="setting-switch"><span><strong>Экономия трафика</strong><small>Начинать видео с умеренного качества</small></span><input id="data-saver-input" type="checkbox" /><i></i></label>
+        <label class="setting-switch"><span><strong>Экономия трафика</strong><small>Начинать с меньшего качества при слабой сети</small></span><input id="data-saver-input" type="checkbox" /><i></i></label>
         <div class="dialog-actions"><button class="button button-ghost" data-close-dialog="settings-dialog" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div>
       </form>
     </dialog>
