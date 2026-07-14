@@ -326,6 +326,9 @@ export function buildApp(options = {}) {
       reply.header('content-type', object.ContentType || 'application/octet-stream');
       reply.header('cache-control', relativeKey.endsWith('.m3u8') ? 'no-cache' : 'public, max-age=86400');
       reply.header('x-sakhatube-demo-media', 'true');
+      // This route holds only temporary Creative Commons test media. Allow the
+      // local file preview and the deployed app to render the same demo assets.
+      reply.header('cross-origin-resource-policy', 'cross-origin');
       reply.header('accept-ranges', 'bytes');
       if (object.ContentRange) reply.header('content-range', object.ContentRange);
       if (object.ContentLength !== undefined) reply.header('content-length', object.ContentLength);

@@ -100,6 +100,7 @@ test('temporary demo media is public but restricted to its own prefix', async (t
   assert.equal(manifest.headers['content-type'], 'application/vnd.apple.mpegurl');
   assert.equal(manifest.headers['cache-control'], 'no-cache');
   assert.equal(manifest.headers['x-sakhatube-demo-media'], 'true');
+  assert.equal(manifest.headers['cross-origin-resource-policy'], 'cross-origin');
   assert.deepEqual(requestedKeys, [['demo-media/sintel-demo/episode/master.m3u8', undefined]]);
   const rangedClip = await app.inject({ method: 'GET', url: '/v1/demo-media/sintel-demo/clip/clip.mp4', headers: { range: 'bytes=0-15' } });
   assert.equal(rangedClip.statusCode, 206);
