@@ -15,7 +15,41 @@ const shorts = [
   { title: 'Всё начинается здесь', category: 'НАРЕЗКА · «ПОСЛЕ ПОЛУНОЧИ»', text: 'Иногда тишина говорит громче любого признания.', tone: 'linear-gradient(160deg,#203a54,#0c1017 48%,#556d9c)' }
 ];
 
-const defaultProfile = { name: 'Алексей', language: 'Русский', autoplay: true, dataSaver: false };
+const locales = {
+  ru: {
+    label: 'Русский',
+    'nav.home': 'Главная', 'nav.catalog': 'Каталог', 'nav.foryou': 'Для вас', 'nav.offline': 'Офлайн', 'nav.profile': 'Профиль',
+    'brand.tagline': 'Смотри своё.', 'search.placeholder': 'Сериал, герой или жанр',
+    'home.premieres': 'Премьеры', 'home.catalogEyebrow': 'КАТАЛОГ', 'home.categories': 'Категории', 'home.viewAll': 'Смотреть всё →',
+    'home.continueEyebrow': 'ПРОДОЛЖИТЬ', 'home.keepMoment': 'Не теряй момент', 'home.allStory': 'Вся история →',
+    'home.forYouEyebrow': 'ДЛЯ ТЕБЯ', 'home.newStories': 'Новые истории', 'home.all': 'Все →',
+    'catalog.eyebrow': 'КАТАЛОГ', 'catalog.title': 'Выбери настроение', 'catalog.description': 'Сериалы, шоу и клипы — без лишнего шума.',
+    'foryou.eyebrow': 'ПЕРСОНАЛЬНАЯ ЛЕНТА', 'foryou.title': 'Для<br /><em>вас.</em>', 'foryou.description': 'Эпизоды, лучшие сцены и тизеры, подобранные по твоему просмотру.',
+    'downloads.eyebrow': 'ОФЛАЙН', 'downloads.title': 'Загрузки', 'downloads.description': 'Смотри в дороге и там, где сеть нестабильна.',
+    'profile.eyebrow': 'МОЙ ПРОФИЛЬ', 'profile.settings': 'Настроить', 'profile.summary': '5 сериалов в избранном',
+    premiere: 'ПРЕМЬЕРА', all: 'Все', 'toast.language': 'Язык интерфейса: {language}', 'toast.settings': 'Настройки профиля сохранены'
+  },
+  en: {
+    label: 'English',
+    'nav.home': 'Home', 'nav.catalog': 'Catalog', 'nav.foryou': 'For you', 'nav.offline': 'Offline', 'nav.profile': 'Profile',
+    'brand.tagline': 'Watch what is yours.', 'search.placeholder': 'Series, character, or genre',
+    'home.premieres': 'Premieres', 'home.catalogEyebrow': 'CATALOG', 'home.categories': 'Categories', 'home.viewAll': 'View all →',
+    'home.continueEyebrow': 'CONTINUE', 'home.keepMoment': 'Keep the moment', 'home.allStory': 'Full story →',
+    'home.forYouEyebrow': 'FOR YOU', 'home.newStories': 'New stories', 'home.all': 'All →',
+    'catalog.eyebrow': 'CATALOG', 'catalog.title': 'Pick a mood', 'catalog.description': 'Series, shows, and clips — without the noise.',
+    'foryou.eyebrow': 'PERSONAL FEED', 'foryou.title': 'For<br /><em>you.</em>', 'foryou.description': 'Episodes, standout scenes, and teasers selected from your viewing.',
+    'downloads.eyebrow': 'OFFLINE', 'downloads.title': 'Downloads', 'downloads.description': 'Watch on the road and wherever your connection is unreliable.',
+    'profile.eyebrow': 'MY PROFILE', 'profile.settings': 'Settings', 'profile.summary': '5 series saved',
+    premiere: 'PREMIERE', all: 'All', 'toast.language': 'Interface language: {language}', 'toast.settings': 'Profile settings saved'
+  },
+  sah: {
+    label: 'Саха тыла',
+    'nav.home': 'Сүрүн', 'nav.catalog': 'Бөлөх', 'nav.foryou': 'Эйиэхэ', 'nav.offline': 'Оффлайн', 'nav.profile': 'Профиль',
+    'home.categories': 'Бөлөх'
+  }
+};
+
+const defaultProfile = { name: 'Алексей', language: 'ru', autoplay: true, dataSaver: false };
 const recommendationNode = document.querySelector('#recommendations');
 const catalogNode = document.querySelector('#catalog-grid');
 const chipsNode = document.querySelector('#genre-chips');
@@ -26,17 +60,57 @@ const settingsDialog = document.querySelector('#settings-dialog');
 const actionDialog = document.querySelector('#action-dialog');
 const settingsForm = document.querySelector('#settings-form');
 const toast = document.querySelector('#toast');
+const carouselViewport = document.querySelector('#carousel-viewport');
+const carouselNode = document.querySelector('#premiere-carousel');
+const carouselDots = document.querySelector('#carousel-dots');
+const homeFeaturedNode = document.querySelector('#home-featured');
+const homeGenreNode = document.querySelector('#home-genre-row');
 let activeGenre = 'Все';
+let homeGenre = 'Все';
 let currentShort = 0;
+let currentCarousel = 0;
 let toastTimer;
+let carouselTimer;
 let profile = loadProfile();
 
 function loadProfile() {
   try {
-    return { ...defaultProfile, ...JSON.parse(localStorage.getItem('sakhatube-profile') || '{}') };
+    const saved = JSON.parse(localStorage.getItem('sakhatube-profile') || '{}');
+    const legacyLanguage = { Русский: 'ru', Саха: 'sah' };
+    return { ...defaultProfile, ...saved, language: legacyLanguage[saved.language] || saved.language || defaultProfile.language };
   } catch {
     return { ...defaultProfile };
   }
+}
+
+function currentLocale() {
+  return locales[profile.language] ? profile.language : 'ru';
+}
+
+function t(key) {
+  return locales[currentLocale()][key] ?? locales.ru[key] ?? key;
+}
+
+function languageLabel() {
+  return locales[currentLocale()].label;
+}
+
+function applyLocale() {
+  const language = currentLocale();
+  document.documentElement.lang = language;
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    const value = t(node.dataset.i18n);
+    if (node.dataset.i18n === 'foryou.title') node.innerHTML = value;
+    else node.textContent = value;
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach((node) => { node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel)); });
+  renderGenres();
+  renderCatalog();
+  renderHomeFeatured();
+  renderCarousel();
+  renderProfile();
+  window.requestAnimationFrame(() => setCarousel(currentCarousel, false));
 }
 
 function saveProfile() {
@@ -67,18 +141,54 @@ function renderCatalog() {
   catalogNode.innerHTML = visibleShows.map(mediaCard).join('');
 }
 
+function homeCard(show) {
+  return `<button class="media-card play-button" data-title="${show.title}" type="button"><div class="card-poster ${show.poster}"><span>${show.genre.toUpperCase()}</span></div><h3>${show.title}</h3><p>${show.meta}</p></button>`;
+}
+
+function renderHomeFeatured() {
+  const visibleShows = homeGenre === 'Все' ? shows.slice(0, 6) : shows.filter((show) => show.genre === homeGenre).slice(0, 6);
+  homeFeaturedNode.innerHTML = visibleShows.map(homeCard).join('');
+  homeGenreNode.innerHTML = ['Все', ...new Set(shows.map((show) => show.genre))].map((genre) => `<button class="${genre === homeGenre ? 'is-active' : ''}" data-home-genre="${genre}" type="button">${genre === 'Все' ? t('all') : genre}</button>`).join('');
+}
+
+function renderCarousel() {
+  carouselNode.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="carousel-slide ${index === currentCarousel ? 'is-current' : ''}" data-carousel-index="${index}" data-title="${show.title}" type="button"><div class="carousel-cover ${show.poster}"><span>${t('premiere')}</span><div class="carousel-copy"><p>${show.genre}</p><h2>${show.title}</h2><small>${show.meta}</small></div></div></button>`).join('');
+  carouselDots.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="${index === currentCarousel ? 'is-current' : ''}" data-carousel-dot="${index}" type="button" aria-label="${t('home.premieres')}: ${show.title}"></button>`).join('');
+}
+
+function setCarousel(index, shouldScroll = true) {
+  const count = Math.min(shows.length, 5);
+  currentCarousel = (index + count) % count;
+  carouselNode.querySelectorAll('[data-carousel-index]').forEach((slide) => slide.classList.toggle('is-current', Number(slide.dataset.carouselIndex) === currentCarousel));
+  carouselDots.querySelectorAll('[data-carousel-dot]').forEach((dot) => dot.classList.toggle('is-current', Number(dot.dataset.carouselDot) === currentCarousel));
+  if (shouldScroll) {
+    const activeSlide = carouselNode.querySelector(`[data-carousel-index="${currentCarousel}"]`);
+    if (activeSlide) carouselViewport.scrollTo({ left: activeSlide.offsetLeft - (carouselViewport.clientWidth - activeSlide.clientWidth) / 2, behavior: 'smooth' });
+  }
+}
+
+function stopCarousel() {
+  window.clearInterval(carouselTimer);
+}
+
+function startCarousel() {
+  stopCarousel();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  carouselTimer = window.setInterval(() => setCarousel(currentCarousel + 1), 5200);
+}
+
 function renderGenres() {
   const genres = ['Все', ...new Set(shows.map((show) => show.genre))];
-  chipsNode.innerHTML = genres.map((genre) => `<button class="chip ${genre === activeGenre ? 'is-active' : ''}" data-genre="${genre}" type="button">${genre}</button>`).join('');
+  chipsNode.innerHTML = genres.map((genre) => `<button class="chip ${genre === activeGenre ? 'is-active' : ''}" data-genre="${genre}" type="button">${genre === 'Все' ? t('all') : genre}</button>`).join('');
 }
 
 function renderProfile() {
   const displayName = profile.name.trim() || defaultProfile.name;
-  const initial = [...displayName][0].toLocaleUpperCase('ru');
+  const initial = [...displayName][0].toLocaleUpperCase();
   document.querySelectorAll('[data-profile-name]').forEach((node) => { node.textContent = displayName; });
   document.querySelectorAll('[data-profile-initial], .avatar-button').forEach((node) => { node.textContent = initial; });
-  document.querySelectorAll('[data-profile-summary]').forEach((node) => { node.textContent = `${profile.language} · 5 сериалов в избранном`; });
-  document.querySelector('.language-button').textContent = profile.language === 'Русский' ? 'САХА · РУ' : 'РУ · САХА';
+  document.querySelectorAll('[data-profile-summary]').forEach((node) => { node.textContent = `${languageLabel()} · ${t('profile.summary')}`; });
+  document.querySelector('.language-button').textContent = 'РУ · EN · САХА';
 }
 
 function renderShort() {
@@ -136,10 +246,10 @@ function handleAction(action, trigger) {
       openSettings();
       break;
     case 'language':
-      profile.language = profile.language === 'Русский' ? 'Саха' : 'Русский';
+      profile.language = { ru: 'en', en: 'sah', sah: 'ru' }[currentLocale()];
       saveProfile();
-      renderProfile();
-      showToast(`Язык интерфейса: ${profile.language}`);
+      applyLocale();
+      showToast(t('toast.language').replace('{language}', languageLabel()));
       break;
     case 'subscription':
       openAction('Sakha+ активна', 'Подписка действует до 14 августа 2026. Здесь будут управление тарифом, восстановление покупок и прозрачная история платежей.', 'ПОДПИСКА');
@@ -189,10 +299,9 @@ async function handleShortAction(action, button) {
 }
 
 recommendationNode.innerHTML = shows.slice(0, 5).map(mediaCard).join('');
-renderGenres();
-renderCatalog();
+applyLocale();
 renderShort();
-renderProfile();
+startCarousel();
 
 document.addEventListener('click', (event) => {
   const closeButton = event.target.closest('[data-close-dialog]');
@@ -227,6 +336,28 @@ document.addEventListener('click', (event) => {
     return;
   }
 
+  const carouselButton = event.target.closest('[data-carousel-index]');
+  if (carouselButton) {
+    setCarousel(Number(carouselButton.dataset.carouselIndex));
+    openPlayer(carouselButton.dataset.title);
+    startCarousel();
+    return;
+  }
+
+  const carouselDot = event.target.closest('[data-carousel-dot]');
+  if (carouselDot) {
+    setCarousel(Number(carouselDot.dataset.carouselDot));
+    startCarousel();
+    return;
+  }
+
+  const homeGenreButton = event.target.closest('[data-home-genre]');
+  if (homeGenreButton) {
+    homeGenre = homeGenreButton.dataset.homeGenre;
+    renderHomeFeatured();
+    return;
+  }
+
   const playButton = event.target.closest('.play-button, .continue-card');
   if (playButton) {
     openPlayer(playButton.dataset.title || 'После полуночи');
@@ -254,6 +385,11 @@ document.querySelector('#shorts-prev').addEventListener('click', () => {
   currentShort = (currentShort - 1 + shorts.length) % shorts.length;
   renderShort();
 });
+carouselViewport.addEventListener('mouseenter', stopCarousel);
+carouselViewport.addEventListener('mouseleave', startCarousel);
+carouselViewport.addEventListener('pointerdown', stopCarousel);
+carouselViewport.addEventListener('pointerup', startCarousel);
+carouselViewport.addEventListener('pointercancel', startCarousel);
 settingsForm.addEventListener('submit', (event) => {
   event.preventDefault();
   profile = {
@@ -263,12 +399,12 @@ settingsForm.addEventListener('submit', (event) => {
     dataSaver: document.querySelector('#data-saver-input').checked
   };
   saveProfile();
-  renderProfile();
+  applyLocale();
   closeDialog(settingsDialog);
-  showToast('Настройки профиля сохранены');
+  showToast(t('toast.settings'));
 });
 document.querySelector('#global-search').addEventListener('input', (event) => {
-  const query = event.target.value.trim().toLocaleLowerCase('ru');
+  const query = event.target.value.trim().toLocaleLowerCase();
   if (!query) {
     activeGenre = 'Все';
     renderGenres();
@@ -276,14 +412,14 @@ document.querySelector('#global-search').addEventListener('input', (event) => {
     return;
   }
   navigate('catalog');
-  catalogNode.innerHTML = shows.filter((show) => `${show.title} ${show.meta} ${show.genre}`.toLocaleLowerCase('ru').includes(query)).map(mediaCard).join('') || '<p class="empty-state">Ничего не найдено. Попробуйте другое слово.</p>';
+  catalogNode.innerHTML = shows.filter((show) => `${show.title} ${show.meta} ${show.genre}`.toLocaleLowerCase().includes(query)).map(mediaCard).join('') || '<p class="empty-state">Ничего не найдено. Попробуйте другое слово.</p>';
 });
 document.addEventListener('keydown', (event) => {
   if (event.target.closest('.continue-card') && ['Enter', ' '].includes(event.key)) {
     event.preventDefault();
     openPlayer('После полуночи');
   }
-  if (document.querySelector('#shorts-screen').classList.contains('is-visible') && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+  if (document.querySelector('#foryou-screen').classList.contains('is-visible') && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
     event.preventDefault();
     currentShort = event.key === 'ArrowDown' ? (currentShort + 1) % shorts.length : (currentShort - 1 + shorts.length) % shorts.length;
     renderShort();

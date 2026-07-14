@@ -18,15 +18,15 @@
           <span>Sakha<span>Tube</span></span>
         </a>
         <nav class="nav-list">
-          <button class="nav-item is-active" data-route="home" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M9 21v-6h6v6"/></svg>Главная</button>
-          <button class="nav-item" data-route="catalog" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16M3 9h5M3 15h5M16 4v16M16 9h5M16 15h5"/></svg>Каталог</button>
-          <button class="nav-item" data-route="shorts" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="m10 9 5 3-5 3Z"/></svg>Клипы</button>
-          <button class="nav-item" data-route="downloads" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>Загрузки</button>
-          <button class="nav-item" data-route="profile" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c.8-4.1 3.5-6 8-6s7.2 1.9 8 6"/></svg>Профиль</button>
+          <button class="nav-item is-active" data-route="home" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M9 21v-6h6v6"/></svg><span data-i18n="nav.home">Главная</span></button>
+          <button class="nav-item" data-route="catalog" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16M3 9h5M3 15h5M16 4v16M16 9h5M16 15h5"/></svg><span data-i18n="nav.catalog">Каталог</span></button>
+          <button class="nav-item" data-route="foryou" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21 3-7.8 18-2.6-7.2L3 11.2Z"/><path d="m10.6 13.8 4.5-4.5"/></svg><span data-i18n="nav.foryou">Для вас</span></button>
+          <button class="nav-item" data-route="downloads" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg><span data-i18n="nav.offline">Загрузки</span></button>
+          <button class="nav-item" data-route="profile" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c.8-4.1 3.5-6 8-6s7.2 1.9 8 6"/></svg><span data-i18n="nav.profile">Профиль</span></button>
         </nav>
         <div class="sidebar-bottom">
           <button class="language-button" data-action="language" type="button" aria-label="Изменить язык">САХА · РУ</button>
-          <p>Смотри своё.</p>
+          <p data-i18n="brand.tagline">Смотри своё.</p>
         </div>
       </aside>
 
@@ -38,7 +38,7 @@
           </a>
           <label class="search-box">
             <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.5"/><path d="m16 16 4.3 4.3"/></svg>
-            <input id="global-search" type="search" placeholder="Сериал, герой или жанр" autocomplete="off" />
+            <input id="global-search" type="search" placeholder="Сериал, герой или жанр" data-i18n-placeholder="search.placeholder" autocomplete="off" />
           </label>
           <div class="top-actions">
             <button class="round-button" id="notifications-button" data-action="notifications" type="button" aria-label="Уведомления"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 10a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 22h4"/></svg><i></i></button>
@@ -47,23 +47,19 @@
         </header>
 
         <section class="screen is-visible" id="home-screen" data-screen="home">
-          <section class="hero" aria-label="Рекомендуемый сериал">
-            <div class="hero-copy">
-              <div class="hero-topline"><p class="eyebrow">ПРЕМЬЕРА</p></div>
-              <h1>Нулевая <em>точка</em></h1>
-              <p class="hero-description">Новый сериал. Первые две серии уже доступны без подписки.</p>
-              <div class="hero-meta"><span>2026</span><span>16+</span><span>Драма · 12 серий</span></div>
-              <div class="hero-actions">
-                <button class="button button-primary play-button" data-title="Нулевая точка" type="button">▶ Смотреть</button>
-                <button class="button button-ghost details-button" data-action="details" data-title="Нулевая точка" type="button">Подробнее</button>
-              </div>
-            </div>
-            <span class="hero-rating">16+</span>
-            <div class="hero-art" aria-hidden="true"></div>
+          <section class="premiere-carousel" aria-label="Премьеры" data-i18n-aria-label="home.premieres">
+            <div class="carousel-viewport" id="carousel-viewport"><div class="carousel-track" id="premiere-carousel"></div></div>
+            <div class="carousel-dots" id="carousel-dots" aria-label="Выбрать премьеру"></div>
+          </section>
+
+          <section class="content-section home-categories">
+            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.catalogEyebrow">КАТАЛОГ</p><h2 data-i18n="home.categories">Категории</h2></div><button class="text-button" data-action="catalog" data-i18n="home.viewAll" type="button">Смотреть всё →</button></div>
+            <div class="home-genre-row" id="home-genre-row"></div>
+            <div class="home-featured-grid" id="home-featured"></div>
           </section>
 
           <section class="content-section">
-            <div class="section-heading"><div><p class="eyebrow">ПРОДОЛЖИТЬ</p><h2>Не теряй момент</h2></div><button class="text-button" data-action="catalog" type="button">Вся история →</button></div>
+            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.continueEyebrow">ПРОДОЛЖИТЬ</p><h2 data-i18n="home.keepMoment">Не теряй момент</h2></div><button class="text-button" data-action="catalog" data-i18n="home.allStory" type="button">Вся история →</button></div>
             <div class="continue-card" role="button" tabindex="0" data-title="Сон у ледяной реки">
               <div class="continue-art art-river"></div>
               <div class="continue-info"><span class="badge">Серия 5 из 8</span><h3>После полуночи</h3><p>Осталось 6 минут</p><div class="progress-track"><span style="width: 62%"></span></div></div>
@@ -72,31 +68,31 @@
           </section>
 
           <section class="content-section">
-            <div class="section-heading"><div><p class="eyebrow">ДЛЯ ТЕБЯ</p><h2>Новые истории</h2></div><button class="text-button" data-action="catalog" type="button">Все →</button></div>
+            <div class="section-heading"><div><p class="eyebrow" data-i18n="home.forYouEyebrow">ДЛЯ ТЕБЯ</p><h2 data-i18n="home.newStories">Новые истории</h2></div><button class="text-button" data-action="catalog" data-i18n="home.all" type="button">Все →</button></div>
             <div class="media-grid" id="recommendations"></div>
           </section>
         </section>
 
         <section class="screen" id="catalog-screen" data-screen="catalog">
-          <div class="screen-intro"><p class="eyebrow">КАТАЛОГ</p><h1>Выбери настроение</h1><p>Сериалы, шоу и клипы — без лишнего шума.</p></div>
+          <div class="screen-intro"><p class="eyebrow" data-i18n="catalog.eyebrow">КАТАЛОГ</p><h1 data-i18n="catalog.title">Выбери настроение</h1><p data-i18n="catalog.description">Сериалы, шоу и клипы — без лишнего шума.</p></div>
           <div class="chips" id="genre-chips" aria-label="Жанры"></div>
           <div class="catalog-grid" id="catalog-grid"></div>
         </section>
 
-        <section class="screen" id="shorts-screen" data-screen="shorts">
+        <section class="screen" id="foryou-screen" data-screen="foryou">
           <div class="shorts-layout">
             <div class="shorts-stage" id="shorts-stage" aria-live="polite"></div>
-            <aside class="shorts-rail"><p class="eyebrow">КЛИПЫ</p><h1>Коротко.<br /><em>По делу.</em></h1><p>Тизеры, лучшие сцены и нарезки — отдельным быстрым потоком.</p><div class="shorts-counter" id="shorts-counter"></div><div class="shorts-controls"><button class="round-control" id="shorts-prev" type="button" aria-label="Предыдущий клип">↑</button><button class="round-control" id="shorts-next" type="button" aria-label="Следующий клип">↓</button></div></aside>
+            <aside class="shorts-rail"><p class="eyebrow" data-i18n="foryou.eyebrow">ПЕРСОНАЛЬНАЯ ЛЕНТА</p><h1 data-i18n="foryou.title">Для<br /><em>вас.</em></h1><p data-i18n="foryou.description">Эпизоды, лучшие сцены и тизеры, подобранные по твоему просмотру.</p><div class="shorts-counter" id="shorts-counter"></div><div class="shorts-controls"><button class="round-control" id="shorts-prev" type="button" aria-label="Предыдущая рекомендация">↑</button><button class="round-control" id="shorts-next" type="button" aria-label="Следующая рекомендация">↓</button></div></aside>
           </div>
         </section>
 
         <section class="screen" id="downloads-screen" data-screen="downloads">
-          <div class="screen-intro"><p class="eyebrow">ОФЛАЙН</p><h1>Загрузки</h1><p>Смотри в дороге и там, где сеть нестабильна.</p></div>
+          <div class="screen-intro"><p class="eyebrow" data-i18n="downloads.eyebrow">ОФЛАЙН</p><h1 data-i18n="downloads.title">Загрузки</h1><p data-i18n="downloads.description">Смотри в дороге и там, где сеть нестабильна.</p></div>
           <div class="downloads-list"><article class="download-item"><div class="download-art art-river"></div><div><h3>После полуночи</h3><p>Серия 5 · HD · 184 МБ</p><div class="progress-track"><span style="width: 78%"></span></div></div><span class="download-percent">78%</span><button class="more-button" data-action="download-actions" aria-label="Действия с загрузкой" type="button">•••</button></article></div>
         </section>
 
         <section class="screen" id="profile-screen" data-screen="profile">
-          <div class="profile-hero"><div class="profile-avatar" data-profile-initial>А</div><div><p class="eyebrow">МОЙ ПРОФИЛЬ</p><h1 data-profile-name>Алексей</h1><p data-profile-summary>Русский · 5 сериалов в избранном</p></div><button class="button button-ghost" data-action="profile-settings" type="button">Настроить</button></div>
+          <div class="profile-hero"><div class="profile-avatar" data-profile-initial>А</div><div><p class="eyebrow" data-i18n="profile.eyebrow">МОЙ ПРОФИЛЬ</p><h1 data-profile-name>Алексей</h1><p data-profile-summary>Русский · 5 сериалов в избранном</p></div><button class="button button-ghost" data-action="profile-settings" data-i18n="profile.settings" type="button">Настроить</button></div>
           <div class="profile-grid">
             <button class="profile-card" data-action="subscription" type="button"><span>Подписка</span><strong>Sakha+ активна</strong><small>до 14 августа 2026</small></button>
             <button class="profile-card" data-action="continue" type="button"><span>Продолжить</span><strong>1 сериал</strong><small>6 минут осталось</small></button>
@@ -112,11 +108,11 @@
       </main>
 
       <nav class="mobile-nav" aria-label="Основная навигация">
-        <button class="is-active" data-route="home" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M9 21v-6h6v6"/></svg><span>Главная</span></button>
-        <button data-route="catalog" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16M3 9h5M3 15h5M16 4v16M16 9h5M16 15h5"/></svg><span>Каталог</span></button>
-        <button data-route="shorts" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="m10 9 5 3-5 3Z"/></svg><span>Клипы</span></button>
-        <button data-route="downloads" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg><span>Офлайн</span></button>
-        <button data-route="profile" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c.8-4.1 3.5-6 8-6s7.2 1.9 8 6"/></svg><span>Профиль</span></button>
+        <button class="is-active" data-route="home" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M9 21v-6h6v6"/></svg><span data-i18n="nav.home">Главная</span></button>
+        <button data-route="catalog" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16M3 9h5M3 15h5M16 4v16M16 9h5M16 15h5"/></svg><span data-i18n="nav.catalog">Каталог</span></button>
+        <button data-route="foryou" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m21 3-7.8 18-2.6-7.2L3 11.2Z"/><path d="m10.6 13.8 4.5-4.5"/></svg><span data-i18n="nav.foryou">Для вас</span></button>
+        <button data-route="downloads" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg><span data-i18n="nav.offline">Офлайн</span></button>
+        <button data-route="profile" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c.8-4.1 3.5-6 8-6s7.2 1.9 8 6"/></svg><span data-i18n="nav.profile">Профиль</span></button>
       </nav>
     </div>
 
@@ -136,7 +132,7 @@
       <form id="settings-form">
         <div class="dialog-header"><div><p class="eyebrow">АККАУНТ</p><h2 id="settings-title">Настройки профиля</h2></div><button class="dialog-close" data-close-dialog="settings-dialog" type="button" aria-label="Закрыть">×</button></div>
         <label class="field-label">Имя в профиле<input id="profile-name-input" name="profile-name" maxlength="28" required /></label>
-        <label class="field-label">Язык интерфейса<select id="profile-language-input" name="profile-language"><option value="Русский">Русский</option><option value="Саха">Саха</option></select></label>
+        <label class="field-label">Язык интерфейса<select id="profile-language-input" name="profile-language"><option value="ru">Русский</option><option value="en">English</option><option value="sah">Саха тыла</option></select></label>
         <label class="setting-switch"><span><strong>Автовоспроизведение</strong><small>Следующая серия включается автоматически</small></span><input id="autoplay-input" type="checkbox" checked /><i></i></label>
         <label class="setting-switch"><span><strong>Экономия трафика</strong><small>Начинать видео с умеренного качества</small></span><input id="data-saver-input" type="checkbox" /><i></i></label>
         <div class="dialog-actions"><button class="button button-ghost" data-close-dialog="settings-dialog" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div>
