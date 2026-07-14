@@ -10,7 +10,9 @@
     "test:api": "node --test test/*.test.js",
     "media:download-demo": "node scripts/media/download-demo-catalog.mjs",
     "media:package-demo": "node scripts/media/package-demo-hls.mjs",
-    "media:upload-demo": "node scripts/media/upload-demo-hls.mjs"
+    "media:upload-demo": "node scripts/media/upload-demo-hls.mjs",
+    "media:create-cc-test-set": "node scripts/media/create-cc-test-set.mjs",
+    "media:upload-cc-test-set": "node scripts/media/upload-cc-test-set.mjs"
   },
   "engines": {
     "node": ">=22"

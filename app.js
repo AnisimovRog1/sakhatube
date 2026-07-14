@@ -1,4 +1,5 @@
-const demoAsset = (path) => `https://sakhatube-production.up.railway.app/v1/demo-media/${path}?media=20260715-07`;
+const demoAsset = (path) => `https://sakhatube-production.up.railway.app/v1/demo-media/${path}?media=20260715-08`;
+const ccTestAsset = (path) => demoAsset(`cc-test-set/${path}`);
 const demoMedia = {
   hls: demoAsset('sintel-demo/episode/master.m3u8'),
   preview: demoAsset('sintel-demo/episode/preview.mp4'),
@@ -7,21 +8,34 @@ const demoMedia = {
 };
 
 const shows = [
-  { title: 'Sintel — тестовый показ', meta: 'Бесплатно · CC BY · 1 минута', poster: 'poster-demo', genre: 'Тест', hls: demoMedia.hls, mp4: demoMedia.preview, playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · CC BY 3.0' },
-  { title: 'После полуночи', meta: 'Драма · 8 серий', poster: 'poster-one', genre: 'Драма' },
-  { title: 'Тихий сигнал', meta: 'Мистика · 10 серий', poster: 'poster-two', genre: 'Мистика' },
-  { title: 'Один на один', meta: 'Мелодрама · 12 серий', poster: 'poster-three', genre: 'Мелодрама' },
-  { title: 'Пятый этаж', meta: 'Триллер · 6 серий', poster: 'poster-four', genre: 'Триллер' },
-  { title: 'Второй шанс', meta: 'Семейный · 9 серий', poster: 'poster-five', genre: 'Семейный' },
-  { title: 'Вне маршрута', meta: 'Приключения · 7 серий', poster: 'poster-two', genre: 'Приключения' },
-  { title: 'Без обратного адреса', meta: 'Драма · 11 серий', poster: 'poster-one', genre: 'Драма' },
-  { title: 'Только сегодня', meta: 'Мелодрама · 8 серий', poster: 'poster-three', genre: 'Мелодрама' }
+  { title: 'Sintel: начало пути', meta: 'Бесплатно · CC BY 3.0 · 24 сек', poster: 'poster-demo', posterUrl: ccTestAsset('posters/sintel-01.jpg'), genre: 'Приключения', mp4: ccTestAsset('long/sintel-01.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · SINTEL · CC BY 3.0' },
+  { title: 'Sintel: след на снегу', meta: 'Бесплатно · CC BY 3.0 · 24 сек', poster: 'poster-two', posterUrl: ccTestAsset('posters/sintel-02.jpg'), genre: 'Приключения', mp4: ccTestAsset('long/sintel-02.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · SINTEL · CC BY 3.0' },
+  { title: 'Sintel: решение', meta: 'Бесплатно · CC BY 3.0 · 24 сек', poster: 'poster-four', posterUrl: ccTestAsset('posters/sintel-03.jpg'), genre: 'Драма', mp4: ccTestAsset('long/sintel-03.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · SINTEL · CC BY 3.0' },
+  { title: 'Big Buck Bunny: утро', meta: 'Бесплатно · CC BY 3.0 · 30 сек', poster: 'poster-five', posterUrl: ccTestAsset('posters/bunny-01.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/bunny-01.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · BIG BUCK BUNNY · CC BY 3.0' },
+  { title: 'Big Buck Bunny: навстречу', meta: 'Бесплатно · CC BY 3.0 · 30 сек', poster: 'poster-one', posterUrl: ccTestAsset('posters/bunny-02.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/bunny-02.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · BIG BUCK BUNNY · CC BY 3.0' }
 ];
 
 const shorts = [
-  { title: 'Sintel — короткий фрагмент', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Проверяем, как вертикальное видео выглядит и работает внутри SakhaTube.', tone: 'linear-gradient(160deg,#17283c,#09111c 48%,#293e57)', mp4: demoMedia.clip, poster: demoMedia.poster },
-  { title: 'Sintel — фрагмент 02', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Второй вертикальный фрагмент для проверки свайпов и предзагрузки.', tone: 'linear-gradient(160deg,#283a51,#0b1018 48%,#6c3a4e)', mp4: demoAsset('sintel-demo/shorts/clip-02.mp4'), poster: demoMedia.poster },
-  { title: 'Sintel — фрагмент 03', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Третий вертикальный фрагмент: можно проверить переходы ленты.', tone: 'linear-gradient(160deg,#4a2d36,#171017 48%,#b67a4c)', mp4: demoAsset('sintel-demo/shorts/clip-03.mp4'), poster: demoMedia.poster }
+  ...['01', '02', '03', '04', '05'].map((number, index) => ({
+    title: `Sintel · фрагмент ${number}`,
+    category: 'SINTEL · CC BY 3.0',
+    text: 'Вертикальный тестовый клип для плавной персональной ленты.',
+    likes: ['12,8 тыс.', '9,4 тыс.', '18,1 тыс.', '7,6 тыс.', '14,2 тыс.'][index],
+    comments: ['324', '212', '487', '156', '291'][index],
+    tone: 'linear-gradient(160deg,#17283c,#09111c 48%,#293e57)',
+    mp4: ccTestAsset(`shorts/sintel-${number}.mp4`),
+    poster: ccTestAsset(`short-posters/sintel-${number}.jpg`)
+  })),
+  ...['01', '02', '03', '04', '05'].map((number, index) => ({
+    title: `Big Buck Bunny · фрагмент ${number}`,
+    category: 'BIG BUCK BUNNY · CC BY 3.0',
+    text: 'Вертикальный тестовый клип для плавной персональной ленты.',
+    likes: ['11,3 тыс.', '8,9 тыс.', '16,5 тыс.', '6,8 тыс.', '13,7 тыс.'][index],
+    comments: ['308', '193', '451', '148', '267'][index],
+    tone: 'linear-gradient(160deg,#3e2b1f,#10151a 48%,#1c5265)',
+    mp4: ccTestAsset(`shorts/bunny-${number}.mp4`),
+    poster: ccTestAsset(`short-posters/bunny-${number}.jpg`)
+  }))
 ];
 
 const locales = {
@@ -85,6 +99,9 @@ let currentCarousel = 0;
 let toastTimer;
 let carouselTimer;
 let shortTouchStartY = null;
+let shortWheelTotal = 0;
+let lastShortChangeAt = 0;
+let shortCleanTimer;
 let profile = loadProfile();
 let pendingAvatar;
 
@@ -148,11 +165,15 @@ function showToast(message) {
 }
 
 function playbackData(show) {
-  return `${show.hls ? ` data-hls="${show.hls}" data-mp4="${show.mp4}" data-player-meta="${show.playerMeta}"` : ''}`;
+  return show.mp4 ? ` data-mp4="${show.mp4}" data-player-meta="${show.playerMeta}"` : '';
+}
+
+function posterStyle(show) {
+  return show.posterUrl ? ` style="background-image:linear-gradient(180deg,transparent 42%,rgba(4,6,10,.72)),url('${show.posterUrl}')"` : '';
 }
 
 function mediaCard(show) {
-  return `<button class="media-card play-button" data-title="${show.title}"${playbackData(show)} type="button"><div class="card-poster ${show.poster}"><span>${show.genre.toUpperCase()}</span></div><h3>${show.title}</h3><p>${show.meta}</p></button>`;
+  return `<button class="media-card play-button" data-title="${show.title}"${playbackData(show)} type="button"><div class="card-poster ${show.poster}"${posterStyle(show)}><span>${show.genre.toUpperCase()}</span></div><h3>${show.title}</h3><p>${show.meta}</p></button>`;
 }
 
 function renderCatalog() {
@@ -171,7 +192,7 @@ function renderHomeFeatured() {
 }
 
 function renderCarousel() {
-  carouselNode.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="carousel-slide ${index === currentCarousel ? 'is-current' : ''}" data-carousel-index="${index}" data-title="${show.title}"${playbackData(show)} type="button"><div class="carousel-cover ${show.poster}"><span>${t('premiere')}</span><div class="carousel-copy"><p>${show.genre}</p><h2>${show.title}</h2><small>${show.meta}</small></div></div></button>`).join('');
+  carouselNode.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="carousel-slide ${index === currentCarousel ? 'is-current' : ''}" data-carousel-index="${index}" data-title="${show.title}"${playbackData(show)} type="button"><div class="carousel-cover ${show.poster}"${posterStyle(show)}><span>${t('premiere')}</span><div class="carousel-copy"><p>${show.genre}</p><h2>${show.title}</h2><small>${show.meta}</small></div></div></button>`).join('');
   carouselDots.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="${index === currentCarousel ? 'is-current' : ''}" data-carousel-dot="${index}" type="button" aria-label="${t('home.premieres')}: ${show.title}"></button>`).join('');
 }
 
@@ -251,10 +272,31 @@ function compressAvatar(file) {
 function renderShort() {
   const short = shorts[currentShort];
   const stage = document.querySelector('#shorts-stage');
+  const previousVideo = stage.querySelector('video');
+  if (previousVideo) {
+    previousVideo.pause();
+    previousVideo.removeAttribute('src');
+    previousVideo.load();
+  }
+  window.clearTimeout(shortCleanTimer);
+  stage.classList.remove('is-clean', 'is-paused');
   stage.style.background = short.tone;
-  const video = short.mp4 ? `<video class="short-video" src="${short.mp4}" poster="${short.poster}" autoplay muted loop playsinline preload="metadata"></video>` : '';
-  stage.innerHTML = `${video}<div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится">♡</button><button data-short-action="share" type="button" aria-label="Поделиться">↗</button><button data-short-action="save" type="button" aria-label="Сохранить">⌑</button></div><div class="short-content"><span class="short-category">${short.category}</span><h2>${short.title}</h2><p>${short.text}</p></div>`;
+  const video = short.mp4 ? `<video class="short-video" src="${short.mp4}" poster="${short.poster}" autoplay muted loop playsinline preload="auto"></video>` : '';
+  stage.innerHTML = `${video}<div class="short-top-actions"><button data-short-action="sound" type="button" aria-label="Включить звук">⌁</button><button data-short-action="more" type="button" aria-label="Дополнительно">•••</button></div><div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится"><b>♡</b><small>${short.likes}</small></button><button data-short-action="comments" type="button" aria-label="Комментарии"><b>◌</b><small>${short.comments}</small></button><button data-short-action="share" type="button" aria-label="Поделиться"><b>↗</b><small>Поделиться</small></button><button data-short-action="save" type="button" aria-label="Сохранить"><b>⌑</b><small>Сохранить</small></button></div><div class="short-content"><span class="short-category">${short.category}</span><h2>${short.title}</h2><p>${short.text}</p><span class="short-hint">Нажми для паузы · свайпни вверх</span></div>`;
   document.querySelector('#shorts-counter').textContent = `${String(currentShort + 1).padStart(2, '0')} / ${String(shorts.length).padStart(2, '0')}`;
+  const next = shorts[(currentShort + 1) % shorts.length];
+  const preloader = document.querySelector('#short-preload');
+  preloader.src = next.mp4;
+  preloader.load();
+  const activeVideo = stage.querySelector('.short-video');
+  if (activeVideo) void activeVideo.play().catch(() => {});
+  shortCleanTimer = window.setTimeout(() => stage.classList.add('is-clean'), 2800);
+}
+
+function changeShort(direction) {
+  currentShort = (currentShort + direction + shorts.length) % shorts.length;
+  lastShortChangeAt = Date.now();
+  renderShort();
 }
 
 function stopPlayer() {
@@ -263,33 +305,34 @@ function stopPlayer() {
   playerVideo.load();
   playerVideo.hidden = true;
   playerPoster.hidden = false;
+  document.querySelector('#player-controls').hidden = true;
 }
 
 function openPlayer(title, source = {}) {
   playerTitle.textContent = title;
-  const playbackUrl = source.mp4 || source.hls || demoMedia.preview;
-  playerMeta.textContent = source.playerMeta || 'ТЕСТОВЫЙ ПРЕДПРОСМОТР · CC BY 3.0';
+  const playbackUrl = source.mp4 || source.hls;
+  playerMeta.textContent = source.playerMeta || 'ОБРАБОТКА ВИДЕО';
   if (playbackUrl) {
     playerVideo.src = playbackUrl;
     playerVideo.hidden = false;
     playerPoster.hidden = true;
+    document.querySelector('#player-controls').hidden = false;
     openDialog(player);
     void playerVideo.play().catch(() => {});
     return;
   } else {
     stopPlayer();
-    playerEmptyCopy.textContent = 'Видео станет доступно после публикации.';
+    playerEmptyCopy.textContent = 'Видео ещё обрабатывается. Вернись чуть позже.';
   }
   openDialog(player);
 }
 
 function openPlayerFrom(element) {
   const title = element.dataset.title || 'После полуночи';
-  const isDemo = title.startsWith('Sintel');
   openPlayer(title, {
-    hls: element.dataset.hls || (isDemo ? demoMedia.hls : undefined),
-    mp4: element.dataset.mp4 || (isDemo ? demoMedia.preview : undefined),
-    playerMeta: element.dataset.playerMeta || (isDemo ? 'ЛЕГАЛЬНЫЙ ТЕСТ · CC BY 3.0' : undefined)
+    hls: element.dataset.hls,
+    mp4: element.dataset.mp4,
+    playerMeta: element.dataset.playerMeta
   });
 }
 
@@ -347,7 +390,7 @@ function handleAction(action, trigger) {
       openAction('Sakha+ активна', 'Подписка действует до 14 августа 2026. Здесь можно будет изменить тариф, восстановить покупки и посмотреть платежи.', 'ПОДПИСКА');
       break;
     case 'continue':
-      openPlayer('После полуночи');
+      openPlayer(shows[0].title, shows[0]);
       break;
     case 'history':
       openAction('История просмотров', 'Продолжай с того же места на любом устройстве. История станет доступна после входа в аккаунт.', 'БИБЛИОТЕКА');
@@ -370,13 +413,23 @@ async function handleShortAction(action, button) {
   const short = shorts[currentShort];
   if (action === 'like') {
     const isActive = button.classList.toggle('is-active');
-    button.textContent = isActive ? '♥' : '♡';
+    button.querySelector('b').textContent = isActive ? '♥' : '♡';
     showToast(isActive ? 'Добавлено в избранное' : 'Убрано из избранного');
   }
   if (action === 'save') {
     const isActive = button.classList.toggle('is-active');
-    button.textContent = isActive ? '✓' : '⌑';
+    button.querySelector('b').textContent = isActive ? '✓' : '⌑';
     showToast(isActive ? 'Сохранено на потом' : 'Убрано из сохранённого');
+  }
+  if (action === 'comments') openAction('Комментарии', `Комментарии к «${short.title}» появятся здесь. Для теста лента и действия уже работают.`, 'ОБСУЖДЕНИЕ');
+  if (action === 'more') openAction('Настроить рекомендации', 'Можно скрыть ролик, пожаловаться или убрать похожие материалы из ленты.', 'ДЛЯ ВАС');
+  if (action === 'sound') {
+    const video = document.querySelector('#shorts-stage .short-video');
+    if (!video) return;
+    video.muted = !video.muted;
+    button.textContent = video.muted ? '⌁' : '◖))';
+    button.setAttribute('aria-label', video.muted ? 'Включить звук' : 'Выключить звук');
+    showToast(video.muted ? 'Звук выключен' : 'Звук включён');
   }
   if (action === 'share') {
     const shareData = { title: short.title, text: `SakhaTube · ${short.title}`, url: window.location.href };
@@ -469,17 +522,42 @@ document.querySelector('#close-player').addEventListener('click', () => {
   closeDialog(player);
 });
 player.addEventListener('close', stopPlayer);
+document.querySelector('#player-poster-play').addEventListener('click', () => {
+  if (playerVideo.src) void playerVideo.play().catch(() => {});
+});
+document.querySelector('#player-toggle').addEventListener('click', () => {
+  if (playerVideo.paused) void playerVideo.play().catch(() => {});
+  else playerVideo.pause();
+});
+document.querySelector('#player-mute').addEventListener('click', () => {
+  playerVideo.muted = !playerVideo.muted;
+  document.querySelector('#player-mute').textContent = playerVideo.muted ? '⌁' : '◖))';
+});
+document.querySelector('#player-progress').addEventListener('input', (event) => {
+  if (Number.isFinite(playerVideo.duration)) playerVideo.currentTime = playerVideo.duration * (Number(event.target.value) / 100);
+});
+document.querySelector('#player-fullscreen').addEventListener('click', () => {
+  const stage = document.querySelector('.player-stage');
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else stage.requestFullscreen?.();
+});
+playerVideo.addEventListener('play', () => { document.querySelector('#player-toggle').textContent = '❚❚'; document.querySelector('#player-toggle').setAttribute('aria-label', 'Пауза'); });
+playerVideo.addEventListener('pause', () => { document.querySelector('#player-toggle').textContent = '▶'; document.querySelector('#player-toggle').setAttribute('aria-label', 'Продолжить'); });
+playerVideo.addEventListener('timeupdate', () => {
+  const duration = playerVideo.duration || 0;
+  const current = playerVideo.currentTime || 0;
+  document.querySelector('#player-progress').value = duration ? String((current / duration) * 100) : '0';
+  document.querySelector('#player-time').textContent = `${Math.floor(current / 60)}:${String(Math.floor(current % 60)).padStart(2, '0')}`;
+});
 document.querySelector('#player-continue').addEventListener('click', () => {
   closeDialog(player);
   showToast(`Продолжаем «${playerTitle.textContent}»`);
 });
 document.querySelector('#shorts-next').addEventListener('click', () => {
-  currentShort = (currentShort + 1) % shorts.length;
-  renderShort();
+  changeShort(1);
 });
 document.querySelector('#shorts-prev').addEventListener('click', () => {
-  currentShort = (currentShort - 1 + shorts.length) % shorts.length;
-  renderShort();
+  changeShort(-1);
 });
 document.querySelector('#shorts-stage').addEventListener('touchstart', (event) => {
   shortTouchStartY = event.changedTouches[0]?.clientY ?? null;
@@ -490,9 +568,32 @@ document.querySelector('#shorts-stage').addEventListener('touchend', (event) => 
   const deltaY = endY - shortTouchStartY;
   shortTouchStartY = null;
   if (Math.abs(deltaY) < 48) return;
-  currentShort = deltaY < 0 ? (currentShort + 1) % shorts.length : (currentShort - 1 + shorts.length) % shorts.length;
-  renderShort();
+  changeShort(deltaY < 0 ? 1 : -1);
 }, { passive: true });
+document.querySelector('#shorts-stage').addEventListener('click', (event) => {
+  if (event.target.closest('button')) return;
+  const stage = event.currentTarget;
+  const video = stage.querySelector('.short-video');
+  if (!video) return;
+  stage.classList.remove('is-clean');
+  window.clearTimeout(shortCleanTimer);
+  if (video.paused) {
+    void video.play().catch(() => {});
+    stage.classList.remove('is-paused');
+  } else {
+    video.pause();
+    stage.classList.add('is-paused');
+  }
+  shortCleanTimer = window.setTimeout(() => stage.classList.add('is-clean'), 2800);
+});
+document.querySelector('#shorts-stage').addEventListener('wheel', (event) => {
+  if (Math.abs(event.deltaY) < 12) return;
+  event.preventDefault();
+  shortWheelTotal += event.deltaY;
+  if (Math.abs(shortWheelTotal) < 90 || Date.now() - lastShortChangeAt < 350) return;
+  changeShort(shortWheelTotal > 0 ? 1 : -1);
+  shortWheelTotal = 0;
+}, { passive: false });
 carouselViewport.addEventListener('mouseenter', stopCarousel);
 carouselViewport.addEventListener('mouseleave', startCarousel);
 carouselViewport.addEventListener('pointerdown', stopCarousel);
@@ -545,11 +646,10 @@ document.querySelector('#global-search').addEventListener('input', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.target.closest('.continue-card') && ['Enter', ' '].includes(event.key)) {
     event.preventDefault();
-    openPlayer('После полуночи');
+    openPlayer(shows[0].title, shows[0]);
   }
   if (document.querySelector('#foryou-screen').classList.contains('is-visible') && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
     event.preventDefault();
-    currentShort = event.key === 'ArrowDown' ? (currentShort + 1) % shorts.length : (currentShort - 1 + shorts.length) % shorts.length;
-    renderShort();
+    changeShort(event.key === 'ArrowDown' ? 1 : -1);
   }
 });
