@@ -83,6 +83,7 @@ let currentShort = 0;
 let currentCarousel = 0;
 let toastTimer;
 let carouselTimer;
+let shortTouchStartY = null;
 let profile = loadProfile();
 let pendingAvatar;
 
@@ -479,6 +480,18 @@ document.querySelector('#shorts-prev').addEventListener('click', () => {
   currentShort = (currentShort - 1 + shorts.length) % shorts.length;
   renderShort();
 });
+document.querySelector('#shorts-stage').addEventListener('touchstart', (event) => {
+  shortTouchStartY = event.changedTouches[0]?.clientY ?? null;
+}, { passive: true });
+document.querySelector('#shorts-stage').addEventListener('touchend', (event) => {
+  const endY = event.changedTouches[0]?.clientY;
+  if (shortTouchStartY === null || endY === undefined) return;
+  const deltaY = endY - shortTouchStartY;
+  shortTouchStartY = null;
+  if (Math.abs(deltaY) < 48) return;
+  currentShort = deltaY < 0 ? (currentShort + 1) % shorts.length : (currentShort - 1 + shorts.length) % shorts.length;
+  renderShort();
+}, { passive: true });
 carouselViewport.addEventListener('mouseenter', stopCarousel);
 carouselViewport.addEventListener('mouseleave', startCarousel);
 carouselViewport.addEventListener('pointerdown', stopCarousel);
