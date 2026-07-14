@@ -4,10 +4,13 @@ import { fileURLToPath } from 'node:url';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
+import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { z, ZodError } from 'zod';
+import { createMediaStore } from './media-store.js';
+import { createPostgresStore } from './postgres-store.js';
 
 const roles = ['superadmin', 'content_editor', 'moderator', 'support', 'analyst'];
 const contentStatuses = ['draft', 'review', 'scheduled', 'published', 'unpublished', 'archived'];
@@ -15,6 +18,7 @@ const contentKinds = ['series', 'episode', 'trailer', 'clip'];
 const accessKinds = ['free', 'subscription', 'purchase'];
 const commentStatuses = ['pending', 'approved', 'hidden', 'deleted'];
 const playbackEvents = ['intent', 'first_frame', 'pause', 'buffer_start', 'buffer_end', 'error', 'complete'];
+const bannerMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -124,9 +128,16 @@ function configFrom(overrides = {}) {
   const allowedOrigins = overrides.allowedOrigins ?? (process.env.ALLOWED_ORIGINS || 'http://localhost:4173,http://localhost:3000').split(',').map((item) => item.trim()).filter(Boolean);
   const allowDemoStore = overrides.allowDemoStore ?? process.env.ALLOW_DEMO_STORE === 'true';
   const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
+  const media = overrides.media ?? {
+    endpoint: process.env.S3_ENDPOINT,
+    accessKeyId: process.env.S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+    bucket: process.env.S3_BUCKET,
+    region: process.env.S3_REGION || 'auto'
+  };
   if (production && jwtSecret.length < 32) throw new Error('JWT_SECRET должен содержать не менее 32 символов в production');
   if (production && !databaseUrl && !allowDemoStore) throw new Error('DATABASE_URL обязателен в production: in-memory store нельзя публиковать');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, databaseUrl };
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, databaseUrl, media };
 }
 
 function parseOrReply(schema, input, reply) {
@@ -138,7 +149,8 @@ function parseOrReply(schema, input, reply) {
 
 export function buildApp(options = {}) {
   const config = configFrom(options);
-  const store = options.store ?? createMemoryStore();
+  let store = options.store ?? null;
+  const mediaStore = options.mediaStore ?? createMediaStore(config.media);
   const app = Fastify({ logger: options.logger ?? false, requestIdHeader: 'x-request-id', genReqId: () => randomUUID() });
 
   app.register(helmet, {
@@ -161,12 +173,21 @@ export function buildApp(options = {}) {
   app.register(cors, { origin: (origin, callback) => callback(null, !origin || config.allowedOrigins.includes(origin)), credentials: true, methods: ['GET', 'POST', 'PATCH'] });
   app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute', keyGenerator: (request) => request.ip });
   app.register(jwt, { secret: config.jwtSecret, sign: { expiresIn: '15m' }, verify: { algorithms: ['HS256'] } });
+  app.register(multipart, { limits: { files: 1, fileSize: 15 * 1024 * 1024 } });
 
   app.decorate('authenticate', async (request) => request.jwtVerify());
   app.decorate('allowRoles', (allowed) => async (request, reply) => {
     await request.jwtVerify();
     const userRoles = Array.isArray(request.user.roles) ? request.user.roles : [];
     if (!allowed.some((role) => userRoles.includes(role))) reply.code(403).send({ error: 'FORBIDDEN', message: 'Недостаточно прав для этого действия' });
+  });
+
+  app.addHook('onReady', async () => {
+    if (store) return;
+    store = config.databaseUrl ? await createPostgresStore(config.databaseUrl, defaultSeed) : createMemoryStore();
+  });
+  app.addHook('onClose', async () => {
+    if (store?.close) await store.close();
   });
 
   app.addHook('onSend', async (request, reply, payload) => {
@@ -182,10 +203,10 @@ export function buildApp(options = {}) {
   });
 
   const audit = (request, action, entityType, entityId, before, after) => {
-    store.audit({ actorId: request.user?.sub ?? 'anonymous', roles: request.user?.roles ?? [], action, entityType, entityId, before, after, requestId: request.id, ip: request.ip });
+    void Promise.resolve(store.audit({ actorId: request.user?.sub ?? 'anonymous', roles: request.user?.roles ?? [], action, entityType, entityId, before, after, requestId: request.id, ip: request.ip })).catch((error) => request.log.error(error));
   };
 
-  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'database' : 'preview-memory', time: now() }));
+  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', time: now() }));
 
   // Local-only bootstrap. A production Studio must delegate identity to an OIDC provider.
   app.post('/v1/dev/token', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -196,11 +217,11 @@ export function buildApp(options = {}) {
   });
 
   app.get('/v1/admin/overview', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'moderator', 'analyst']) }, async () => store.overview());
-  app.get('/v1/admin/content', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({ items: store.listContent() }));
+  app.get('/v1/admin/content', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({ items: await store.listContent() }));
   app.post('/v1/admin/content', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
     const body = parseOrReply(contentInput, request.body, reply);
     if (!body) return;
-    const item = store.createContent(body);
+    const item = await store.createContent(body);
     audit(request, 'content.create', 'content', item.id, null, item);
     return reply.code(201).send({ item });
   });
@@ -208,21 +229,22 @@ export function buildApp(options = {}) {
     const params = parseOrReply(z.object({ id: z.string().min(1).max(80) }), request.params, reply);
     const body = parseOrReply(contentPatch, request.body, reply);
     if (!params || !body) return;
-    const before = store.getContent(params.id);
+    const before = await store.getContent(params.id);
     if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
-    const item = store.updateContent(params.id, body);
+    const item = await store.updateContent(params.id, body);
     audit(request, 'content.update', 'content', item.id, before, item);
     return { item };
   });
 
-  app.get('/v1/admin/home/slots', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({ items: store.listHomeSlots() }));
+  app.get('/v1/admin/home/slots', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({ items: await store.listHomeSlots() }));
   app.patch('/v1/admin/home/slots', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
     const body = parseOrReply(homeSlotsInput, request.body, reply);
     if (!body) return;
-    const missing = body.contentIds.filter((id) => !store.getContent(id));
+    const existing = await Promise.all(body.contentIds.map((id) => store.getContent(id)));
+    const missing = body.contentIds.filter((id, index) => !existing[index]);
     if (missing.length) return reply.code(400).send({ error: 'INVALID_CONTENT', message: 'Одна или несколько карточек не найдены', ids: missing });
-    const previous = store.listHomeSlots().map((item) => item.id);
-    const items = store.replaceHomeSlots(body.contentIds);
+    const previous = (await store.listHomeSlots()).map((item) => item.id);
+    const items = await store.replaceHomeSlots(body.contentIds);
     audit(request, 'home.reorder', 'home_slot', 'home', previous, items.map((item) => item.id));
     return { items };
   });
@@ -230,14 +252,14 @@ export function buildApp(options = {}) {
   app.get('/v1/admin/comments', { preHandler: app.allowRoles(['superadmin', 'moderator', 'analyst']) }, async (request, reply) => {
     const query = parseOrReply(z.object({ status: z.enum(commentStatuses).optional() }), request.query, reply);
     if (!query) return;
-    return { items: store.listComments(query.status) };
+    return { items: await store.listComments(query.status) };
   });
   app.patch('/v1/admin/comments/:id', { preHandler: app.allowRoles(['superadmin', 'moderator']) }, async (request, reply) => {
     const params = parseOrReply(z.object({ id: z.string().min(1).max(80) }), request.params, reply);
     const body = parseOrReply(commentActionInput, request.body, reply);
     if (!params || !body) return;
-    const before = store.listComments().find((item) => item.id === params.id);
-    const item = store.updateComment(params.id, body.status, body.note);
+    const before = (await store.listComments()).find((item) => item.id === params.id);
+    const item = await store.updateComment(params.id, body.status, body.note);
     if (!item) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Комментарий не найден' });
     audit(request, 'comment.moderate', 'comment', item.id, before, item);
     return { item };
@@ -246,9 +268,47 @@ export function buildApp(options = {}) {
   app.post('/v1/events/playback', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
     const body = parseOrReply(playbackInput, request.body, reply);
     if (!body) return;
-    if (!store.getContent(body.contentId)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
-    store.addPlayback({ ...body, viewerId: request.user?.sub ?? null });
+    if (!await store.getContent(body.contentId)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    await store.addPlayback({ ...body, viewerId: request.user?.sub ?? null });
     return reply.code(202).send({ accepted: true });
+  });
+
+  app.post('/v1/admin/media/banner', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    if (!mediaStore) return reply.code(503).send({ error: 'MEDIA_STORAGE_UNAVAILABLE', message: 'Постоянное хранилище медиа ещё не подключено' });
+    const part = await request.file();
+    if (!part) return reply.code(400).send({ error: 'FILE_REQUIRED', message: 'Выберите изображение' });
+    if (!bannerMimeTypes.has(part.mimetype)) return reply.code(400).send({ error: 'UNSUPPORTED_MEDIA_TYPE', message: 'Поддерживаются JPG, PNG и WebP' });
+    const body = await part.toBuffer();
+    if (part.file.truncated) return reply.code(413).send({ error: 'FILE_TOO_LARGE', message: 'Изображение больше 15 МБ' });
+    const extension = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[part.mimetype];
+    const mediaId = randomUUID();
+    const storageKey = `banners/${new Date().toISOString().slice(0, 10)}/${mediaId}.${extension}`;
+    await mediaStore.put({ storageKey, body, contentType: part.mimetype });
+    try {
+      const item = await store.createMedia({ kind: 'banner', storageKey, fileName: part.filename || `banner.${extension}`, contentType: part.mimetype, size: body.length });
+      audit(request, 'media.banner.upload', 'media_asset', item.id, null, item);
+      return reply.code(201).send({ item: { ...item, url: `/v1/media/${item.id}` } });
+    } catch (error) {
+      await mediaStore.remove(storageKey);
+      throw error;
+    }
+  });
+
+  app.get('/v1/media/:id', async (request, reply) => {
+    if (!mediaStore) return reply.code(404).send({ error: 'NOT_FOUND' });
+    const params = parseOrReply(z.object({ id: z.string().uuid() }), request.params, reply);
+    if (!params) return;
+    const item = await store.getMedia(params.id);
+    if (!item) return reply.code(404).send({ error: 'NOT_FOUND' });
+    try {
+      const object = await mediaStore.get(item.storageKey);
+      reply.header('content-type', object.ContentType || item.contentType);
+      reply.header('cache-control', 'public, max-age=86400');
+      return reply.send(object.Body);
+    } catch (error) {
+      request.log.error(error);
+      return reply.code(404).send({ error: 'NOT_FOUND' });
+    }
   });
 
   if (options.serveStatic !== false) {
