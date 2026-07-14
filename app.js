@@ -1,8 +1,9 @@
+const demoAsset = (path) => `https://sakhatube-production.up.railway.app/v1/demo-media/${path}?media=20260715-07`;
 const demoMedia = {
-  hls: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/episode/master.m3u8',
-  preview: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/episode/preview.mp4',
-  clip: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/clip/clip.mp4',
-  poster: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/poster.jpg'
+  hls: demoAsset('sintel-demo/episode/master.m3u8'),
+  preview: demoAsset('sintel-demo/episode/preview.mp4'),
+  clip: demoAsset('sintel-demo/clip/clip.mp4'),
+  poster: demoAsset('sintel-demo/poster.jpg')
 };
 
 const shows = [
@@ -19,8 +20,8 @@ const shows = [
 
 const shorts = [
   { title: 'Sintel — короткий фрагмент', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Проверяем, как вертикальное видео выглядит и работает внутри SakhaTube.', tone: 'linear-gradient(160deg,#17283c,#09111c 48%,#293e57)', mp4: demoMedia.clip, poster: demoMedia.poster },
-  { title: 'Sintel — фрагмент 02', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Второй вертикальный фрагмент для проверки свайпов и предзагрузки.', tone: 'linear-gradient(160deg,#283a51,#0b1018 48%,#6c3a4e)', mp4: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/shorts/clip-02.mp4', poster: demoMedia.poster },
-  { title: 'Sintel — фрагмент 03', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Третий вертикальный фрагмент: можно проверить переходы ленты.', tone: 'linear-gradient(160deg,#4a2d36,#171017 48%,#b67a4c)', mp4: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/shorts/clip-03.mp4', poster: demoMedia.poster }
+  { title: 'Sintel — фрагмент 02', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Второй вертикальный фрагмент для проверки свайпов и предзагрузки.', tone: 'linear-gradient(160deg,#283a51,#0b1018 48%,#6c3a4e)', mp4: demoAsset('sintel-demo/shorts/clip-02.mp4'), poster: demoMedia.poster },
+  { title: 'Sintel — фрагмент 03', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Третий вертикальный фрагмент: можно проверить переходы ленты.', tone: 'linear-gradient(160deg,#4a2d36,#171017 48%,#b67a4c)', mp4: demoAsset('sintel-demo/shorts/clip-03.mp4'), poster: demoMedia.poster }
 ];
 
 const locales = {

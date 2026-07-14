@@ -130,7 +130,7 @@ em { color: #dce9ff; font-style: normal; }
 .poster-three { background: radial-gradient(circle at 72% 20%, #e9a08e, transparent 14%), linear-gradient(135deg, #70404a, #24202b 51%, #2f3c61); }
 .poster-four { background: radial-gradient(circle at 62% 17%, #d8d7ff, transparent 15%), linear-gradient(135deg, #504989, #1c2634 51%, #1b7e88); }
 .poster-five { background: radial-gradient(circle at 75% 18%, #e5ce83, transparent 14%), linear-gradient(135deg, #8d7345, #24282c 53%, #3b6551); }
-.poster-demo { background-image: linear-gradient(0deg, rgba(5,7,12,.58), rgba(5,7,12,.05) 58%), url('https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/poster.jpg'); background-position: center; background-size: cover; }
+.poster-demo { background-image: linear-gradient(0deg, rgba(5,7,12,.58), rgba(5,7,12,.05) 58%), url('https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/poster.jpg?media=20260715-07'); background-position: center; background-size: cover; }
 
 .screen-intro { padding: 38px 0 25px; }
 .screen-intro .eyebrow { margin-bottom: 9px; }
