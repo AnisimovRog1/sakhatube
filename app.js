@@ -1,4 +1,4 @@
-const demoAsset = (path) => `https://sakhatube-production.up.railway.app/v1/demo-media/${path}?media=20260715-08`;
+const demoAsset = (path) => `https://sakhatube-production.up.railway.app/v1/demo-media/${path}?media=20260715-09`;
 const ccTestAsset = (path) => demoAsset(`cc-test-set/${path}`);
 const demoMedia = {
   hls: demoAsset('sintel-demo/episode/master.m3u8'),
@@ -15,11 +15,27 @@ const shows = [
   { title: 'Big Buck Bunny: навстречу', meta: 'Бесплатно · CC BY 3.0 · 30 сек', poster: 'poster-one', posterUrl: ccTestAsset('posters/bunny-02.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/bunny-02.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · BIG BUCK BUNNY · CC BY 3.0' }
 ];
 
+const sintelShortCopy = [
+  ['После тишины', 'Путь продолжается, когда вокруг остаётся только снег.'],
+  ['След на ветру', 'Один шаг меняет всё.'],
+  ['Точка выбора', 'Сцена, к которой хочется вернуться.'],
+  ['Выше облаков', 'Там, где дорога исчезает из виду.'],
+  ['Без лишних слов', 'Короткий фрагмент большой истории.']
+];
+
+const bunnyShortCopy = [
+  ['Тихое утро', 'Иногда лучший момент — просто остановиться.'],
+  ['Первый луч', 'Свет меняет настроение за секунду.'],
+  ['Найти свой ритм', 'Небольшая сцена для хорошего настроения.'],
+  ['Где начинается день', 'В кадре остаётся только самое важное.'],
+  ['Смотреть до конца', 'Когда история продолжается без слов.']
+];
+
 const shorts = [
   ...['01', '02', '03', '04', '05'].map((number, index) => ({
-    title: `Sintel · фрагмент ${number}`,
+    title: sintelShortCopy[index][0],
     category: 'SINTEL · CC BY 3.0',
-    text: 'Вертикальный тестовый клип для плавной персональной ленты.',
+    text: sintelShortCopy[index][1],
     likes: ['12,8 тыс.', '9,4 тыс.', '18,1 тыс.', '7,6 тыс.', '14,2 тыс.'][index],
     comments: ['324', '212', '487', '156', '291'][index],
     tone: 'linear-gradient(160deg,#17283c,#09111c 48%,#293e57)',
@@ -27,9 +43,9 @@ const shorts = [
     poster: ccTestAsset(`short-posters/sintel-${number}.jpg`)
   })),
   ...['01', '02', '03', '04', '05'].map((number, index) => ({
-    title: `Big Buck Bunny · фрагмент ${number}`,
+    title: bunnyShortCopy[index][0],
     category: 'BIG BUCK BUNNY · CC BY 3.0',
-    text: 'Вертикальный тестовый клип для плавной персональной ленты.',
+    text: bunnyShortCopy[index][1],
     likes: ['11,3 тыс.', '8,9 тыс.', '16,5 тыс.', '6,8 тыс.', '13,7 тыс.'][index],
     comments: ['308', '193', '451', '148', '267'][index],
     tone: 'linear-gradient(160deg,#3e2b1f,#10151a 48%,#1c5265)',
@@ -37,6 +53,17 @@ const shorts = [
     poster: ccTestAsset(`short-posters/bunny-${number}.jpg`)
   }))
 ];
+
+const shortIcons = {
+  back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7"/></svg>',
+  soundOff: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4Z"/><path d="m17 10 3 4m0-4-3 4"/></svg>',
+  soundOn: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4Z"/><path d="M17 9a4 4 0 0 1 0 6m2.3-8.3a7 7 0 0 1 0 10.6"/></svg>',
+  more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>',
+  heart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.8a5.4 5.4 0 0 0-7.6 0L12 6l-1.2-1.2a5.4 5.4 0 0 0-7.6 7.6L12 21l8.8-8.6a5.4 5.4 0 0 0 0-7.6Z"/></svg>',
+  comment: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 9 9 0 0 1-3.8-.9L4 19l1.3-3.4A7 7 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"/></svg>',
+  share: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5h6v6"/><path d="m19 5-9.5 9.5"/><path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"/></svg>',
+  save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5h12v16l-6-3.6-6 3.6Z"/></svg>'
+};
 
 const locales = {
   ru: {
@@ -272,6 +299,7 @@ function compressAvatar(file) {
 function renderShort() {
   const short = shorts[currentShort];
   const stage = document.querySelector('#shorts-stage');
+  const layout = document.querySelector('.shorts-layout');
   const previousVideo = stage.querySelector('video');
   if (previousVideo) {
     previousVideo.pause();
@@ -281,8 +309,9 @@ function renderShort() {
   window.clearTimeout(shortCleanTimer);
   stage.classList.remove('is-clean', 'is-paused');
   stage.style.background = short.tone;
+  layout.style.setProperty('--short-backdrop', `url("${short.poster}")`);
   const video = short.mp4 ? `<video class="short-video" src="${short.mp4}" poster="${short.poster}" autoplay muted loop playsinline preload="auto"></video>` : '';
-  stage.innerHTML = `${video}<div class="short-top-actions"><button data-short-action="sound" type="button" aria-label="Включить звук">⌁</button><button data-short-action="more" type="button" aria-label="Дополнительно">•••</button></div><div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится"><b>♡</b><small>${short.likes}</small></button><button data-short-action="comments" type="button" aria-label="Комментарии"><b>◌</b><small>${short.comments}</small></button><button data-short-action="share" type="button" aria-label="Поделиться"><b>↗</b><small>Поделиться</small></button><button data-short-action="save" type="button" aria-label="Сохранить"><b>⌑</b><small>Сохранить</small></button></div><div class="short-content"><span class="short-category">${short.category}</span><h2>${short.title}</h2><p>${short.text}</p><span class="short-hint">Нажми для паузы · свайпни вверх</span></div>`;
+  stage.innerHTML = `${video}<div class="short-topbar"><button data-short-action="exit" type="button" aria-label="Выйти из раздела Для вас">${shortIcons.back}</button><span>Для вас</span></div><div class="short-top-actions"><button data-short-action="sound" type="button" aria-label="Включить звук">${shortIcons.soundOff}</button><button data-short-action="more" type="button" aria-label="Дополнительно">${shortIcons.more}</button></div><div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится"><b>${shortIcons.heart}</b><small>${short.likes}</small></button><button data-short-action="comments" type="button" aria-label="Комментарии"><b>${shortIcons.comment}</b><small>${short.comments}</small></button><button data-short-action="share" type="button" aria-label="Поделиться"><b>${shortIcons.share}</b><small>Поделиться</small></button><button data-short-action="save" type="button" aria-label="Сохранить"><b>${shortIcons.save}</b><small>Сохранить</small></button></div><div class="short-content"><span class="short-category">${short.category}</span><h2>${short.title}</h2><p>${short.text}</p><span class="short-hint">Нажми — пауза · свайпни вверх</span></div>`;
   document.querySelector('#shorts-counter').textContent = `${String(currentShort + 1).padStart(2, '0')} / ${String(shorts.length).padStart(2, '0')}`;
   const next = shorts[(currentShort + 1) % shorts.length];
   const preloader = document.querySelector('#short-preload');
@@ -290,7 +319,7 @@ function renderShort() {
   preloader.load();
   const activeVideo = stage.querySelector('.short-video');
   if (activeVideo) void activeVideo.play().catch(() => {});
-  shortCleanTimer = window.setTimeout(() => stage.classList.add('is-clean'), 2800);
+  shortCleanTimer = window.setTimeout(() => stage.classList.add('is-clean'), 3600);
 }
 
 function changeShort(direction) {
@@ -337,6 +366,9 @@ function openPlayerFrom(element) {
 }
 
 function navigate(route) {
+  const shortsVideo = document.querySelector('#shorts-stage .short-video');
+  if (route !== 'foryou') shortsVideo?.pause();
+  document.body.classList.toggle('is-shorts-mode', route === 'foryou');
   document.querySelectorAll('[data-screen]').forEach((screen) => screen.classList.toggle('is-visible', screen.dataset.screen === route));
   document.querySelectorAll('[data-route]').forEach((button) => button.classList.toggle('is-active', button.dataset.route === route));
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -413,12 +445,12 @@ async function handleShortAction(action, button) {
   const short = shorts[currentShort];
   if (action === 'like') {
     const isActive = button.classList.toggle('is-active');
-    button.querySelector('b').textContent = isActive ? '♥' : '♡';
+    button.querySelector('b').setAttribute('aria-hidden', 'true');
     showToast(isActive ? 'Добавлено в избранное' : 'Убрано из избранного');
   }
   if (action === 'save') {
     const isActive = button.classList.toggle('is-active');
-    button.querySelector('b').textContent = isActive ? '✓' : '⌑';
+    button.querySelector('b').setAttribute('aria-hidden', 'true');
     showToast(isActive ? 'Сохранено на потом' : 'Убрано из сохранённого');
   }
   if (action === 'comments') openAction('Комментарии', `Комментарии к «${short.title}» появятся здесь. Для теста лента и действия уже работают.`, 'ОБСУЖДЕНИЕ');
@@ -427,10 +459,11 @@ async function handleShortAction(action, button) {
     const video = document.querySelector('#shorts-stage .short-video');
     if (!video) return;
     video.muted = !video.muted;
-    button.textContent = video.muted ? '⌁' : '◖))';
+    button.innerHTML = video.muted ? shortIcons.soundOff : shortIcons.soundOn;
     button.setAttribute('aria-label', video.muted ? 'Включить звук' : 'Выключить звук');
     showToast(video.muted ? 'Звук выключен' : 'Звук включён');
   }
+  if (action === 'exit') navigate('home');
   if (action === 'share') {
     const shareData = { title: short.title, text: `SakhaTube · ${short.title}`, url: window.location.href };
     try {
