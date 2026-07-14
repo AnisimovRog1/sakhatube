@@ -1,4 +1,11 @@
+const demoMedia = {
+  hls: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/episode/master.m3u8',
+  clip: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/clip/clip.mp4',
+  poster: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/poster.jpg'
+};
+
 const shows = [
+  { title: 'Sintel — тестовый показ', meta: 'Бесплатно · CC BY · HLS', poster: 'poster-demo', genre: 'Тест', hls: demoMedia.hls, mp4: demoMedia.clip, playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · CC BY 3.0' },
   { title: 'После полуночи', meta: 'Драма · 8 серий', poster: 'poster-one', genre: 'Драма' },
   { title: 'Тихий сигнал', meta: 'Мистика · 10 серий', poster: 'poster-two', genre: 'Мистика' },
   { title: 'Один на один', meta: 'Мелодрама · 12 серий', poster: 'poster-three', genre: 'Мелодрама' },
@@ -10,6 +17,7 @@ const shows = [
 ];
 
 const shorts = [
+  { title: 'Sintel — короткий фрагмент', category: 'ТЕСТОВЫЙ КЛИП · CC BY 3.0', text: 'Проверяем, как вертикальное видео выглядит и работает внутри SakhaTube.', tone: 'linear-gradient(160deg,#17283c,#09111c 48%,#293e57)', mp4: demoMedia.clip, poster: demoMedia.poster },
   { title: 'Никому не говори', category: 'СЦЕНА ИЗ «НУЛЕВОЙ ТОЧКИ»', text: 'Тот самый разговор, после которого уже нельзя вернуться назад.', tone: 'linear-gradient(160deg,#283a51,#0b1018 48%,#6c3a4e)' },
   { title: 'Один звонок', category: 'ТИЗЕР · «ТИХИЙ СИГНАЛ»', text: 'Один мотив. Одна тайна. И дорога, которая ведёт дальше.', tone: 'linear-gradient(160deg,#4a2d36,#171017 48%,#b67a4c)' },
   { title: 'Всё начинается здесь', category: 'НАРЕЗКА · «ПОСЛЕ ПОЛУНОЧИ»', text: 'Иногда тишина говорит громче любого признания.', tone: 'linear-gradient(160deg,#203a54,#0c1017 48%,#556d9c)' }
@@ -55,6 +63,10 @@ const catalogNode = document.querySelector('#catalog-grid');
 const chipsNode = document.querySelector('#genre-chips');
 const player = document.querySelector('#player-dialog');
 const playerTitle = document.querySelector('#player-title');
+const playerMeta = document.querySelector('#player-meta');
+const playerVideo = document.querySelector('#player-video');
+const playerPoster = document.querySelector('#player-poster');
+const playerEmptyCopy = document.querySelector('#player-empty-copy');
 const notificationsDialog = document.querySelector('#notifications-dialog');
 const settingsDialog = document.querySelector('#settings-dialog');
 const actionDialog = document.querySelector('#action-dialog');
@@ -133,8 +145,12 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => toast.classList.remove('is-visible'), 2600);
 }
 
+function playbackData(show) {
+  return `${show.hls ? ` data-hls="${show.hls}" data-mp4="${show.mp4}" data-player-meta="${show.playerMeta}"` : ''}`;
+}
+
 function mediaCard(show) {
-  return `<button class="media-card play-button" data-title="${show.title}" type="button"><div class="card-poster ${show.poster}"><span>${show.genre.toUpperCase()}</span></div><h3>${show.title}</h3><p>${show.meta}</p></button>`;
+  return `<button class="media-card play-button" data-title="${show.title}"${playbackData(show)} type="button"><div class="card-poster ${show.poster}"><span>${show.genre.toUpperCase()}</span></div><h3>${show.title}</h3><p>${show.meta}</p></button>`;
 }
 
 function renderCatalog() {
@@ -143,7 +159,7 @@ function renderCatalog() {
 }
 
 function homeCard(show) {
-  return `<button class="media-card play-button" data-title="${show.title}" type="button"><div class="card-poster ${show.poster}"><span>${show.genre.toUpperCase()}</span></div><h3>${show.title}</h3><p>${show.meta}</p></button>`;
+  return mediaCard(show);
 }
 
 function renderHomeFeatured() {
@@ -153,7 +169,7 @@ function renderHomeFeatured() {
 }
 
 function renderCarousel() {
-  carouselNode.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="carousel-slide ${index === currentCarousel ? 'is-current' : ''}" data-carousel-index="${index}" data-title="${show.title}" type="button"><div class="carousel-cover ${show.poster}"><span>${t('premiere')}</span><div class="carousel-copy"><p>${show.genre}</p><h2>${show.title}</h2><small>${show.meta}</small></div></div></button>`).join('');
+  carouselNode.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="carousel-slide ${index === currentCarousel ? 'is-current' : ''}" data-carousel-index="${index}" data-title="${show.title}"${playbackData(show)} type="button"><div class="carousel-cover ${show.poster}"><span>${t('premiere')}</span><div class="carousel-copy"><p>${show.genre}</p><h2>${show.title}</h2><small>${show.meta}</small></div></div></button>`).join('');
   carouselDots.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="${index === currentCarousel ? 'is-current' : ''}" data-carousel-dot="${index}" type="button" aria-label="${t('home.premieres')}: ${show.title}"></button>`).join('');
 }
 
@@ -234,13 +250,44 @@ function renderShort() {
   const short = shorts[currentShort];
   const stage = document.querySelector('#shorts-stage');
   stage.style.background = short.tone;
-  stage.innerHTML = `<div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится">♡</button><button data-short-action="share" type="button" aria-label="Поделиться">↗</button><button data-short-action="save" type="button" aria-label="Сохранить">⌑</button></div><div class="short-content"><span class="short-category">${short.category}</span><h2>${short.title}</h2><p>${short.text}</p></div>`;
+  const video = short.mp4 ? `<video class="short-video" src="${short.mp4}" poster="${short.poster}" autoplay muted loop playsinline preload="metadata"></video>` : '';
+  stage.innerHTML = `${video}<div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится">♡</button><button data-short-action="share" type="button" aria-label="Поделиться">↗</button><button data-short-action="save" type="button" aria-label="Сохранить">⌑</button></div><div class="short-content"><span class="short-category">${short.category}</span><h2>${short.title}</h2><p>${short.text}</p></div>`;
   document.querySelector('#shorts-counter').textContent = `${String(currentShort + 1).padStart(2, '0')} / ${String(shorts.length).padStart(2, '0')}`;
 }
 
-function openPlayer(title) {
+function stopPlayer() {
+  playerVideo.pause();
+  playerVideo.removeAttribute('src');
+  playerVideo.load();
+  playerVideo.hidden = true;
+  playerPoster.hidden = false;
+}
+
+function openPlayer(title, source = {}) {
   playerTitle.textContent = title;
+  const useHls = source.hls && playerVideo.canPlayType('application/vnd.apple.mpegurl');
+  const playbackUrl = useHls ? source.hls : source.mp4;
+  playerMeta.textContent = source.playerMeta || 'КАТАЛОГ · ПРЕДПРОСМОТР';
+  if (playbackUrl) {
+    playerVideo.src = playbackUrl;
+    playerVideo.hidden = false;
+    playerPoster.hidden = true;
+    openDialog(player);
+    void playerVideo.play().catch(() => {});
+    return;
+  } else {
+    stopPlayer();
+    playerEmptyCopy.textContent = 'Видео станет доступно после публикации.';
+  }
   openDialog(player);
+}
+
+function openPlayerFrom(element) {
+  openPlayer(element.dataset.title || 'После полуночи', {
+    hls: element.dataset.hls,
+    mp4: element.dataset.mp4,
+    playerMeta: element.dataset.playerMeta
+  });
 }
 
 function navigate(route) {
@@ -381,7 +428,7 @@ document.addEventListener('click', (event) => {
   const carouselButton = event.target.closest('[data-carousel-index]');
   if (carouselButton) {
     setCarousel(Number(carouselButton.dataset.carouselIndex));
-    openPlayer(carouselButton.dataset.title);
+    openPlayerFrom(carouselButton);
     startCarousel();
     return;
   }
@@ -402,7 +449,7 @@ document.addEventListener('click', (event) => {
 
   const playButton = event.target.closest('.play-button, .continue-card');
   if (playButton) {
-    openPlayer(playButton.dataset.title || 'После полуночи');
+    openPlayerFrom(playButton);
     return;
   }
 
@@ -414,7 +461,11 @@ document.addEventListener('click', (event) => {
   }
 });
 
-document.querySelector('#close-player').addEventListener('click', () => closeDialog(player));
+document.querySelector('#close-player').addEventListener('click', () => {
+  stopPlayer();
+  closeDialog(player);
+});
+player.addEventListener('close', stopPlayer);
 document.querySelector('#player-continue').addEventListener('click', () => {
   closeDialog(player);
   showToast(`Продолжаем «${playerTitle.textContent}»`);

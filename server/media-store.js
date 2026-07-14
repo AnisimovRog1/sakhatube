@@ -19,8 +19,8 @@ export function createMediaStore(config) {
         CacheControl: cacheControl || 'public, max-age=31536000, immutable'
       }));
     },
-    async get(storageKey) {
-      return client.send(new GetObjectCommand({ Bucket: config.bucket, Key: storageKey }));
+    async get(storageKey, range) {
+      return client.send(new GetObjectCommand({ Bucket: config.bucket, Key: storageKey, ...(range ? { Range: range } : {}) }));
     },
     async remove(storageKey) {
       await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: storageKey }));

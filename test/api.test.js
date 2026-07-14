@@ -86,8 +86,9 @@ test('temporary demo media is public but restricted to its own prefix', async (t
     jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters',
     allowDevTokens: true,
     mediaStore: {
-      async get(key) {
-        requestedKeys.push(key);
+      async get(key, range) {
+        requestedKeys.push([key, range]);
+        if (range) return { ContentType: 'video/mp4', ContentLength: 16, ContentRange: 'bytes 0-15/32', Body: Readable.from(['demo-video-bytes']) };
         return { ContentType: 'application/vnd.apple.mpegurl', Body: Readable.from(['#EXTM3U\n']) };
       }
     }
@@ -99,7 +100,12 @@ test('temporary demo media is public but restricted to its own prefix', async (t
   assert.equal(manifest.headers['content-type'], 'application/vnd.apple.mpegurl');
   assert.equal(manifest.headers['cache-control'], 'no-cache');
   assert.equal(manifest.headers['x-sakhatube-demo-media'], 'true');
-  assert.deepEqual(requestedKeys, ['demo-media/sintel-demo/episode/master.m3u8']);
+  assert.deepEqual(requestedKeys, [['demo-media/sintel-demo/episode/master.m3u8', undefined]]);
+  const rangedClip = await app.inject({ method: 'GET', url: '/v1/demo-media/sintel-demo/clip/clip.mp4', headers: { range: 'bytes=0-15' } });
+  assert.equal(rangedClip.statusCode, 206);
+  assert.equal(rangedClip.headers['accept-ranges'], 'bytes');
+  assert.equal(rangedClip.headers['content-range'], 'bytes 0-15/32');
+  assert.deepEqual(requestedKeys[1], ['demo-media/sintel-demo/clip/clip.mp4', 'bytes=0-15']);
   const traversal = await app.inject({ method: 'GET', url: '/v1/demo-media/%2E%2E/secret' });
   assert.equal(traversal.statusCode, 404);
 });

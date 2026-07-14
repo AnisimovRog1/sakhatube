@@ -319,11 +319,17 @@ export function buildApp(options = {}) {
     if (typeof relativeKey !== 'string' || !relativeKey || relativeKey.includes('..') || relativeKey.includes('\\')) {
       return reply.code(404).send({ error: 'NOT_FOUND' });
     }
+    const range = request.headers.range;
+    if (range && !/^bytes=\d*-\d*$/.test(range)) return reply.code(416).send({ error: 'RANGE_NOT_SATISFIABLE' });
     try {
-      const object = await mediaStore.get(`demo-media/${relativeKey}`);
+      const object = await mediaStore.get(`demo-media/${relativeKey}`, range);
       reply.header('content-type', object.ContentType || 'application/octet-stream');
       reply.header('cache-control', relativeKey.endsWith('.m3u8') ? 'no-cache' : 'public, max-age=86400');
       reply.header('x-sakhatube-demo-media', 'true');
+      reply.header('accept-ranges', 'bytes');
+      if (object.ContentRange) reply.header('content-range', object.ContentRange);
+      if (object.ContentLength !== undefined) reply.header('content-length', object.ContentLength);
+      if (object.ContentRange) reply.code(206);
       return reply.send(object.Body);
     } catch (error) {
       request.log.error(error);

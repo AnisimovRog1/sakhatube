@@ -130,6 +130,7 @@ em { color: #dce9ff; font-style: normal; }
 .poster-three { background: radial-gradient(circle at 72% 20%, #e9a08e, transparent 14%), linear-gradient(135deg, #70404a, #24202b 51%, #2f3c61); }
 .poster-four { background: radial-gradient(circle at 62% 17%, #d8d7ff, transparent 15%), linear-gradient(135deg, #504989, #1c2634 51%, #1b7e88); }
 .poster-five { background: radial-gradient(circle at 75% 18%, #e5ce83, transparent 14%), linear-gradient(135deg, #8d7345, #24282c 53%, #3b6551); }
+.poster-demo { background-image: linear-gradient(0deg, rgba(5,7,12,.58), rgba(5,7,12,.05) 58%), url('https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/poster.jpg'); background-position: center; background-size: cover; }
 
 .screen-intro { padding: 38px 0 25px; }
 .screen-intro .eyebrow { margin-bottom: 9px; }
@@ -146,6 +147,7 @@ em { color: #dce9ff; font-style: normal; }
 
 .shorts-layout { display: grid; grid-template-columns: minmax(520px, 800px) minmax(280px, 340px); justify-content: center; align-items: center; gap: clamp(42px, 5vw, 84px); max-width: 1240px; min-height: calc(100vh - 76px); margin: 0 auto; padding: 36px 0 64px; }
 .shorts-stage { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid #2b2e36; border-radius: 18px; background: #24262d; box-shadow: 0 28px 76px rgba(0,0,0,.42); }
+.short-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #080a0d; }
 .shorts-stage::before { position: absolute; inset: 0; content: ""; pointer-events: none; background: radial-gradient(circle at 68% 28%, rgba(255,255,255,.15), transparent 17%), radial-gradient(circle at 29% 72%, rgba(114,170,255,.2), transparent 24%), linear-gradient(112deg, transparent 0 44%, rgba(255,255,255,.06) 44% 44.2%, transparent 44.2% 100%); }
 .shorts-stage::after { position: absolute; inset: 0; content: ""; background: linear-gradient(0deg, rgba(0,0,0,.78), transparent 53%); }
 .short-content { position: absolute; z-index: 1; right: 28px; bottom: 27px; left: 28px; max-width: min(560px, calc(100% - 104px)); }
@@ -204,6 +206,8 @@ em { color: #dce9ff; font-style: normal; }
 .player-dialog { width: min(840px, 92vw); padding: 0; overflow: hidden; border: 1px solid #343742; border-radius: 18px; background: var(--surface); color: var(--text); }
 .player-dialog::backdrop { background: rgba(0,0,0,.76); backdrop-filter: blur(6px); }
 .player-stage { position: relative; aspect-ratio: 16 / 9; background: #07090c; }
+.player-video { display: block; width: 100%; height: 100%; background: #050608; object-fit: contain; }
+.player-video[hidden] { display: none; }
 .player-poster { display: grid; height: 100%; place-content: center; gap: 13px; background: radial-gradient(circle at 64% 25%, rgba(118,173,255,.32), transparent 20%), linear-gradient(145deg, #202a39, #0c0e13 67%); color: var(--muted); text-align: center; }
 .player-play { display: grid; width: 62px; height: 62px; place-items: center; margin: auto; border-radius: 50%; background: var(--primary); color: var(--primary-ink); }
 .close-player { position: absolute; z-index: 2; top: 13px; right: 13px; width: 34px; height: 34px; border: 0; border-radius: 50%; background: rgba(0,0,0,.42); color: #fff; font-size: 24px; }
