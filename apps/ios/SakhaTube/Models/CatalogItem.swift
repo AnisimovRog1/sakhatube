@@ -51,6 +51,18 @@ enum CatalogFixtures {
 
     static let titles: [CatalogItem] = [
         featured,
+        CatalogItem(
+            id: "sintel-demo",
+            title: "Sintel — тестовый показ",
+            eyebrow: "CC BY · HLS DEMO",
+            description: "Легальный тест потока SakhaTube. В плеере доступны 540p и 720p.",
+            genre: "Анимация",
+            year: "2010",
+            ageRating: "12+",
+            episodeCount: 1,
+            gradient: .ocean,
+            trailerURL: URL(string: "https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/episode/master.m3u8")
+        ),
         CatalogItem(id: "fifth-floor", title: "Пятый этаж", eyebrow: "ПРЕМЬЕРА", description: "История, где у каждого соседа есть своя тайна.", genre: "Детектив", year: "2026", ageRating: "16+", episodeCount: 8, gradient: .rose, trailerURL: nil),
         CatalogItem(id: "north-wind", title: "Северный ветер", eyebrow: "ORIGINAL", description: "Дорога домой, которую не выбирают случайно.", genre: "Драма", year: "2025", ageRating: "12+", episodeCount: 10, gradient: .ocean, trailerURL: nil),
         CatalogItem(id: "first-light", title: "Первый свет", eyebrow: "НОВОЕ", description: "Две семьи и одно решение на всю жизнь.", genre: "Мелодрама", year: "2026", ageRating: "16+", episodeCount: 12, gradient: .ember, trailerURL: nil),

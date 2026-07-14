@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import { buildApp } from '../server/app.js';
 
@@ -77,6 +78,30 @@ test('playback event is validated and accepted without exposing admin access', a
   assert.equal(invalid.statusCode, 400);
   const accepted = await app.inject({ method: 'POST', url: '/v1/events/playback', payload: { contentId: 'midnight', sessionId: 'abcdef0123456789', event: 'first_frame', positionMs: 0 } });
   assert.equal(accepted.statusCode, 202);
+});
+
+test('temporary demo media is public but restricted to its own prefix', async (t) => {
+  const requestedKeys = [];
+  const app = buildApp({
+    jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters',
+    allowDevTokens: true,
+    mediaStore: {
+      async get(key) {
+        requestedKeys.push(key);
+        return { ContentType: 'application/vnd.apple.mpegurl', Body: Readable.from(['#EXTM3U\n']) };
+      }
+    }
+  });
+  await app.ready();
+  t.after(() => app.close());
+  const manifest = await app.inject({ method: 'GET', url: '/v1/demo-media/sintel-demo/episode/master.m3u8' });
+  assert.equal(manifest.statusCode, 200);
+  assert.equal(manifest.headers['content-type'], 'application/vnd.apple.mpegurl');
+  assert.equal(manifest.headers['cache-control'], 'no-cache');
+  assert.equal(manifest.headers['x-sakhatube-demo-media'], 'true');
+  assert.deepEqual(requestedKeys, ['demo-media/sintel-demo/episode/master.m3u8']);
+  const traversal = await app.inject({ method: 'GET', url: '/v1/demo-media/%2E%2E/secret' });
+  assert.equal(traversal.statusCode, 404);
 });
 
 test('production refuses a memory store unless preview mode is explicitly enabled', () => {

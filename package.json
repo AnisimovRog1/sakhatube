@@ -7,7 +7,10 @@
     "start": "node server/index.js",
     "dev:api": "node --watch server/index.js",
     "start:api": "node server/index.js",
-    "test:api": "node --test test/*.test.js"
+    "test:api": "node --test test/*.test.js",
+    "media:download-demo": "node scripts/media/download-demo-catalog.mjs",
+    "media:package-demo": "node scripts/media/package-demo-hls.mjs",
+    "media:upload-demo": "node scripts/media/upload-demo-hls.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -21,6 +24,7 @@
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^10.1.0",
     "fastify": "^5.2.1",
+    "ffmpeg-static": "^5.3.0",
     "pg": "^8.22.0",
     "zod": "^3.24.2"
   }

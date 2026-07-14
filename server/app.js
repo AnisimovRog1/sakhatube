@@ -192,7 +192,7 @@ export function buildApp(options = {}) {
 
   app.addHook('onSend', async (request, reply, payload) => {
     reply.header('x-request-id', request.id);
-    if (request.url === '/health' || request.url.startsWith('/v1/')) reply.header('cache-control', 'no-store');
+    if ((request.url === '/health' || request.url.startsWith('/v1/')) && !reply.getHeader('cache-control')) reply.header('cache-control', 'no-store');
     return payload;
   });
   app.setErrorHandler((error, request, reply) => {
@@ -304,6 +304,26 @@ export function buildApp(options = {}) {
       const object = await mediaStore.get(item.storageKey);
       reply.header('content-type', object.ContentType || item.contentType);
       reply.header('cache-control', 'public, max-age=86400');
+      return reply.send(object.Body);
+    } catch (error) {
+      request.log.error(error);
+      return reply.code(404).send({ error: 'NOT_FOUND' });
+    }
+  });
+
+  // Public only for explicitly marked temporary Creative Commons demo files.
+  // Paid or private content must use a separate entitlement check and signed CDN URLs.
+  app.get('/v1/demo-media/*', { config: { rateLimit: { max: 600, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!mediaStore) return reply.code(404).send({ error: 'NOT_FOUND' });
+    const relativeKey = request.params['*'];
+    if (typeof relativeKey !== 'string' || !relativeKey || relativeKey.includes('..') || relativeKey.includes('\\')) {
+      return reply.code(404).send({ error: 'NOT_FOUND' });
+    }
+    try {
+      const object = await mediaStore.get(`demo-media/${relativeKey}`);
+      reply.header('content-type', object.ContentType || 'application/octet-stream');
+      reply.header('cache-control', relativeKey.endsWith('.m3u8') ? 'no-cache' : 'public, max-age=86400');
+      reply.header('x-sakhatube-demo-media', 'true');
       return reply.send(object.Body);
     } catch (error) {
       request.log.error(error);

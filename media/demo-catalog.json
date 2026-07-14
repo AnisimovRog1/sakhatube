@@ -1,0 +1,38 @@
+{
+  "catalog": "Temporary SakhaTube playback demo",
+  "notice": "All entries are Creative Commons test media. Keep attribution available in Studio and in the viewer credits screen.",
+  "items": [
+    {
+      "id": "sintel-demo",
+      "title": "Sintel — тестовый показ",
+      "kind": "episode",
+      "sourceUrl": "https://download.blender.org/durian/movies/Sintel.2010.1080p.mkv",
+      "sourceBytes": 1180090590,
+      "license": {
+        "name": "Creative Commons Attribution 3.0",
+        "url": "https://creativecommons.org/licenses/by/3.0/",
+        "credit": "© Blender Foundation | durian.blender.org"
+      },
+      "clip": {
+        "startSeconds": 60,
+        "durationSeconds": 36
+      }
+    },
+    {
+      "id": "big-buck-bunny-demo",
+      "title": "Big Buck Bunny — тестовый показ",
+      "kind": "episode",
+      "sourceUrl": "https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_1080p_h264.mov",
+      "sourceBytes": 725106140,
+      "license": {
+        "name": "Creative Commons Attribution 3.0",
+        "url": "https://creativecommons.org/licenses/by/3.0/",
+        "credit": "© Blender Foundation | www.bigbuckbunny.org"
+      },
+      "clip": {
+        "startSeconds": 42,
+        "durationSeconds": 36
+      }
+    }
+  ]
+}
