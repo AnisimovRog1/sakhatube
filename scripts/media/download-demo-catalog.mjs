@@ -8,6 +8,7 @@ const root = resolve(import.meta.dirname, '../..');
 const catalogPath = resolve(root, 'media/demo-catalog.json');
 const outputRoot = resolve(root, 'media/source');
 const maxBytes = 5 * 1024 * 1024 * 1024;
+const downloadChunkBytes = 32 * 1024 * 1024;
 const onlyId = process.argv.includes('--id') ? process.argv[process.argv.indexOf('--id') + 1] : null;
 
 function extensionFrom(url) {
@@ -36,13 +37,22 @@ async function download(item) {
   if (expectedBytes > maxBytes) throw new Error(`${item.id}: размер ${formatBytes(expectedBytes)} превышает безопасный предел 5 GB`);
   console.log(`Загрузка ${item.id}: ${formatBytes(expectedBytes)}${downloadedBytes ? `, продолжаю с ${formatBytes(downloadedBytes)}` : ''}`);
 
-  for (let attempt = 1; downloadedBytes < expectedBytes && attempt <= 24; attempt += 1) {
-    const headers = downloadedBytes ? { Range: `bytes=${downloadedBytes}-` } : {};
+  const maxAttempts = Math.ceil(expectedBytes / downloadChunkBytes) + 2;
+  for (let attempt = 1; downloadedBytes < expectedBytes && attempt <= maxAttempts; attempt += 1) {
+    const rangeEnd = Math.min(downloadedBytes + downloadChunkBytes - 1, expectedBytes - 1);
+    const headers = { Range: `bytes=${downloadedBytes}-${rangeEnd}` };
     const response = await fetch(item.sourceUrl, { redirect: 'follow', headers });
-    if (!response.ok || !response.body) throw new Error(`${item.id}: источник вернул HTTP ${response.status}`);
-    if (downloadedBytes && response.status !== 206) throw new Error(`${item.id}: источник не поддерживает безопасное докачивание`);
+    if (response.status !== 206 || !response.body) throw new Error(`${item.id}: источник не поддерживает безопасное докачивание (HTTP ${response.status})`);
+    const contentRange = response.headers.get('content-range');
+    const range = contentRange?.match(/^bytes (\d+)-(\d+)\/(\d+)$/i);
+    if (!range) throw new Error(`${item.id}: источник не прислал проверяемый Content-Range`);
+    const [, responseStart, responseEnd, responseTotal] = range.map(Number);
+    if (responseStart !== downloadedBytes || responseEnd !== rangeEnd || responseTotal !== expectedBytes) {
+      throw new Error(`${item.id}: источник вернул неверный диапазон ${contentRange}`);
+    }
     await pipeline(Readable.fromWeb(response.body), createWriteStream(temporary, { flags: downloadedBytes ? 'a' : 'w' }));
     downloadedBytes = (await stat(temporary)).size;
+    if (downloadedBytes !== rangeEnd + 1) throw new Error(`${item.id}: размер полученного фрагмента не совпал с Content-Range`);
     if (downloadedBytes < expectedBytes) console.log(`Повтор ${attempt}: получено ${formatBytes(downloadedBytes)} из ${formatBytes(expectedBytes)}`);
   }
 
