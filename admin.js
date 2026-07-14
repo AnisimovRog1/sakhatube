@@ -30,6 +30,7 @@ let contentFilter = 'all';
 let commentFilter = 'pending';
 let pendingDeleteId = null;
 let previewMode = 'phone';
+let bannerMediaDraft = null;
 let toastTimer;
 
 const contentTable = document.querySelector('#content-table');
@@ -89,6 +90,80 @@ function contentById(id) {
 
 function bannerById(id) {
   return studio.banners.find((item) => item.id === id);
+}
+
+function isSafeBannerMedia(media) {
+  return Boolean(media && typeof media.src === 'string' && /^data:image\/(?:jpeg|png|webp);base64,/i.test(media.src));
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 1) return 'оптимизировано';
+  return bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} МБ`
+    : `${Math.max(1, Math.round(bytes / 1024))} КБ`;
+}
+
+function applyBannerMedia(element, media) {
+  if (!element) return;
+  if (!isSafeBannerMedia(media)) {
+    element.classList.remove('has-media');
+    element.style.removeProperty('background-image');
+    return;
+  }
+  element.classList.add('has-media');
+  element.style.backgroundImage = `url("${media.src}")`;
+}
+
+function renderBannerMediaState() {
+  const preview = document.querySelector('#banner-media-preview');
+  const name = document.querySelector('#banner-media-name');
+  const meta = document.querySelector('#banner-media-meta');
+  const remove = document.querySelector('[data-action="remove-banner-media"]');
+  if (isSafeBannerMedia(bannerMediaDraft)) {
+    preview.src = bannerMediaDraft.src;
+    preview.hidden = false;
+    name.textContent = bannerMediaDraft.name || 'Изображение баннера';
+    meta.textContent = `Готово для витрины · ${formatBytes(bannerMediaDraft.size)}`;
+    remove.hidden = false;
+    return;
+  }
+  preview.removeAttribute('src');
+  preview.hidden = true;
+  name.textContent = 'Изображение не выбрано';
+  meta.textContent = 'Можно оставить оформление без картинки.';
+  remove.hidden = true;
+}
+
+function optimizeBannerImage(file) {
+  if (!file || !/^image\/(jpeg|png|webp)$/i.test(file.type)) return Promise.reject(new Error('Выбери изображение JPG, PNG или WebP.'));
+  if (file.size > 15 * 1024 * 1024) return Promise.reject(new Error('Файл больше 15 МБ. Выбери изображение поменьше.'));
+  return new Promise((resolve, reject) => {
+    const sourceReader = new FileReader();
+    sourceReader.onerror = () => reject(new Error('Не удалось прочитать изображение.'));
+    sourceReader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error('Файл не похож на корректное изображение.'));
+      image.onload = () => {
+        const scale = Math.min(1, 1440 / image.naturalWidth, 810 / image.naturalHeight);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext('2d');
+        if (!context) { reject(new Error('Браузер не смог подготовить изображение.')); return; }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('Не удалось оптимизировать изображение.')); return; }
+          if (blob.size > 1.2 * 1024 * 1024) { reject(new Error('Изображение всё ещё слишком тяжёлое. Обрежь или сожми его и попробуй снова.')); return; }
+          const resultReader = new FileReader();
+          resultReader.onerror = () => reject(new Error('Не удалось сохранить оптимизированное изображение.'));
+          resultReader.onload = () => resolve({ src: resultReader.result, name: file.name, size: blob.size });
+          resultReader.readAsDataURL(blob);
+        }, 'image/jpeg', 0.82);
+      };
+      image.src = sourceReader.result;
+    };
+    sourceReader.readAsDataURL(file);
+  });
 }
 
 function showToast(message) {
@@ -152,14 +227,16 @@ function renderHomePreview() {
   }
   homeLivePreview.classList.toggle('is-desktop', previewMode === 'desktop');
   homeLivePreview.innerHTML = `<div class="app-preview-top"><span>Sakha<span>Tube</span></span><i>⌕</i><i>◌</i></div><article class="app-preview-hero ${escapeHTML(banner.tone)}"><div class="preview-shade"></div><div class="preview-copy"><small>${escapeHTML(banner.eyebrow)}</small><h3>${escapeHTML(banner.title)}</h3><p>${escapeHTML(banner.description)}</p><button type="button">▶ ${escapeHTML(banner.cta)}</button></div><span class="preview-position">1 / ${activeBanners.length || 1}</span></article><div class="preview-section-title"><strong>Продолжить смотреть</strong><span>Всё →</span></div><div class="preview-shelf">${shelf.map((item) => `<div><span class="mini-poster ${item.poster}"></span><strong>${escapeHTML(item.title)}</strong></div>`).join('') || '<p>Опубликованный контент появится здесь.</p>'}</div><div class="preview-tabbar"><span class="is-current">⌂<b>Главная</b></span><span>◇<b>Для вас</b></span><span>▤<b>Каталог</b></span><span>◯<b>Профиль</b></span></div>`;
+  applyBannerMedia(homeLivePreview.querySelector('.app-preview-hero'), banner.media);
 }
 
 function renderBanners() {
   const banners = studio.banners;
   bannerList.innerHTML = banners.map((banner, index) => {
     const linked = contentById(banner.contentId);
-    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${banner.id}" type="button">Изменить</button><button data-action="toggle-banner" data-id="${banner.id}" type="button">${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${banner.id}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${banner.id}" data-direction="down" type="button" ${index === banners.length - 1 ? 'disabled' : ''} aria-label="Опустить баннер">↓</button></div></div></article>`;
+    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}" data-banner-art="${escapeHTML(banner.id)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${banner.id}" type="button">Изменить</button><button data-action="toggle-banner" data-id="${banner.id}" type="button">${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${banner.id}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${banner.id}" data-direction="down" type="button" ${index === banners.length - 1 ? 'disabled' : ''} aria-label="Опустить баннер">↓</button></div></div></article>`;
   }).join('') || '<p class="empty-copy">Добавь первый баннер, чтобы собрать верхний экран.</p>';
+  studio.banners.forEach((banner) => applyBannerMedia(bannerList.querySelector(`[data-banner-art="${banner.id}"]`), banner.media));
 }
 
 function renderComments() {
@@ -209,6 +286,7 @@ function openContentDialog(item = null) {
 
 function openBannerDialog(banner = null) {
   bannerForm.reset();
+  bannerMediaDraft = isSafeBannerMedia(banner?.media) ? clone(banner.media) : null;
   const contentSelect = document.querySelector('#banner-content');
   contentSelect.innerHTML = studio.content.map((item) => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.title)} · ${statusLabel(item.status)}</option>`).join('');
   document.querySelector('#banner-id').value = banner?.id || '';
@@ -223,6 +301,7 @@ function openBannerDialog(banner = null) {
     document.querySelector('#banner-tone').value = banner.tone;
     document.querySelector('#banner-active').checked = banner.active;
   }
+  renderBannerMediaState();
   openDialog(bannerDialog);
 }
 
@@ -284,6 +363,8 @@ document.addEventListener('click', (event) => {
   if (name === 'new-series') openContentDialog();
   if (name === 'new-banner') openBannerDialog();
   if (name === 'upload') document.querySelector('#video-upload').click();
+  if (name === 'select-banner-media') document.querySelector('#banner-media').click();
+  if (name === 'remove-banner-media') { bannerMediaDraft = null; document.querySelector('#banner-media').value = ''; renderBannerMediaState(); showToast('Изображение убрано из баннера'); }
   if (name === 'edit-content') openContentDialog(contentById(id));
   if (name === 'delete-content') askDelete(id);
   if (name === 'move-home') moveHome(id, action.dataset.direction);
@@ -347,7 +428,8 @@ bannerForm.addEventListener('submit', (event) => {
     description: document.querySelector('#banner-description').value.trim(),
     cta: document.querySelector('#banner-cta').value.trim(),
     tone: document.querySelector('#banner-tone').value,
-    active: document.querySelector('#banner-active').checked
+    active: document.querySelector('#banner-active').checked,
+    media: bannerMediaDraft
   };
   if (id) {
     Object.assign(bannerById(id), data);
@@ -363,6 +445,24 @@ bannerForm.addEventListener('submit', (event) => {
 });
 
 document.querySelector('#content-search').addEventListener('input', renderContent);
+document.querySelector('#banner-media').addEventListener('change', async (event) => {
+  const [file] = event.target.files;
+  if (!file) return;
+  const button = document.querySelector('[data-action="select-banner-media"]');
+  button.disabled = true;
+  button.textContent = 'Готовим…';
+  try {
+    bannerMediaDraft = await optimizeBannerImage(file);
+    renderBannerMediaState();
+    showToast('Изображение подготовлено для баннера');
+  } catch (error) {
+    event.target.value = '';
+    showToast(error.message || 'Не удалось добавить изображение');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Выбрать файл';
+  }
+});
 document.querySelector('#video-upload').addEventListener('change', (event) => {
   const [file] = event.target.files;
   if (!file) return;
