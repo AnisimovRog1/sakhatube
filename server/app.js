@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { z, ZodError } from 'zod';
 
@@ -15,6 +18,16 @@ const playbackEvents = ['intent', 'first_frame', 'pause', 'buffer_start', 'buffe
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const publicFiles = new Map([
+  ['/', 'index.html'],
+  ['/index.html', 'index.html'],
+  ['/styles.css', 'styles.css'],
+  ['/app.js', 'app.js'],
+  ['/admin.html', 'admin.html'],
+  ['/admin.css', 'admin.css'],
+  ['/admin.js', 'admin.js']
+]);
 
 export const defaultSeed = {
   content: [
@@ -105,12 +118,15 @@ const playbackInput = z.object({
 });
 
 function configFrom(overrides = {}) {
-  const production = (overrides.nodeEnv ?? process.env.NODE_ENV) === 'production';
+  const railwayHost = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+  const production = (overrides.nodeEnv ?? process.env.NODE_ENV) === 'production' || railwayHost;
   const jwtSecret = overrides.jwtSecret ?? process.env.JWT_SECRET ?? 'local-development-secret-change-before-production';
   const allowedOrigins = overrides.allowedOrigins ?? (process.env.ALLOWED_ORIGINS || 'http://localhost:4173,http://localhost:3000').split(',').map((item) => item.trim()).filter(Boolean);
+  const allowDemoStore = overrides.allowDemoStore ?? process.env.ALLOW_DEMO_STORE === 'true';
+  const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
   if (production && jwtSecret.length < 32) throw new Error('JWT_SECRET должен содержать не менее 32 символов в production');
-  if (production && !process.env.DATABASE_URL && !overrides.databaseUrl) throw new Error('DATABASE_URL обязателен в production: in-memory store нельзя публиковать');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production };
+  if (production && !databaseUrl && !allowDemoStore) throw new Error('DATABASE_URL обязателен в production: in-memory store нельзя публиковать');
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, databaseUrl };
 }
 
 function parseOrReply(schema, input, reply) {
@@ -125,7 +141,23 @@ export function buildApp(options = {}) {
   const store = options.store ?? createMemoryStore();
   const app = Fastify({ logger: options.logger ?? false, requestIdHeader: 'x-request-id', genReqId: () => randomUUID() });
 
-  app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'same-site' } });
+  app.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        baseUri: ["'self'"],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+        imgSrc: ["'self'", 'data:', 'https:'],
+        objectSrc: ["'none'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com']
+      }
+    },
+    crossOriginResourcePolicy: { policy: 'same-site' }
+  });
   app.register(cors, { origin: (origin, callback) => callback(null, !origin || config.allowedOrigins.includes(origin)), credentials: true, methods: ['GET', 'POST', 'PATCH'] });
   app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute', keyGenerator: (request) => request.ip });
   app.register(jwt, { secret: config.jwtSecret, sign: { expiresIn: '15m' }, verify: { algorithms: ['HS256'] } });
@@ -139,7 +171,7 @@ export function buildApp(options = {}) {
 
   app.addHook('onSend', async (request, reply, payload) => {
     reply.header('x-request-id', request.id);
-    reply.header('cache-control', 'no-store');
+    if (request.url === '/health' || request.url.startsWith('/v1/')) reply.header('cache-control', 'no-store');
     return payload;
   });
   app.setErrorHandler((error, request, reply) => {
@@ -153,7 +185,7 @@ export function buildApp(options = {}) {
     store.audit({ actorId: request.user?.sub ?? 'anonymous', roles: request.user?.roles ?? [], action, entityType, entityId, before, after, requestId: request.id, ip: request.ip });
   };
 
-  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', time: now() }));
+  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'database' : 'preview-memory', time: now() }));
 
   // Local-only bootstrap. A production Studio must delegate identity to an OIDC provider.
   app.post('/v1/dev/token', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -218,6 +250,16 @@ export function buildApp(options = {}) {
     store.addPlayback({ ...body, viewerId: request.user?.sub ?? null });
     return reply.code(202).send({ accepted: true });
   });
+
+  if (options.serveStatic !== false) {
+    app.register(fastifyStatic, { root: projectRoot, serve: false });
+    app.get('/', async (request, reply) => reply.type('text/html; charset=utf-8').sendFile(publicFiles.get('/')));
+    app.get('/:asset', async (request, reply) => {
+      const file = publicFiles.get(`/${request.params.asset}`);
+      if (!file) return reply.code(404).send({ error: 'NOT_FOUND' });
+      return reply.sendFile(file);
+    });
+  }
 
   return app;
 }

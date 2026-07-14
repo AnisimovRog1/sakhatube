@@ -1,10 +1,10 @@
 const studioDefaults = {
   content: [
-    { id: 'midnight', title: 'После полуночи', kind: 'Сериал', genre: 'Драма', episodes: 8, status: 'published', poster: 'poster-one', views: 128430, likes: 18320, comments: 846 },
-    { id: 'signal', title: 'Тихий сигнал', kind: 'Сериал', genre: 'Мистика', episodes: 10, status: 'published', poster: 'poster-two', views: 96420, likes: 12180, comments: 593 },
-    { id: 'one', title: 'Один на один', kind: 'Сериал', genre: 'Мелодрама', episodes: 12, status: 'published', poster: 'poster-three', views: 81210, likes: 10440, comments: 466 },
-    { id: 'floor', title: 'Пятый этаж', kind: 'Сериал', genre: 'Триллер', episodes: 6, status: 'draft', poster: 'poster-four', views: 0, likes: 0, comments: 0 },
-    { id: 'chance', title: 'Второй шанс', kind: 'Трейлер', genre: 'Семейный', episodes: 1, status: 'hidden', poster: 'poster-five', views: 15370, likes: 1150, comments: 88 }
+    { id: 'midnight', title: 'После полуночи', kind: 'Сериал', genre: 'Драма', episodes: 8, status: 'published', access: 'subscription', price: 0, poster: 'poster-one', views: 128430, likes: 18320, comments: 846 },
+    { id: 'signal', title: 'Тихий сигнал', kind: 'Сериал', genre: 'Мистика', episodes: 10, status: 'published', access: 'free', price: 0, poster: 'poster-two', views: 96420, likes: 12180, comments: 593 },
+    { id: 'one', title: 'Один на один', kind: 'Сериал', genre: 'Мелодрама', episodes: 12, status: 'published', access: 'purchase', price: 299, poster: 'poster-three', views: 81210, likes: 10440, comments: 466 },
+    { id: 'floor', title: 'Пятый этаж', kind: 'Сериал', genre: 'Триллер', episodes: 6, status: 'draft', access: 'subscription', price: 0, poster: 'poster-four', views: 0, likes: 0, comments: 0 },
+    { id: 'chance', title: 'Второй шанс', kind: 'Трейлер', genre: 'Семейный', episodes: 1, status: 'hidden', access: 'free', price: 0, poster: 'poster-five', views: 15370, likes: 1150, comments: 88 }
   ],
   homeOrder: ['midnight', 'signal', 'one', 'floor'],
   comments: [
@@ -43,6 +43,7 @@ function loadStudio() {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
     if (!saved?.content || !saved?.homeOrder || !saved?.comments || !saved?.uploads) return clone(studioDefaults);
+    saved.content = saved.content.map((item) => ({ access: 'free', price: 0, ...item }));
     return saved;
   } catch {
     return clone(studioDefaults);
@@ -63,6 +64,12 @@ function compact(value) {
 
 function statusLabel(status) {
   return { published: 'Опубликовано', draft: 'Черновик', hidden: 'Скрыто' }[status] || status;
+}
+
+function accessLabel(access, price = 0) {
+  if (access === 'subscription') return 'Подписка';
+  if (access === 'purchase') return `${compact(price)} ₽`;
+  return 'Бесплатно';
 }
 
 function contentById(id) {
@@ -110,14 +117,14 @@ function renderContent() {
     const matchesFilter = contentFilter === 'all' || item.status === contentFilter;
     return matchesFilter && `${item.title} ${item.genre} ${item.kind}`.toLocaleLowerCase().includes(query);
   });
-  const head = '<div class="table-head"><span>КОНТЕНТ</span><span>СТАТУС</span><span>ПРОСМОТРЫ</span><span>РЕАКЦИИ</span><span>КОММЕНТАРИИ</span><span></span></div>';
-  const rows = visible.map((item) => `<article class="content-row"><div class="content-title"><div class="content-poster ${item.poster}"></div><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.kind)} · ${escapeHTML(item.genre)} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}</small></div></div><div><span class="status ${item.status}">${statusLabel(item.status)}</span></div><span class="table-value"><strong>${compact(item.views)}</strong>всего</span><span class="table-value"><strong>${compact(item.likes)}</strong>нравится</span><span class="table-value"><strong>${compact(item.comments)}</strong>всего</span><div class="row-menu"><button data-action="edit-content" data-id="${item.id}" type="button">Изменить</button><button data-action="delete-content" data-id="${item.id}" type="button">Удалить</button></div></article>`).join('');
+  const head = '<div class="table-head"><span>КОНТЕНТ</span><span>СТАТУС</span><span>ДОСТУП</span><span>ПРОСМОТРЫ</span><span>РЕАКЦИИ</span><span>КОММЕНТАРИИ</span><span></span></div>';
+  const rows = visible.map((item) => `<article class="content-row"><div class="content-title"><div class="content-poster ${item.poster}"></div><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.kind)} · ${escapeHTML(item.genre)} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}</small></div></div><div><span class="status ${item.status}">${statusLabel(item.status)}</span></div><span class="access ${item.access}">${accessLabel(item.access, item.price)}</span><span class="table-value"><strong>${compact(item.views)}</strong>всего</span><span class="table-value"><strong>${compact(item.likes)}</strong>нравится</span><span class="table-value"><strong>${compact(item.comments)}</strong>всего</span><div class="row-menu"><button data-action="edit-content" data-id="${item.id}" type="button">Изменить</button><button data-action="delete-content" data-id="${item.id}" type="button">Удалить</button></div></article>`).join('');
   contentTable.innerHTML = head + (rows || '<div class="empty-table">Ничего не найдено. Сбрось фильтр или добавь новый контент.</div>');
 }
 
 function renderHomeOrder() {
   const items = studio.homeOrder.map(contentById).filter(Boolean);
-  homeOrderGrid.innerHTML = items.map((item, index) => `<article class="order-card"><div class="order-poster ${item.poster}"><span class="order-number">${index + 1}</span></div><div class="order-info"><h3>${escapeHTML(item.title)}</h3><p>${escapeHTML(item.genre)} · ${statusLabel(item.status)}</p><div class="reorder-actions"><button data-action="move-home" data-id="${item.id}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''}>↑ Выше</button><button data-action="move-home" data-id="${item.id}" data-direction="down" type="button" ${index === items.length - 1 ? 'disabled' : ''}>↓ Ниже</button></div></div></article>`).join('') || '<p class="empty-copy">Добавь сериал, чтобы собрать витрину.</p>';
+  homeOrderGrid.innerHTML = items.map((item, index) => `<article class="order-card"><div class="order-poster ${item.poster}"><span class="order-number">${index + 1}</span></div><div class="order-info"><h3>${escapeHTML(item.title)}</h3><p>${escapeHTML(item.genre)} · ${accessLabel(item.access, item.price)}</p><div class="reorder-actions"><button data-action="move-home" data-id="${item.id}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''}>↑ Выше</button><button data-action="move-home" data-id="${item.id}" data-direction="down" type="button" ${index === items.length - 1 ? 'disabled' : ''}>↓ Ниже</button></div></div></article>`).join('') || '<p class="empty-copy">Добавь сериал, чтобы собрать витрину.</p>';
 }
 
 function renderComments() {
@@ -157,6 +164,8 @@ function openContentDialog(item = null) {
     document.querySelector('#content-kind').value = item.kind;
     document.querySelector('#content-episodes').value = item.episodes;
     document.querySelector('#content-status').value = item.status;
+    document.querySelector('#content-access').value = item.access || 'free';
+    document.querySelector('#content-price').value = item.price || 0;
   }
   openDialog(contentDialog);
 }
@@ -235,7 +244,9 @@ contentForm.addEventListener('submit', (event) => {
     genre: document.querySelector('#content-genre').value,
     kind: document.querySelector('#content-kind').value,
     episodes: Number(document.querySelector('#content-episodes').value),
-    status: document.querySelector('#content-status').value
+    status: document.querySelector('#content-status').value,
+    access: document.querySelector('#content-access').value,
+    price: Math.max(0, Number(document.querySelector('#content-price').value) || 0)
   };
   if (id) {
     Object.assign(contentById(id), data);
@@ -263,7 +274,7 @@ document.querySelector('#video-upload').addEventListener('change', (event) => {
     ? `${(sizeInMb / 1024).toFixed(1).replace('.', ',')} ГБ`
     : `${sizeInMb.toFixed(1).replace('.', ',')} МБ`;
   studio.uploads.unshift({ id, name: file.name, size: fileSize, status: 'Файл добавлен в демо', tone: 'processing' });
-  studio.content.unshift({ id, title, kind: 'Короткое видео', genre: 'Драма', episodes: 1, status: 'draft', poster: 'poster-four', views: 0, likes: 0, comments: 0 });
+  studio.content.unshift({ id, title, kind: 'Короткое видео', genre: 'Драма', episodes: 1, status: 'draft', access: 'free', price: 0, poster: 'poster-four', views: 0, likes: 0, comments: 0 });
   studio.homeOrder.push(id);
   saveStudio();
   renderStudio();
