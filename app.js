@@ -1,11 +1,12 @@
 const demoMedia = {
   hls: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/episode/master.m3u8',
+  preview: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/episode/preview.mp4',
   clip: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/clip/clip.mp4',
   poster: 'https://sakhatube-production.up.railway.app/v1/demo-media/sintel-demo/poster.jpg'
 };
 
 const shows = [
-  { title: 'Sintel — тестовый показ', meta: 'Бесплатно · CC BY · HLS', poster: 'poster-demo', genre: 'Тест', hls: demoMedia.hls, mp4: demoMedia.clip, playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · CC BY 3.0' },
+  { title: 'Sintel — тестовый показ', meta: 'Бесплатно · CC BY · 1 минута', poster: 'poster-demo', genre: 'Тест', hls: demoMedia.hls, mp4: demoMedia.preview, playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · CC BY 3.0' },
   { title: 'После полуночи', meta: 'Драма · 8 серий', poster: 'poster-one', genre: 'Драма' },
   { title: 'Тихий сигнал', meta: 'Мистика · 10 серий', poster: 'poster-two', genre: 'Мистика' },
   { title: 'Один на один', meta: 'Мелодрама · 12 серий', poster: 'poster-three', genre: 'Мелодрама' },
@@ -265,8 +266,7 @@ function stopPlayer() {
 
 function openPlayer(title, source = {}) {
   playerTitle.textContent = title;
-  const useHls = source.hls && playerVideo.canPlayType('application/vnd.apple.mpegurl');
-  const playbackUrl = useHls ? source.hls : source.mp4;
+  const playbackUrl = source.mp4 || source.hls;
   playerMeta.textContent = source.playerMeta || 'КАТАЛОГ · ПРЕДПРОСМОТР';
   if (playbackUrl) {
     playerVideo.src = playbackUrl;
