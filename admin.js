@@ -7,6 +7,11 @@ const studioDefaults = {
     { id: 'chance', title: 'Второй шанс', kind: 'Трейлер', genre: 'Семейный', episodes: 1, status: 'hidden', access: 'free', price: 0, poster: 'poster-five', views: 15370, likes: 1150, comments: 88 }
   ],
   homeOrder: ['midnight', 'signal', 'one', 'floor'],
+  banners: [
+    { id: 'banner-midnight', contentId: 'midnight', eyebrow: 'ПРЕМЬЕРА', title: 'После полуночи', description: 'Первая серия уже доступна. Продолжение выходит по пятницам.', cta: 'Смотреть сериал', tone: 'poster-one', active: true },
+    { id: 'banner-signal', contentId: 'signal', eyebrow: 'НОВАЯ ИСТОРИЯ', title: 'Тихий сигнал', description: 'Десять серий, в которых каждая находка меняет картину.', cta: 'Открыть сериал', tone: 'poster-two', active: true },
+    { id: 'banner-one', contentId: 'one', eyebrow: 'ВЫБОР РЕДАКЦИИ', title: 'Один на один', description: 'Полная история доступна по разовой покупке.', cta: 'Узнать больше', tone: 'poster-three', active: false }
+  ],
   comments: [
     { id: 'c1', author: 'Мария К.', initials: 'МК', text: 'Очень жду продолжение. Концовка серии вообще не отпускает.', content: 'После полуночи', time: '12 минут назад', status: 'pending' },
     { id: 'c2', author: 'Илья Р.', initials: 'ИР', text: 'Когда выйдет следующая серия?', content: 'Тихий сигнал', time: '34 минуты назад', status: 'pending' },
@@ -24,15 +29,20 @@ let studio = loadStudio();
 let contentFilter = 'all';
 let commentFilter = 'pending';
 let pendingDeleteId = null;
+let previewMode = 'phone';
 let toastTimer;
 
 const contentTable = document.querySelector('#content-table');
 const homeOrderGrid = document.querySelector('#home-order-grid');
 const commentList = document.querySelector('#comment-list');
 const uploadList = document.querySelector('#upload-list');
+const bannerList = document.querySelector('#banner-list');
+const homeLivePreview = document.querySelector('#home-live-preview');
 const contentDialog = document.querySelector('#content-dialog');
+const bannerDialog = document.querySelector('#banner-dialog');
 const confirmDialog = document.querySelector('#confirm-dialog');
 const contentForm = document.querySelector('#content-form');
+const bannerForm = document.querySelector('#banner-form');
 const studioToast = document.querySelector('#studio-toast');
 
 function clone(value) {
@@ -44,6 +54,7 @@ function loadStudio() {
     const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
     if (!saved?.content || !saved?.homeOrder || !saved?.comments || !saved?.uploads) return clone(studioDefaults);
     saved.content = saved.content.map((item) => ({ access: 'free', price: 0, ...item }));
+    saved.banners = Array.isArray(saved.banners) ? saved.banners : clone(studioDefaults.banners);
     return saved;
   } catch {
     return clone(studioDefaults);
@@ -74,6 +85,10 @@ function accessLabel(access, price = 0) {
 
 function contentById(id) {
   return studio.content.find((item) => item.id === id);
+}
+
+function bannerById(id) {
+  return studio.banners.find((item) => item.id === id);
 }
 
 function showToast(message) {
@@ -127,6 +142,26 @@ function renderHomeOrder() {
   homeOrderGrid.innerHTML = items.map((item, index) => `<article class="order-card"><div class="order-poster ${item.poster}"><span class="order-number">${index + 1}</span></div><div class="order-info"><h3>${escapeHTML(item.title)}</h3><p>${escapeHTML(item.genre)} · ${accessLabel(item.access, item.price)}</p><div class="reorder-actions"><button data-action="move-home" data-id="${item.id}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''}>↑ Выше</button><button data-action="move-home" data-id="${item.id}" data-direction="down" type="button" ${index === items.length - 1 ? 'disabled' : ''}>↓ Ниже</button></div></div></article>`).join('') || '<p class="empty-copy">Добавь сериал, чтобы собрать витрину.</p>';
 }
 
+function renderHomePreview() {
+  const activeBanners = studio.banners.filter((item) => item.active);
+  const banner = activeBanners[0] || studio.banners[0];
+  const shelf = studio.homeOrder.map(contentById).filter((item) => item && item.status === 'published').slice(0, 3);
+  if (!banner) {
+    homeLivePreview.innerHTML = '<div class="preview-empty"><strong>Нет активного баннера</strong><span>Добавь первый баннер справа.</span></div>';
+    return;
+  }
+  homeLivePreview.classList.toggle('is-desktop', previewMode === 'desktop');
+  homeLivePreview.innerHTML = `<div class="app-preview-top"><span>Sakha<span>Tube</span></span><i>⌕</i><i>◌</i></div><article class="app-preview-hero ${escapeHTML(banner.tone)}"><div class="preview-shade"></div><div class="preview-copy"><small>${escapeHTML(banner.eyebrow)}</small><h3>${escapeHTML(banner.title)}</h3><p>${escapeHTML(banner.description)}</p><button type="button">▶ ${escapeHTML(banner.cta)}</button></div><span class="preview-position">1 / ${activeBanners.length || 1}</span></article><div class="preview-section-title"><strong>Продолжить смотреть</strong><span>Всё →</span></div><div class="preview-shelf">${shelf.map((item) => `<div><span class="mini-poster ${item.poster}"></span><strong>${escapeHTML(item.title)}</strong></div>`).join('') || '<p>Опубликованный контент появится здесь.</p>'}</div><div class="preview-tabbar"><span class="is-current">⌂<b>Главная</b></span><span>◇<b>Для вас</b></span><span>▤<b>Каталог</b></span><span>◯<b>Профиль</b></span></div>`;
+}
+
+function renderBanners() {
+  const banners = studio.banners;
+  bannerList.innerHTML = banners.map((banner, index) => {
+    const linked = contentById(banner.contentId);
+    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${banner.id}" type="button">Изменить</button><button data-action="toggle-banner" data-id="${banner.id}" type="button">${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${banner.id}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${banner.id}" data-direction="down" type="button" ${index === banners.length - 1 ? 'disabled' : ''} aria-label="Опустить баннер">↓</button></div></div></article>`;
+  }).join('') || '<p class="empty-copy">Добавь первый баннер, чтобы собрать верхний экран.</p>';
+}
+
 function renderComments() {
   const visible = studio.comments.filter((comment) => commentFilter === 'all' || comment.status === commentFilter);
   commentList.innerHTML = visible.map((comment) => `<article class="comment-card"><span class="comment-avatar">${escapeHTML(comment.initials)}</span><div class="comment-copy"><h3>${escapeHTML(comment.author)}<span>${escapeHTML(comment.time)}</span></h3><p>${escapeHTML(comment.text)}</p><small>${escapeHTML(comment.content)} · ${comment.status === 'pending' ? 'на проверке' : comment.status === 'hidden' ? 'скрыт' : 'опубликован'}</small></div><div class="comment-actions">${comment.status !== 'approved' ? `<button data-action="approve-comment" data-id="${comment.id}" type="button">Одобрить</button>` : ''}${comment.status !== 'hidden' ? `<button data-action="hide-comment" data-id="${comment.id}" type="button">Скрыть</button>` : ''}<button class="is-danger" data-action="delete-comment" data-id="${comment.id}" type="button">Удалить</button></div></article>`).join('') || '<article class="comment-card"><span class="comment-avatar">✓</span><div class="comment-copy"><h3>Нет комментариев</h3><p>В этой папке пока пусто.</p></div></article>';
@@ -140,6 +175,8 @@ function renderStudio() {
   renderDashboard();
   renderContent();
   renderHomeOrder();
+  renderHomePreview();
+  renderBanners();
   renderComments();
   renderUploads();
 }
@@ -170,6 +207,25 @@ function openContentDialog(item = null) {
   openDialog(contentDialog);
 }
 
+function openBannerDialog(banner = null) {
+  bannerForm.reset();
+  const contentSelect = document.querySelector('#banner-content');
+  contentSelect.innerHTML = studio.content.map((item) => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.title)} · ${statusLabel(item.status)}</option>`).join('');
+  document.querySelector('#banner-id').value = banner?.id || '';
+  document.querySelector('#banner-dialog-eyebrow').textContent = banner ? 'РЕДАКТИРОВАНИЕ БАННЕРА' : 'НОВЫЙ БАННЕР';
+  document.querySelector('#banner-dialog-title').textContent = banner ? 'Изменить баннер' : 'Добавить баннер';
+  if (banner) {
+    document.querySelector('#banner-content').value = banner.contentId;
+    document.querySelector('#banner-eyebrow').value = banner.eyebrow;
+    document.querySelector('#banner-title').value = banner.title;
+    document.querySelector('#banner-description').value = banner.description;
+    document.querySelector('#banner-cta').value = banner.cta;
+    document.querySelector('#banner-tone').value = banner.tone;
+    document.querySelector('#banner-active').checked = banner.active;
+  }
+  openDialog(bannerDialog);
+}
+
 function askDelete(id) {
   const item = contentById(id);
   if (!item) return;
@@ -186,7 +242,19 @@ function moveHome(id, direction) {
   [studio.homeOrder[index], studio.homeOrder[nextIndex]] = [studio.homeOrder[nextIndex], studio.homeOrder[index]];
   saveStudio();
   renderHomeOrder();
+  renderHomePreview();
   showToast('Порядок витрины обновлён');
+}
+
+function moveBanner(id, direction) {
+  const index = studio.banners.findIndex((item) => item.id === id);
+  const nextIndex = direction === 'up' ? index - 1 : index + 1;
+  if (index < 0 || nextIndex < 0 || nextIndex >= studio.banners.length) return;
+  [studio.banners[index], studio.banners[nextIndex]] = [studio.banners[nextIndex], studio.banners[index]];
+  saveStudio();
+  renderHomePreview();
+  renderBanners();
+  showToast('Порядок баннеров обновлён');
 }
 
 function updateComment(id, status) {
@@ -208,14 +276,20 @@ document.addEventListener('click', (event) => {
   if (filterButton) { contentFilter = filterButton.dataset.filter; document.querySelectorAll('[data-filter]').forEach((button) => button.classList.toggle('is-active', button.dataset.filter === contentFilter)); renderContent(); return; }
   const commentFilterButton = event.target.closest('[data-comment-filter]');
   if (commentFilterButton) { commentFilter = commentFilterButton.dataset.commentFilter; document.querySelectorAll('[data-comment-filter]').forEach((button) => button.classList.toggle('is-active', button.dataset.commentFilter === commentFilter)); renderComments(); return; }
+  const previewButton = event.target.closest('[data-preview-mode]');
+  if (previewButton) { previewMode = previewButton.dataset.previewMode; document.querySelectorAll('[data-preview-mode]').forEach((button) => button.classList.toggle('is-active', button.dataset.previewMode === previewMode)); renderHomePreview(); return; }
   const action = event.target.closest('[data-action]');
   if (!action) return;
   const { action: name, id } = action.dataset;
   if (name === 'new-series') openContentDialog();
+  if (name === 'new-banner') openBannerDialog();
   if (name === 'upload') document.querySelector('#video-upload').click();
   if (name === 'edit-content') openContentDialog(contentById(id));
   if (name === 'delete-content') askDelete(id);
   if (name === 'move-home') moveHome(id, action.dataset.direction);
+  if (name === 'move-banner') moveBanner(id, action.dataset.direction);
+  if (name === 'edit-banner') openBannerDialog(bannerById(id));
+  if (name === 'toggle-banner') { const banner = bannerById(id); if (banner) { banner.active = !banner.active; saveStudio(); renderHomePreview(); renderBanners(); showToast(banner.active ? 'Баннер показан зрителю' : 'Баннер скрыт'); } }
   if (name === 'save-home') showToast('Порядок главной сохранён');
   if (name === 'approve-comment') updateComment(id, 'approved');
   if (name === 'hide-comment') updateComment(id, 'hidden');
@@ -261,6 +335,31 @@ contentForm.addEventListener('submit', (event) => {
   saveStudio();
   closeDialog(contentDialog);
   renderStudio();
+});
+
+bannerForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const id = document.querySelector('#banner-id').value;
+  const data = {
+    contentId: document.querySelector('#banner-content').value,
+    eyebrow: document.querySelector('#banner-eyebrow').value.trim(),
+    title: document.querySelector('#banner-title').value.trim(),
+    description: document.querySelector('#banner-description').value.trim(),
+    cta: document.querySelector('#banner-cta').value.trim(),
+    tone: document.querySelector('#banner-tone').value,
+    active: document.querySelector('#banner-active').checked
+  };
+  if (id) {
+    Object.assign(bannerById(id), data);
+    showToast('Баннер обновлён');
+  } else {
+    studio.banners.push({ id: `banner-${Date.now()}`, ...data });
+    showToast('Баннер добавлен в главную');
+  }
+  saveStudio();
+  closeDialog(bannerDialog);
+  renderHomePreview();
+  renderBanners();
 });
 
 document.querySelector('#content-search').addEventListener('input', renderContent);
