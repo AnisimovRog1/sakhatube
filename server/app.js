@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cors from '@fastify/cors';
@@ -18,7 +18,7 @@ const accessKinds = ['free', 'subscription', 'purchase'];
 const ageRatings = ['0+', '6+', '12+', '16+', '18+'];
 const rightsBases = ['original', 'contract', 'license', 'demo'];
 const commentStatuses = ['pending', 'approved', 'hidden', 'deleted'];
-const publicRequestStatuses = ['received', 'in_progress', 'completed', 'rejected'];
+const publicRequestStatuses = ['received', 'awaiting_verification', 'in_progress', 'completed', 'rejected'];
 const playbackEvents = ['intent', 'first_frame', 'pause', 'buffer_start', 'buffer_end', 'error', 'complete'];
 const bannerMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const sourceVideoTypes = new Map([
@@ -151,6 +151,9 @@ export function createMemoryStore(seed = defaultSeed) {
       const record = {
         id: randomUUID(),
         status: 'received',
+        verificationTokenHash: null,
+        verificationExpiresAt: null,
+        verifiedAt: null,
         resolutionNote: null,
         resolvedAt: null,
         createdAt: now(),
@@ -274,6 +277,7 @@ const publicRequestAction = z.object({
   status: z.enum(['in_progress', 'completed', 'rejected']),
   note: z.string().trim().max(1_000).optional()
 }).strict();
+const deletionVerificationInput = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный код подтверждения') }).strict();
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
   sessionId: z.string().min(16).max(128),
@@ -317,7 +321,12 @@ function configFrom(overrides = {}) {
   const jwtSecret = overrides.jwtSecret ?? process.env.JWT_SECRET ?? 'local-development-secret-change-before-production';
   const allowedOrigins = overrides.allowedOrigins ?? (process.env.ALLOWED_ORIGINS || 'http://localhost:4173,http://localhost:3000').split(',').map((item) => item.trim()).filter(Boolean);
   const allowDemoStore = overrides.allowDemoStore ?? process.env.ALLOW_DEMO_STORE === 'true';
+  // A visual paywall is not a payment implementation. Keep commercial access
+  // unavailable in production until both stores and the server validator exist.
+  const paymentsEnabled = overrides.paymentsEnabled ?? process.env.PAYMENTS_ENABLED === 'true';
   const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
+  const deletionVerificationSecret = overrides.deletionVerificationSecret ?? process.env.DELETION_VERIFICATION_SECRET ?? jwtSecret;
+  const deletionVerificationTtlMs = overrides.deletionVerificationTtlMs ?? Number(process.env.DELETION_VERIFICATION_TTL_MS || 24 * 60 * 60 * 1000);
   const media = overrides.media ?? {
     endpoint: process.env.S3_ENDPOINT,
     accessKeyId: process.env.S3_ACCESS_KEY_ID,
@@ -327,7 +336,24 @@ function configFrom(overrides = {}) {
   };
   if (production && jwtSecret.length < 32) throw new Error('JWT_SECRET должен содержать не менее 32 символов в production');
   if (production && !databaseUrl && !allowDemoStore) throw new Error('DATABASE_URL обязателен в production: in-memory store нельзя публиковать');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, databaseUrl, media };
+  if (!Number.isInteger(deletionVerificationTtlMs) || deletionVerificationTtlMs < 60_000 || deletionVerificationTtlMs > 7 * 24 * 60 * 60 * 1000) throw new Error('DELETION_VERIFICATION_TTL_MS должен быть от 1 минуты до 7 дней');
+  if (production && deletionVerificationSecret.length < 32) throw new Error('DELETION_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs };
+}
+
+function deletionTokenHash(token, secret) {
+  return createHash('sha256').update(`${secret}:${token}`).digest('hex');
+}
+
+function safeEqualText(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+function publicRequestForStaff(item) {
+  if (!item) return item;
+  const { verificationTokenHash, ...safe } = item;
+  return { ...safe, verificationStatus: item.type === 'deletion' ? (item.verifiedAt ? 'verified' : 'pending') : null };
 }
 
 function parseOrReply(schema, input, reply) {
@@ -337,13 +363,16 @@ function parseOrReply(schema, input, reply) {
   return null;
 }
 
-function contentPublicationBlocks(item, at = now(), { allowDemoRights = false, requireLegalVerification = true } = {}) {
+function contentPublicationBlocks(item, at = now(), { allowDemoRights = false, allowPaidAccess = true, requireLegalVerification = true } = {}) {
   const compliance = item?.compliance;
   const blocks = [];
   if (!compliance) return ['Не заполнены права, возрастной рейтинг и языки контента'];
   if (!ageRatings.includes(compliance.ageRating)) blocks.push('Не указан допустимый возрастной рейтинг');
   if (!rightsBases.includes(compliance.rightsBasis)) blocks.push('Не указано основание прав на показ');
   if (compliance.rightsBasis === 'demo' && !allowDemoRights) blocks.push('Демо-материал нельзя публиковать в production');
+  if (['subscription', 'purchase'].includes(item.access) && !allowPaidAccess) {
+    blocks.push('Платный доступ отключён: сначала подключите StoreKit, Google Play Billing и серверную проверку покупок');
+  }
   if (!compliance.rightsHolder?.trim()) blocks.push('Не указан правообладатель');
   if (!compliance.licenseReference?.trim()) blocks.push('Не указан договор, лицензия или иной документ-основание');
   if (!Array.isArray(compliance.territories) || !compliance.territories.length) blocks.push('Не указаны территории показа');
@@ -379,7 +408,10 @@ function publicContent(item) {
 
 export function buildApp(options = {}) {
   const config = configFrom(options);
-  const publicationGate = { allowDemoRights: !config.production };
+  const publicationGate = {
+    allowDemoRights: !config.production,
+    allowPaidAccess: !config.production || config.paymentsEnabled
+  };
   let store = options.store ?? null;
   const mediaStore = options.mediaStore ?? createMediaStore(config.media);
   const app = Fastify({ logger: options.logger ?? false, requestIdHeader: 'x-request-id', genReqId: () => randomUUID() });
@@ -505,7 +537,7 @@ export function buildApp(options = {}) {
     };
   };
 
-  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', time: now() }));
+  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', payments: config.paymentsEnabled ? 'configured' : 'disabled', time: now() }));
 
   // Local-only bootstrap. A production Studio must delegate identity to an OIDC provider.
   app.post('/v1/dev/token', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -641,14 +673,44 @@ export function buildApp(options = {}) {
   app.post('/v1/privacy/deletion-requests', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
     const body = parseOrReply(publicRequestInput, request.body, reply);
     if (!body) return;
+    const token = randomBytes(32).toString('base64url');
+    const verificationExpiresAt = new Date(Date.now() + config.deletionVerificationTtlMs).toISOString();
     const item = await store.createPublicRequest({
       type: 'deletion',
+      status: 'awaiting_verification',
       email: body.email.toLowerCase(),
       accountEmail: body.accountEmail?.toLowerCase() ?? null,
-      message: body.message ?? ''
+      message: body.message ?? '',
+      verificationTokenHash: deletionTokenHash(token, config.deletionVerificationSecret),
+      verificationExpiresAt
     });
-    await audit(request, 'privacy.deletion_request.create', 'public_request', item.id, null, { type: item.type, status: item.status });
-    return reply.code(202).send({ requestId: item.id, status: item.status });
+    await audit(request, 'privacy.deletion_request.create', 'public_request', item.id, null, { type: item.type, status: item.status, verificationExpiresAt });
+    const response = { requestId: item.id, status: item.status, verificationRequired: true };
+    // No mail provider is connected yet. The token is exposed only in an explicitly
+    // development-only preview so it cannot leak in Railway/production responses.
+    if (!config.production && config.allowDevTokens) response.developmentVerification = { token, verifyPath: `/v1/privacy/deletion-requests/${item.id}/verify`, expiresAt: verificationExpiresAt };
+    return reply.code(202).send(response);
+  });
+
+  app.post('/v1/privacy/deletion-requests/:id/verify', { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
+    const params = parseOrReply(publicRequestParams, request.params, reply);
+    const body = parseOrReply(deletionVerificationInput, request.body, reply);
+    if (!params || !body) return;
+    const item = await store.getPublicRequest?.(params.id);
+    // Deliberately return the same response for unknown, already-used and invalid
+    // tokens: this endpoint must not become an account/request enumeration oracle.
+    const invalid = !item || item.type !== 'deletion' || item.verifiedAt || !item.verificationTokenHash || !item.verificationExpiresAt
+      || new Date(item.verificationExpiresAt).getTime() < Date.now()
+      || !safeEqualText(item.verificationTokenHash, deletionTokenHash(body.token, config.deletionVerificationSecret));
+    if (invalid) return reply.code(400).send({ error: 'VERIFICATION_INVALID', message: 'Ссылка подтверждения недействительна или истекла. Создай новый запрос на удаление.' });
+    const verifiedAt = now();
+    const updated = await store.updatePublicRequest(params.id, {
+      status: 'received',
+      verifiedAt,
+      verificationTokenHash: null
+    });
+    await audit(request, 'privacy.deletion_request.verify', 'public_request', updated.id, { type: item.type, status: item.status }, { type: updated.type, status: updated.status, verifiedAt });
+    return { requestId: updated.id, status: updated.status, verified: true };
   });
 
   app.post('/v1/support/requests', { config: { rateLimit: { max: 8, timeWindow: '1 hour' } } }, async (request, reply) => {
@@ -667,7 +729,7 @@ export function buildApp(options = {}) {
   app.get('/v1/admin/requests', { preHandler: app.allowRoles(['superadmin', 'support']) }, async (request, reply) => {
     const query = parseOrReply(publicRequestQuery, request.query, reply);
     if (!query) return;
-    return { items: await store.listPublicRequests(query) };
+    return { items: (await store.listPublicRequests(query)).map(publicRequestForStaff) };
   });
 
   app.patch('/v1/admin/requests/:id', { preHandler: app.allowRoles(['superadmin', 'support']) }, async (request, reply) => {
@@ -676,13 +738,16 @@ export function buildApp(options = {}) {
     if (!params || !body) return;
     const before = await store.getPublicRequest?.(params.id);
     if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Обращение не найдено' });
+    if (before.type === 'deletion' && body.status === 'completed' && !before.verifiedAt) {
+      return reply.code(409).send({ error: 'DELETION_NOT_VERIFIED', message: 'Нельзя завершить удаление: владелец ещё не подтвердил запрос.' });
+    }
     const item = await store.updatePublicRequest(params.id, {
       status: body.status,
       resolutionNote: body.note ?? null,
       resolvedAt: ['completed', 'rejected'].includes(body.status) ? now() : null
     });
     await audit(request, 'public_request.update', 'public_request', item.id, { type: before.type, status: before.status }, { type: item.type, status: item.status });
-    return { item };
+    return { item: publicRequestForStaff(item) };
   });
 
   app.get('/v1/admin/home/slots', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({ items: await store.listHomeSlots() }));

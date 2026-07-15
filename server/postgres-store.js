@@ -64,6 +64,9 @@ const mapPublicRequest = (row) => row && ({
   accountEmail: row.account_email,
   message: row.message,
   status: row.status,
+  verificationTokenHash: row.verification_token_hash,
+  verificationExpiresAt: row.verification_expires_at ? row.verification_expires_at.toISOString() : null,
+  verifiedAt: row.verified_at ? row.verified_at.toISOString() : null,
   resolutionNote: row.resolution_note,
   resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
   createdAt: row.created_at.toISOString(),
@@ -173,11 +176,19 @@ async function migrate(pool) {
       account_email TEXT,
       message TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL CHECK (status IN ('received', 'in_progress', 'completed', 'rejected')),
+      verification_token_hash TEXT,
+      verification_expires_at TIMESTAMPTZ,
+      verified_at TIMESTAMPTZ,
       resolution_note TEXT,
       resolved_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL
     );
+    ALTER TABLE public_requests DROP CONSTRAINT IF EXISTS public_requests_status_check;
+    ALTER TABLE public_requests ADD CONSTRAINT public_requests_status_check CHECK (status IN ('received', 'awaiting_verification', 'in_progress', 'completed', 'rejected'));
+    ALTER TABLE public_requests ADD COLUMN IF NOT EXISTS verification_token_hash TEXT;
+    ALTER TABLE public_requests ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMPTZ;
+    ALTER TABLE public_requests ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
@@ -334,6 +345,9 @@ export async function createPostgresStore(connectionString, seedData) {
       const record = {
         id: randomUUID(),
         status: 'received',
+        verificationTokenHash: null,
+        verificationExpiresAt: null,
+        verifiedAt: null,
         resolutionNote: null,
         resolvedAt: null,
         createdAt: now(),
@@ -341,9 +355,9 @@ export async function createPostgresStore(connectionString, seedData) {
         ...data
       };
       const { rows } = await pool.query(
-        `INSERT INTO public_requests (id, type, email, account_email, message, status, resolution_note, resolved_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [record.id, record.type, record.email, record.accountEmail ?? null, record.message ?? '', record.status, record.resolutionNote, record.resolvedAt, record.createdAt, record.updatedAt]
+        `INSERT INTO public_requests (id, type, email, account_email, message, status, verification_token_hash, verification_expires_at, verified_at, resolution_note, resolved_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+        [record.id, record.type, record.email, record.accountEmail ?? null, record.message ?? '', record.status, record.verificationTokenHash, record.verificationExpiresAt, record.verifiedAt, record.resolutionNote, record.resolvedAt, record.createdAt, record.updatedAt]
       );
       return mapPublicRequest(rows[0]);
     },
@@ -362,6 +376,9 @@ export async function createPostgresStore(connectionString, seedData) {
     async updatePublicRequest(id, patch) {
       const fields = {
         status: 'status',
+        verificationTokenHash: 'verification_token_hash',
+        verificationExpiresAt: 'verification_expires_at',
+        verifiedAt: 'verified_at',
         resolutionNote: 'resolution_note',
         resolvedAt: 'resolved_at'
       };

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "product": "SakhaTube",
+  "lastReviewed": "2026-07-16",
+  "releaseAllowed": false,
+  "rule": "A store submission is allowed only when every blocking item is complete and evidence has been attached outside the repository.",
+  "platforms": {
+    "ios": {
+      "readyNow": [
+        "https-production-api",
+        "privacy-manifest",
+        "app-icon-assets",
+        "guest-mode-without-fake-purchases"
+      ],
+      "blocking": [
+        "apple-developer-team-and-bundle-registration",
+        "signed-release-archive-and-testflight",
+        "real-content-rights-and-operator-details",
+        "viewer-account-and-verified-account-deletion",
+        "storekit2-and-server-entitlement-validation",
+        "real-hls-playback-and-premium-access-control",
+        "app-privacy-declaration-matching-production-data"
+      ]
+    },
+    "android": {
+      "readyNow": [
+        "target-sdk-36",
+        "https-only-network-policy",
+        "minimal-permissions",
+        "adaptive-icon-assets",
+        "guest-mode-without-fake-purchases"
+      ],
+      "blocking": [
+        "android-sdk-platform-36-and-jdk-17-build-verification",
+        "release-signing-and-play-app-signing",
+        "signed-aab-and-closed-testing",
+        "real-content-rights-and-operator-details",
+        "viewer-account-and-verified-account-deletion",
+        "google-play-billing-and-server-entitlement-validation",
+        "real-hls-playback-and-premium-access-control",
+        "data-safety-declaration-matching-production-data"
+      ]
+    }
+  },
+  "sharedBlocking": [
+    "production-deployment-of-current-release-code",
+    "legal-review-of-privacy-terms-and-support-details",
+    "age-rating-and-store-listing-metadata",
+    "real-device-network-accessibility-and-regression-testing",
+    "ugc-report-block-and-moderation-before-enabling-comments"
+  ]
+}

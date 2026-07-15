@@ -258,7 +258,7 @@ test('playback event is validated and accepted without exposing admin access', a
   assert.equal(accepted.statusCode, 202);
 });
 
-test('public privacy requests are rate-limited, private to staff, and auditable without storing email in audit snapshots', async (t) => {
+test('deletion requests require a one-time verification before staff can complete them', async (t) => {
   const store = createMemoryStore();
   const app = await createTestApp({ store });
   t.after(() => app.close());
@@ -272,19 +272,46 @@ test('public privacy requests are rate-limited, private to staff, and auditable 
   });
   assert.equal(accepted.statusCode, 202);
   const requestId = JSON.parse(accepted.body).requestId;
+  const developmentVerification = JSON.parse(accepted.body).developmentVerification;
   assert.match(requestId, /^[0-9a-f-]{36}$/);
+  assert.equal(JSON.parse(accepted.body).status, 'awaiting_verification');
+  assert.match(developmentVerification.token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(store.listAudit()[0].action, 'privacy.deletion_request.create');
   assert.equal(JSON.stringify(store.listAudit()[0]).includes('viewer@example.com'), false);
 
   const anonymousList = await app.inject({ method: 'GET', url: '/v1/admin/requests' });
   assert.equal(anonymousList.statusCode, 401);
   const support = await tokenFor(app, ['support']);
-  const listed = await app.inject({ method: 'GET', url: '/v1/admin/requests?type=deletion&status=received', headers: { authorization: `Bearer ${support}` } });
+  const listed = await app.inject({ method: 'GET', url: '/v1/admin/requests?type=deletion&status=awaiting_verification', headers: { authorization: `Bearer ${support}` } });
   assert.equal(listed.statusCode, 200);
   assert.equal(JSON.parse(listed.body).items[0].id, requestId);
+  assert.equal('verificationTokenHash' in JSON.parse(listed.body).items[0], false);
+  const prematureCompletion = await app.inject({ method: 'PATCH', url: `/v1/admin/requests/${requestId}`, headers: { authorization: `Bearer ${support}` }, payload: { status: 'completed', note: 'Подтверждено' } });
+  assert.equal(prematureCompletion.statusCode, 409);
+  const verified = await app.inject({ method: 'POST', url: `/v1/privacy/deletion-requests/${requestId}/verify`, payload: { token: developmentVerification.token } });
+  assert.equal(verified.statusCode, 200);
+  assert.equal(JSON.parse(verified.body).verified, true);
+  const replay = await app.inject({ method: 'POST', url: `/v1/privacy/deletion-requests/${requestId}/verify`, payload: { token: developmentVerification.token } });
+  assert.equal(replay.statusCode, 400);
   const completed = await app.inject({ method: 'PATCH', url: `/v1/admin/requests/${requestId}`, headers: { authorization: `Bearer ${support}` }, payload: { status: 'completed', note: 'Подтверждено' } });
   assert.equal(completed.statusCode, 200);
   assert.equal(JSON.parse(completed.body).item.status, 'completed');
+});
+
+test('production deletion responses never disclose a verification token', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({ store, nodeEnv: 'production', allowDemoStore: true, allowDevTokens: false });
+  t.after(() => app.close());
+  const accepted = await app.inject({
+    method: 'POST',
+    url: '/v1/privacy/deletion-requests',
+    payload: { email: 'viewer@example.com', confirmation: true }
+  });
+  assert.equal(accepted.statusCode, 202);
+  const body = JSON.parse(accepted.body);
+  assert.equal('developmentVerification' in body, false);
+  assert.equal(JSON.stringify(store.getPublicRequest(body.requestId)).includes('viewer@example.com'), true);
+  assert.match(store.getPublicRequest(body.requestId).verificationTokenHash, /^[a-f0-9]{64}$/);
 });
 
 test('private multipart upload is role-protected, paged, validated, and queued after completion', async (t) => {
@@ -530,4 +557,28 @@ test('production never exposes demo rights records as commercial catalogue entri
   const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
   assert.equal(catalog.statusCode, 200);
   assert.deepEqual(JSON.parse(catalog.body).items, []);
+});
+
+test('production hides paid content until payment validation is configured', async (t) => {
+  const store = createMemoryStore();
+  const verifiedCompliance = publishableCompliance({
+    verifiedAt: '2026-07-16T00:00:00.000Z',
+    verifiedBy: 'legal-reviewer-1',
+    verificationReference: 'ST-LEGAL-001'
+  });
+  store.updateContent('midnight', { compliance: verifiedCompliance, access: 'subscription' });
+  store.updateContent('signal', { compliance: verifiedCompliance, access: 'free' });
+  const app = buildApp({
+    nodeEnv: 'production',
+    allowDemoStore: true,
+    store,
+    jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters'
+  });
+  await app.ready();
+  t.after(() => app.close());
+
+  const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
+  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['signal']);
+  const health = await app.inject({ method: 'GET', url: '/health' });
+  assert.equal(JSON.parse(health.body).payments, 'disabled');
 });
