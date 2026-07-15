@@ -1,6 +1,6 @@
 import Foundation
 
-struct CatalogItem: Identifiable, Hashable {
+struct CatalogItem: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
     let eyebrow: String
@@ -17,7 +17,54 @@ struct CatalogItem: Identifiable, Hashable {
     }
 }
 
-enum PosterGradient: CaseIterable, Hashable {
+extension CatalogItem {
+    /// Public catalog data intentionally has no player URL or age rating yet.
+    /// Both are set to safe presentation defaults until the media and rights APIs exist.
+    init?(api: CatalogContentDTO) {
+        let id = api.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = api.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let genre = api.genre.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, !title.isEmpty, !genre.isEmpty else { return nil }
+
+        self.init(
+            id: id,
+            title: title,
+            eyebrow: "\(api.kind.presentationName) · \(api.access.presentationName)",
+            description: api.synopsis.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Описание появится после публикации карточки."
+                : api.synopsis,
+            genre: genre,
+            year: api.createdAt?.releaseYear ?? "Новое",
+            ageRating: "16+",
+            episodeCount: max(1, api.episodes),
+            gradient: .forIdentifier(id),
+            trailerURL: nil
+        )
+    }
+}
+
+private extension String {
+    var presentationName: String {
+        return switch lowercased() {
+        case "series": "СЕРИАЛ"
+        case "episode": "ЭПИЗОД"
+        case "trailer": "ТРЕЙЛЕР"
+        case "clip": "КЛИП"
+        case "free": "БЕСПЛАТНО"
+        case "subscription": "ПО ПОДПИСКЕ"
+        case "purchase": "ПОКУПКА"
+        default: uppercased()
+        }
+    }
+
+    var releaseYear: String? {
+        guard count >= 4 else { return nil }
+        let prefix = prefix(4)
+        return prefix.allSatisfy(\.isNumber) ? String(prefix) : nil
+    }
+}
+
+enum PosterGradient: CaseIterable, Hashable, Sendable {
     case twilight
     case rose
     case ocean
@@ -32,6 +79,12 @@ enum PosterGradient: CaseIterable, Hashable {
         case .ember: ["5E2115", "D46139", "1A1222"]
         case .violet: ["37205F", "7953D5", "17203C"]
         }
+    }
+
+    static func forIdentifier(_ identifier: String) -> PosterGradient {
+        let palette = Self.allCases
+        let index = identifier.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) % palette.count }
+        return palette[index]
     }
 }
 

@@ -15,6 +15,9 @@ const mapContent = (row) => row && ({
   episodes: Number(row.episodes),
   views: Number(row.views),
   likes: Number(row.likes),
+  scheduledAt: row.scheduled_at ? row.scheduled_at.toISOString() : null,
+  publishedAt: row.published_at ? row.published_at.toISOString() : null,
+  unpublishedReason: row.unpublished_reason ?? null,
   createdAt: row.created_at.toISOString(),
   updatedAt: row.updated_at.toISOString()
 });
@@ -34,11 +37,23 @@ const mapComment = (row) => row && ({
 const mapMedia = (row) => row && ({
   id: row.id,
   kind: row.kind,
+  relation: row.relation,
+  status: row.status,
+  contentId: row.content_id,
   storageKey: row.storage_key,
   fileName: row.file_name,
   contentType: row.content_type,
   size: Number(row.size_bytes),
-  createdAt: row.created_at.toISOString()
+  durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
+  uploadId: row.upload_id,
+  partSize: row.part_size === null ? null : Number(row.part_size),
+  partCount: row.part_count,
+  metadata: row.metadata ?? {},
+  completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+  queuedAt: row.queued_at ? row.queued_at.toISOString() : null,
+  abortedAt: row.aborted_at ? row.aborted_at.toISOString() : null,
+  createdAt: row.created_at.toISOString(),
+  updatedAt: row.updated_at ? row.updated_at.toISOString() : row.created_at.toISOString()
 });
 
 async function migrate(pool) {
@@ -54,9 +69,15 @@ async function migrate(pool) {
       episodes INTEGER NOT NULL,
       views BIGINT NOT NULL DEFAULT 0,
       likes BIGINT NOT NULL DEFAULT 0,
+      scheduled_at TIMESTAMPTZ,
+      published_at TIMESTAMPTZ,
+      unpublished_reason TEXT,
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL
     );
+    ALTER TABLE content_items ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+    ALTER TABLE content_items ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+    ALTER TABLE content_items ADD COLUMN IF NOT EXISTS unpublished_reason TEXT;
     CREATE TABLE IF NOT EXISTS home_slots (
       slot_index INTEGER PRIMARY KEY,
       content_id TEXT NOT NULL REFERENCES content_items(id) ON DELETE CASCADE
@@ -85,12 +106,37 @@ async function migrate(pool) {
     CREATE TABLE IF NOT EXISTS media_assets (
       id UUID PRIMARY KEY,
       kind TEXT NOT NULL,
+      relation TEXT NOT NULL DEFAULT 'asset',
+      status TEXT NOT NULL DEFAULT 'available',
+      content_id TEXT REFERENCES content_items(id) ON DELETE SET NULL,
       storage_key TEXT NOT NULL UNIQUE,
       file_name TEXT NOT NULL,
       content_type TEXT NOT NULL,
       size_bytes BIGINT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL
+      duration_ms BIGINT,
+      upload_id TEXT,
+      part_size BIGINT,
+      part_count INTEGER,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      completed_at TIMESTAMPTZ,
+      queued_at TIMESTAMPTZ,
+      aborted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
     );
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS relation TEXT NOT NULL DEFAULT 'asset';
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'available';
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS content_id TEXT REFERENCES content_items(id) ON DELETE SET NULL;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS duration_ms BIGINT;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS upload_id TEXT;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS part_size BIGINT;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS part_count INTEGER;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS queued_at TIMESTAMPTZ;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS aborted_at TIMESTAMPTZ;
+    ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+    UPDATE media_assets SET updated_at = created_at WHERE updated_at IS NULL;
     CREATE TABLE IF NOT EXISTS audit_log (
       id UUID PRIMARY KEY,
       at TIMESTAMPTZ NOT NULL,
@@ -106,6 +152,9 @@ async function migrate(pool) {
     );
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
+    CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
+    CREATE INDEX IF NOT EXISTS media_assets_content_idx ON media_assets(content_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS media_assets_status_idx ON media_assets(status, updated_at DESC);
   `);
 }
 
@@ -115,10 +164,10 @@ async function seed(pool, seed) {
     await client.query('BEGIN');
     for (const item of seed.content) {
       await client.query(
-        `INSERT INTO content_items (id, title, kind, genre, synopsis, status, access, episodes, views, likes, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `INSERT INTO content_items (id, title, kind, genre, synopsis, status, access, episodes, views, likes, scheduled_at, published_at, unpublished_reason, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          ON CONFLICT (id) DO NOTHING`,
-        [item.id, item.title, item.kind, item.genre, item.synopsis, item.status, item.access, item.episodes, item.views, item.likes, item.createdAt, item.updatedAt]
+        [item.id, item.title, item.kind, item.genre, item.synopsis, item.status, item.access, item.episodes, item.views, item.likes, item.scheduledAt ?? null, item.publishedAt ?? null, item.unpublishedReason ?? null, item.createdAt, item.updatedAt]
       );
     }
     for (const [slotIndex, contentId] of seed.homeSlots.entries()) {
@@ -157,17 +206,37 @@ export async function createPostgresStore(connectionString, seedData) {
       return mapContent(rows[0]);
     },
     async createContent(data) {
-      const item = { id: randomUUID(), views: 0, likes: 0, createdAt: now(), updatedAt: now(), ...data };
+      const item = {
+        id: randomUUID(),
+        views: 0,
+        likes: 0,
+        status: 'draft',
+        scheduledAt: null,
+        publishedAt: null,
+        unpublishedReason: null,
+        createdAt: now(),
+        updatedAt: now(),
+        ...data
+      };
       const { rows } = await pool.query(
-        `INSERT INTO content_items (id, title, kind, genre, synopsis, status, access, episodes, views, likes, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-        [item.id, item.title, item.kind, item.genre, item.synopsis, item.status, item.access, item.episodes, item.views, item.likes, item.createdAt, item.updatedAt]
+        `INSERT INTO content_items (id, title, kind, genre, synopsis, status, access, episodes, views, likes, scheduled_at, published_at, unpublished_reason, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+        [item.id, item.title, item.kind, item.genre, item.synopsis, item.status, item.access, item.episodes, item.views, item.likes, item.scheduledAt, item.publishedAt, item.unpublishedReason, item.createdAt, item.updatedAt]
       );
       return mapContent(rows[0]);
     },
     async updateContent(id, patch) {
       const fields = {
-        title: 'title', kind: 'kind', genre: 'genre', synopsis: 'synopsis', status: 'status', access: 'access', episodes: 'episodes'
+        title: 'title',
+        kind: 'kind',
+        genre: 'genre',
+        synopsis: 'synopsis',
+        status: 'status',
+        access: 'access',
+        episodes: 'episodes',
+        scheduledAt: 'scheduled_at',
+        publishedAt: 'published_at',
+        unpublishedReason: 'unpublished_reason'
       };
       const entries = Object.entries(patch).filter(([key]) => fields[key]);
       if (!entries.length) return this.getContent(id);
@@ -179,6 +248,24 @@ export async function createPostgresStore(connectionString, seedData) {
     },
     async listHomeSlots() {
       const { rows } = await pool.query('SELECT c.* FROM home_slots h JOIN content_items c ON c.id = h.content_id ORDER BY h.slot_index ASC');
+      return rows.map(mapContent);
+    },
+    async listPublishedContent() {
+      const { rows } = await pool.query("SELECT * FROM content_items WHERE status = 'published' ORDER BY published_at DESC NULLS LAST, updated_at DESC");
+      return rows.map(mapContent);
+    },
+    async listPublishedHomeSlots() {
+      const { rows } = await pool.query("SELECT c.* FROM home_slots h JOIN content_items c ON c.id = h.content_id WHERE c.status = 'published' ORDER BY h.slot_index ASC");
+      return rows.map(mapContent);
+    },
+    async publishDueContent(at = now()) {
+      const { rows } = await pool.query(
+        `UPDATE content_items
+         SET status = 'published', scheduled_at = NULL, published_at = $1, unpublished_reason = NULL, updated_at = $1
+         WHERE status = 'scheduled' AND scheduled_at IS NOT NULL AND scheduled_at <= $1
+         RETURNING *`,
+        [at]
+      );
       return rows.map(mapContent);
     },
     async replaceHomeSlots(ids) {
@@ -228,16 +315,61 @@ export async function createPostgresStore(connectionString, seedData) {
       };
     },
     async createMedia(data) {
-      const record = { id: randomUUID(), createdAt: now(), ...data };
+      const record = {
+        id: data.id ?? randomUUID(),
+        relation: 'asset',
+        status: 'available',
+        contentId: null,
+        durationMs: null,
+        uploadId: null,
+        partSize: null,
+        partCount: null,
+        metadata: {},
+        completedAt: null,
+        queuedAt: null,
+        abortedAt: null,
+        createdAt: now(),
+        updatedAt: now(),
+        ...data
+      };
       const { rows } = await pool.query(
-        `INSERT INTO media_assets (id, kind, storage_key, file_name, content_type, size_bytes, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [record.id, record.kind, record.storageKey, record.fileName, record.contentType, record.size, record.createdAt]
+        `INSERT INTO media_assets (id, kind, relation, status, content_id, storage_key, file_name, content_type, size_bytes, duration_ms, upload_id, part_size, part_count, metadata, completed_at, queued_at, aborted_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
+        [record.id, record.kind, record.relation, record.status, record.contentId, record.storageKey, record.fileName, record.contentType, record.size, record.durationMs, record.uploadId, record.partSize, record.partCount, JSON.stringify(record.metadata ?? {}), record.completedAt, record.queuedAt, record.abortedAt, record.createdAt, record.updatedAt]
       );
       return mapMedia(rows[0]);
     },
     async getMedia(id) {
       const { rows } = await pool.query('SELECT * FROM media_assets WHERE id = $1', [id]);
+      return mapMedia(rows[0]);
+    },
+    async updateMedia(id, patch) {
+      const fields = {
+        relation: 'relation',
+        status: 'status',
+        contentId: 'content_id',
+        storageKey: 'storage_key',
+        fileName: 'file_name',
+        contentType: 'content_type',
+        size: 'size_bytes',
+        durationMs: 'duration_ms',
+        uploadId: 'upload_id',
+        partSize: 'part_size',
+        partCount: 'part_count',
+        metadata: 'metadata',
+        completedAt: 'completed_at',
+        queuedAt: 'queued_at',
+        abortedAt: 'aborted_at'
+      };
+      const entries = Object.entries(patch).filter(([key]) => fields[key]);
+      if (!entries.length) return this.getMedia(id);
+      const values = entries.map(([key, value]) => key === 'metadata' ? JSON.stringify(value ?? {}) : value);
+      const sets = entries.map(([key], index) => `${fields[key]} = $${index + 1}`);
+      values.push(now(), id);
+      const { rows } = await pool.query(
+        `UPDATE media_assets SET ${sets.join(', ')}, updated_at = $${values.length - 1} WHERE id = $${values.length} RETURNING *`,
+        values
+      );
       return mapMedia(rows[0]);
     },
     async audit(entry) {

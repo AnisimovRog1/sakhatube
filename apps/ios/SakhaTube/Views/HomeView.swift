@@ -2,17 +2,23 @@ import SwiftUI
 
 struct HomeView: View {
     @EnvironmentObject private var session: AppSession
+    @EnvironmentObject private var catalog: CatalogStore
     @State private var selectedCategory = "Все"
-    private let categories = ["Все", "Драмы", "Детективы", "Комедии", "Документальное"]
 
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 27) {
-                    hero
-                    categoriesSection
-                    continueSection
-                    originalSection
+                Group {
+                    switch catalog.homeState {
+                    case .idle, .loading:
+                        loadingState
+                    case .empty:
+                        emptyState
+                    case .failed(let message):
+                        errorState(message)
+                    case .loaded(let home):
+                        homeContent(home)
+                    }
                 }
                 .padding(.bottom, 36)
             }
@@ -32,11 +38,81 @@ struct HomeView: View {
                 }
             }
         }
+        .task {
+            await catalog.loadHomeIfNeeded()
+        }
+        .refreshable {
+            await catalog.loadHome()
+        }
     }
 
-    private var hero: some View {
-        let item = CatalogFixtures.featured
-        return ZStack(alignment: .bottomLeading) {
+    private func homeContent(_ home: CatalogHome) -> some View {
+        let categories = ["Все"] + Array(Set(home.items.map(\.genre))).sorted()
+        let visibleItems = home.items.filter { selectedCategory == "Все" || $0.genre == selectedCategory }
+        let continuation = visibleItems.dropFirst().first ?? visibleItems.first
+
+        return VStack(spacing: 27) {
+            if let hero = home.hero {
+                heroCard(item: hero)
+            }
+            categoriesSection(categories: categories)
+            if let continuation {
+                continueSection(item: continuation)
+            }
+            shelfSections(home.shelves, selectedCategory: selectedCategory)
+        }
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+                .tint(AppTheme.primary)
+            Text("Загружаем витрину")
+                .font(.headline.weight(.semibold))
+            Text("Покажем только опубликованные материалы.")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.secondaryText)
+        }
+        .frame(maxWidth: .infinity, minHeight: 360)
+        .padding(AppTheme.pagePadding)
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView(
+            "Витрина пока пуста",
+            systemImage: "rectangle.stack",
+            description: Text("Когда в Studio появятся опубликованные материалы, они будут видны здесь.")
+        )
+        .frame(maxWidth: .infinity, minHeight: 360)
+        .padding(AppTheme.pagePadding)
+    }
+
+    private func errorState(_ message: String) -> some View {
+        VStack(spacing: 16) {
+            ContentUnavailableView(
+                "Не удалось открыть витрину",
+                systemImage: "wifi.exclamationmark",
+                description: Text(message)
+            )
+            Button("Повторить") {
+                Task { await catalog.loadHome() }
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .frame(maxWidth: 220)
+
+            Button("Открыть демо-каталог") {
+                catalog.useDemoCatalog()
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(AppTheme.primary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 390)
+        .padding(AppTheme.pagePadding)
+    }
+
+    private func heroCard(item: CatalogItem) -> some View {
+        ZStack(alignment: .bottomLeading) {
             PosterArtwork(item: item, showsTitle: false)
                 .frame(height: 430)
                 .overlay(
@@ -66,7 +142,7 @@ struct HomeView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.72))
                 Button { session.play(item) } label: {
-                    Label("Смотреть", systemImage: "play.fill")
+                    Label("Открыть", systemImage: "play.fill")
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .frame(maxWidth: 210)
@@ -78,7 +154,7 @@ struct HomeView: View {
         .padding(.top, 10)
     }
 
-    private var categoriesSection: some View {
+    private func categoriesSection(categories: [String]) -> some View {
         VStack(alignment: .leading, spacing: 13) {
             SectionTitle(title: "Выберите настроение")
                 .padding(.horizontal, AppTheme.pagePadding)
@@ -99,30 +175,37 @@ struct HomeView: View {
         }
     }
 
-    private var continueSection: some View {
+    private func continueSection(item: CatalogItem) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             SectionTitle(title: "Продолжить просмотр", actionTitle: "Все") {
                 session.selectedTab = .library
             }
             .padding(.horizontal, AppTheme.pagePadding)
-            ContinueCard(item: CatalogFixtures.titles[1])
+            ContinueCard(item: item)
                 .padding(.horizontal, AppTheme.pagePadding)
         }
     }
 
-    private var originalSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SectionTitle(title: "SakhaTube Original", actionTitle: "Каталог") {
-                session.selectedTab = .catalog
-            }
-            .padding(.horizontal, AppTheme.pagePadding)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 13) {
-                    ForEach(CatalogFixtures.titles) { item in
-                        ContentCard(item: item)
+    private func shelfSections(_ shelves: [CatalogShelf], selectedCategory: String) -> some View {
+        VStack(spacing: 27) {
+            ForEach(shelves) { shelf in
+                let visibleItems = shelf.items.filter { selectedCategory == "Все" || $0.genre == selectedCategory }
+                if !visibleItems.isEmpty {
+                    VStack(alignment: .leading, spacing: 14) {
+                        SectionTitle(title: shelf.title, actionTitle: "Каталог") {
+                            session.selectedTab = .catalog
+                        }
+                        .padding(.horizontal, AppTheme.pagePadding)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 13) {
+                                ForEach(visibleItems) { item in
+                                    ContentCard(item: item)
+                                }
+                            }
+                            .padding(.horizontal, AppTheme.pagePadding)
+                        }
                     }
                 }
-                .padding(.horizontal, AppTheme.pagePadding)
             }
         }
     }
@@ -141,12 +224,12 @@ private struct ContinueCard: View {
                     Text(item.title)
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.primary)
-                    Text("Серия 3 из \(item.episodeCount)")
+                    Text("Материал из опубликованной витрины")
                         .font(.subheadline)
                         .foregroundStyle(AppTheme.secondaryText)
                     ProgressView(value: 0.42)
                         .tint(AppTheme.primary)
-                    Text("Продолжить с 18:43")
+                    Text("История просмотра появится после входа")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.primary)
                 }

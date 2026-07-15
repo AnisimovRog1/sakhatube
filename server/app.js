@@ -13,12 +13,19 @@ import { createMediaStore } from './media-store.js';
 import { createPostgresStore } from './postgres-store.js';
 
 const roles = ['superadmin', 'content_editor', 'moderator', 'support', 'analyst'];
-const contentStatuses = ['draft', 'review', 'scheduled', 'published', 'unpublished', 'archived'];
 const contentKinds = ['series', 'episode', 'trailer', 'clip'];
 const accessKinds = ['free', 'subscription', 'purchase'];
 const commentStatuses = ['pending', 'approved', 'hidden', 'deleted'];
 const playbackEvents = ['intent', 'first_frame', 'pause', 'buffer_start', 'buffer_end', 'error', 'complete'];
 const bannerMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const sourceVideoTypes = new Map([
+  ['video/mp4', new Set(['mp4', 'm4v'])],
+  ['video/quicktime', new Set(['mov'])],
+  ['video/webm', new Set(['webm'])]
+]);
+const maxSourceVideoBytes = 50 * 1024 * 1024 * 1024;
+const multipartPartSize = 16 * 1024 * 1024;
+const multipartPartPageSize = 100;
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -49,17 +56,41 @@ export const defaultSeed = {
 };
 
 export function createMemoryStore(seed = defaultSeed) {
-  const state = clone(seed);
+  const state = clone({
+    ...seed,
+    media: seed.media ?? [],
+    content: seed.content.map((item) => ({
+      scheduledAt: null,
+      publishedAt: null,
+      unpublishedReason: null,
+      ...item
+    }))
+  });
 
   function findContent(id) {
     return state.content.find((item) => item.id === id);
+  }
+
+  function findMedia(id) {
+    return state.media.find((item) => item.id === id);
   }
 
   return {
     listContent() { return state.content.map(clone); },
     getContent(id) { const item = findContent(id); return item && clone(item); },
     createContent(data) {
-      const record = { id: randomUUID(), views: 0, likes: 0, createdAt: now(), updatedAt: now(), ...data };
+      const record = {
+        id: randomUUID(),
+        views: 0,
+        likes: 0,
+        status: 'draft',
+        scheduledAt: null,
+        publishedAt: null,
+        unpublishedReason: null,
+        createdAt: now(),
+        updatedAt: now(),
+        ...data
+      };
       state.content.unshift(record);
       return clone(record);
     },
@@ -70,6 +101,18 @@ export function createMemoryStore(seed = defaultSeed) {
       return clone(item);
     },
     listHomeSlots() { return state.homeSlots.map((id) => findContent(id)).filter(Boolean).map(clone); },
+    listPublishedContent() { return state.content.filter((item) => item.status === 'published').map(clone); },
+    listPublishedHomeSlots() { return state.homeSlots.map((id) => findContent(id)).filter((item) => item?.status === 'published').map(clone); },
+    publishDueContent(at = now()) {
+      const dueAt = new Date(at).getTime();
+      const published = [];
+      for (const item of state.content) {
+        if (item.status !== 'scheduled' || !item.scheduledAt || new Date(item.scheduledAt).getTime() > dueAt) continue;
+        Object.assign(item, { status: 'published', scheduledAt: null, publishedAt: at, unpublishedReason: null, updatedAt: at });
+        published.push(clone(item));
+      }
+      return published;
+    },
     replaceHomeSlots(ids) { state.homeSlots = [...ids]; return this.listHomeSlots(); },
     listComments(status) { return state.comments.filter((item) => !status || item.status === status).map(clone); },
     updateComment(id, status, moderationNote) {
@@ -79,6 +122,34 @@ export function createMemoryStore(seed = defaultSeed) {
       return clone(comment);
     },
     addPlayback(event) { state.playback.push({ id: randomUUID(), receivedAt: now(), ...event }); },
+    createMedia(data) {
+      const record = {
+        id: data.id ?? randomUUID(),
+        contentId: null,
+        relation: 'asset',
+        status: 'available',
+        durationMs: null,
+        uploadId: null,
+        partSize: null,
+        partCount: null,
+        metadata: {},
+        completedAt: null,
+        queuedAt: null,
+        abortedAt: null,
+        createdAt: now(),
+        updatedAt: now(),
+        ...data
+      };
+      state.media.unshift(record);
+      return clone(record);
+    },
+    getMedia(id) { const item = findMedia(id); return item && clone(item); },
+    updateMedia(id, patch) {
+      const item = findMedia(id);
+      if (!item) return null;
+      Object.assign(item, patch, { updatedAt: now() });
+      return clone(item);
+    },
     overview() {
       const pendingComments = state.comments.filter((item) => item.status === 'pending').length;
       const published = state.content.filter((item) => item.status === 'published').length;
@@ -105,14 +176,17 @@ const contentInput = z.object({
   kind: z.enum(contentKinds),
   genre: z.string().trim().min(1).max(64),
   synopsis: z.string().trim().max(2000).default(''),
-  status: z.enum(contentStatuses).default('draft'),
   access: z.enum(accessKinds).default('free'),
   episodes: z.number().int().min(1).max(999).default(1)
-});
+}).strict();
 
-const contentPatch = contentInput.partial();
+const contentPatch = contentInput.partial().strict();
 const homeSlotsInput = z.object({ contentIds: z.array(z.string().uuid().or(z.string().min(1).max(80))).min(0).max(30).refine((ids) => new Set(ids).size === ids.length, 'Повторять карточки в витрине нельзя') });
 const commentActionInput = z.object({ status: z.enum(['approved', 'hidden', 'deleted']), note: z.string().trim().max(500).optional() });
+const contentParams = z.object({ id: z.string().min(1).max(80) });
+const submitReviewInput = z.object({ note: z.string().trim().max(500).optional() }).default({});
+const publishInput = z.object({ scheduledAt: z.string().datetime({ offset: true }).optional() }).default({});
+const unpublishInput = z.object({ reason: z.string().trim().min(3).max(500) });
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
   sessionId: z.string().min(16).max(128),
@@ -120,6 +194,35 @@ const playbackInput = z.object({
   positionMs: z.number().int().min(0).max(86_400_000).optional(),
   errorCode: z.string().trim().max(80).optional()
 });
+const uploadInitInput = z.object({
+  fileName: z.string().trim().min(1).max(180),
+  contentType: z.string().trim().toLowerCase().max(100),
+  size: z.number().int().min(1).max(maxSourceVideoBytes),
+  contentId: z.string().min(1).max(80).optional()
+}).strict();
+const uploadPartInput = z.object({
+  number: z.number().int().min(1).max(10_000),
+  etag: z.string().trim().min(1).max(512).refine(
+    (value) => /^(?:[A-Za-z0-9+/=._:-]+|"[A-Za-z0-9+/=._:-]+")$/.test(value),
+    'Некорректный ETag части'
+  )
+}).strict();
+const uploadCompleteInput = z.object({
+  parts: z.array(uploadPartInput).min(1).max(10_000)
+}).strict();
+const mediaParams = z.object({ id: z.string().uuid() });
+const uploadPartsQuery = z.object({
+  from: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(multipartPartPageSize).optional()
+}).strict();
+
+function sourceVideoExtension(fileName, contentType) {
+  if (!fileName || /[\\/\u0000]/.test(fileName) || /[\r\n]/.test(fileName)) return null;
+  const extension = fileName.split('.').pop()?.toLowerCase();
+  const allowedExtensions = sourceVideoTypes.get(contentType);
+  if (!extension || !allowedExtensions?.has(extension)) return null;
+  return extension;
+}
 
 function configFrom(overrides = {}) {
   const railwayHost = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
@@ -163,6 +266,10 @@ export function buildApp(options = {}) {
         formAction: ["'self'"],
         frameAncestors: ["'none'"],
         imgSrc: ["'self'", 'data:', 'https:'],
+        // The local preview intentionally streams the temporary legal CC
+        // assets from the deployed demo origin. Production premium streams
+        // will move to an entitlement-controlled CDN allow-list.
+        mediaSrc: ["'self'", 'https://sakhatube-production.up.railway.app'],
         objectSrc: ["'none'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com']
@@ -202,8 +309,67 @@ export function buildApp(options = {}) {
     return reply.code(500).send({ error: 'INTERNAL_ERROR', message: 'Внутренняя ошибка сервиса', requestId: request.id });
   });
 
-  const audit = (request, action, entityType, entityId, before, after) => {
-    void Promise.resolve(store.audit({ actorId: request.user?.sub ?? 'anonymous', roles: request.user?.roles ?? [], action, entityType, entityId, before, after, requestId: request.id, ip: request.ip })).catch((error) => request.log.error(error));
+  const audit = (request, action, entityType, entityId, before, after, actor = null) => Promise.resolve(store.audit({
+    actorId: actor?.id ?? request.user?.sub ?? 'anonymous',
+    roles: actor?.roles ?? request.user?.roles ?? [],
+    action,
+    entityType,
+    entityId,
+    before,
+    after,
+    requestId: request.id,
+    ip: request.ip
+  })).catch((error) => request.log.error(error));
+
+  const promoteDueScheduledContent = async (request) => {
+    if (typeof store.publishDueContent !== 'function') return;
+    const dueItems = await store.publishDueContent(now());
+    for (const item of dueItems) {
+      const before = { ...item, status: 'scheduled', publishedAt: null, scheduledAt: item.scheduledAt };
+      await audit(request, 'content.publish.scheduled', 'content', item.id, before, item, { id: 'system', roles: [] });
+    }
+  };
+
+  const lifecycleConflict = (reply, item, message) => reply.code(409).send({
+    error: 'INVALID_LIFECYCLE_STATE',
+    message,
+    status: item.status
+  });
+
+  const multipartStoreAvailable = () => mediaStore && [
+    'createMultipartUpload',
+    'presignUploadPart',
+    'completeMultipartUpload',
+    'abortMultipartUpload'
+  ].every((method) => typeof mediaStore[method] === 'function');
+
+  const buildUploadPartPage = async (asset, from = 1, limit = multipartPartPageSize) => {
+    const first = Math.min(from, asset.partCount + 1);
+    const last = Math.min(first + limit - 1, asset.partCount);
+    const numbers = [];
+    for (let number = first; number <= last; number += 1) numbers.push(number);
+    const parts = await Promise.all(numbers.map(async (number) => ({
+      number,
+      url: await mediaStore.presignUploadPart({
+        storageKey: asset.storageKey,
+        uploadId: asset.uploadId,
+        partNumber: number
+      })
+    })));
+    return {
+      parts,
+      nextPartNumber: last < asset.partCount ? last + 1 : null
+    };
+  };
+
+  const catalogHome = async (request) => {
+    await promoteDueScheduledContent(request);
+    const items = await store.listPublishedHomeSlots();
+    return {
+      hero: items[0] ?? null,
+      shelves: [{ id: 'featured', title: 'Популярное', items }],
+      items
+    };
   };
 
   app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', time: now() }));
@@ -226,7 +392,7 @@ export function buildApp(options = {}) {
     return reply.code(201).send({ item });
   });
   app.patch('/v1/admin/content/:id', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
-    const params = parseOrReply(z.object({ id: z.string().min(1).max(80) }), request.params, reply);
+    const params = parseOrReply(contentParams, request.params, reply);
     const body = parseOrReply(contentPatch, request.body, reply);
     if (!params || !body) return;
     const before = await store.getContent(params.id);
@@ -235,6 +401,68 @@ export function buildApp(options = {}) {
     audit(request, 'content.update', 'content', item.id, before, item);
     return { item };
   });
+
+  app.post('/v1/admin/content/:id/submit-review', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    const params = parseOrReply(contentParams, request.params, reply);
+    const body = parseOrReply(submitReviewInput, request.body, reply);
+    if (!params || !body) return;
+    const before = await store.getContent(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    if (!['draft', 'unpublished'].includes(before.status)) return lifecycleConflict(reply, before, 'На проверку можно отправить только черновик или снятый с показа материал');
+    const item = await store.updateContent(params.id, { status: 'review', scheduledAt: null, unpublishedReason: null });
+    await audit(request, 'content.submit_review', 'content', item.id, before, { ...item, submissionNote: body.note ?? null });
+    return { item };
+  });
+
+  app.post('/v1/admin/content/:id/publish', { preHandler: app.allowRoles(['superadmin']) }, async (request, reply) => {
+    const params = parseOrReply(contentParams, request.params, reply);
+    const body = parseOrReply(publishInput, request.body, reply);
+    if (!params || !body) return;
+    const before = await store.getContent(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    if (before.status !== 'review') return lifecycleConflict(reply, before, 'Опубликовать можно только материал, прошедший этап review');
+
+    if (body.scheduledAt) {
+      const scheduledAt = new Date(body.scheduledAt).toISOString();
+      if (new Date(scheduledAt).getTime() <= Date.now()) {
+        return reply.code(400).send({ error: 'VALIDATION_ERROR', message: 'Время публикации должно быть в будущем' });
+      }
+      const item = await store.updateContent(params.id, { status: 'scheduled', scheduledAt, publishedAt: null, unpublishedReason: null });
+      await audit(request, 'content.schedule', 'content', item.id, before, item);
+      return { item };
+    }
+
+    const item = await store.updateContent(params.id, { status: 'published', scheduledAt: null, publishedAt: now(), unpublishedReason: null });
+    await audit(request, 'content.publish', 'content', item.id, before, item);
+    return { item };
+  });
+
+  app.post('/v1/admin/content/:id/unpublish', { preHandler: app.allowRoles(['superadmin']) }, async (request, reply) => {
+    const params = parseOrReply(contentParams, request.params, reply);
+    const body = parseOrReply(unpublishInput, request.body, reply);
+    if (!params || !body) return;
+    const before = await store.getContent(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    if (!['published', 'scheduled'].includes(before.status)) return lifecycleConflict(reply, before, 'Снять с показа можно только опубликованный или запланированный материал');
+    const item = await store.updateContent(params.id, { status: 'unpublished', scheduledAt: null, unpublishedReason: body.reason });
+    await audit(request, 'content.unpublish', 'content', item.id, before, item);
+    return { item };
+  });
+
+  app.get('/v1/catalog', async (request) => {
+    await promoteDueScheduledContent(request);
+    return { items: await store.listPublishedContent() };
+  });
+  app.get('/v1/catalog/home', async (request) => catalogHome(request));
+  app.get('/v1/catalog/:id', async (request, reply) => {
+    await promoteDueScheduledContent(request);
+    const params = parseOrReply(contentParams, request.params, reply);
+    if (!params) return;
+    const item = await store.getContent(params.id);
+    if (!item || item.status !== 'published') return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    return { item };
+  });
+  app.get('/v1/home', async (request) => catalogHome(request));
 
   app.get('/v1/admin/home/slots', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({ items: await store.listHomeSlots() }));
   app.patch('/v1/admin/home/slots', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
@@ -273,6 +501,152 @@ export function buildApp(options = {}) {
     return reply.code(202).send({ accepted: true });
   });
 
+  // The browser uploads directly to private object storage. The API never
+  // proxies a multi-gigabyte source file through Railway or exposes it via a
+  // public media route.
+  app.post('/v1/admin/assets/upload-init', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    if (!multipartStoreAvailable()) return reply.code(503).send({ error: 'MEDIA_STORAGE_UNAVAILABLE', message: 'Постоянное хранилище для загрузки видео ещё не подключено' });
+    const body = parseOrReply(uploadInitInput, request.body, reply);
+    if (!body) return;
+    const extension = sourceVideoExtension(body.fileName, body.contentType);
+    if (!extension) {
+      return reply.code(400).send({
+        error: 'UNSUPPORTED_MEDIA_TYPE',
+        message: 'Поддерживаются только MP4, MOV и WebM с соответствующим MIME-типом'
+      });
+    }
+    if (body.contentId && !await store.getContent(body.contentId)) {
+      return reply.code(404).send({ error: 'CONTENT_NOT_FOUND', message: 'Связанный контент не найден' });
+    }
+
+    const assetId = randomUUID();
+    const partCount = Math.ceil(body.size / multipartPartSize);
+    if (partCount > 10_000) {
+      return reply.code(400).send({ error: 'VALIDATION_ERROR', message: 'Размер файла превышает лимит multipart-загрузки' });
+    }
+    const storageKey = `incoming/${new Date().toISOString().slice(0, 10)}/${assetId}/source.${extension}`;
+    let upload;
+    try {
+      upload = await mediaStore.createMultipartUpload({
+        storageKey,
+        contentType: body.contentType,
+        metadata: { origin: 'sakhatube-studio', assetid: assetId }
+      });
+      const asset = await store.createMedia({
+        id: assetId,
+        kind: 'video_source',
+        relation: 'source',
+        status: 'uploading',
+        storageKey,
+        fileName: body.fileName,
+        contentType: body.contentType,
+        size: body.size,
+        contentId: body.contentId ?? null,
+        uploadId: upload.uploadId,
+        partSize: multipartPartSize,
+        partCount,
+        durationMs: null,
+        metadata: { durationState: 'pending', processingState: 'not_started' }
+      });
+      const page = await buildUploadPartPage(asset);
+      await audit(request, 'media.upload.init', 'media_asset', asset.id, null, asset);
+      return reply.code(201).send({
+        asset,
+        uploadId: upload.uploadId,
+        partSize: multipartPartSize,
+        partCount,
+        ...page
+      });
+    } catch (error) {
+      if (upload?.uploadId) {
+        try { await mediaStore.abortMultipartUpload({ storageKey, uploadId: upload.uploadId }); } catch (abortError) { request.log.error(abortError); }
+      }
+      throw error;
+    }
+  });
+
+  app.get('/v1/admin/assets/:id/upload-parts', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    if (!multipartStoreAvailable()) return reply.code(503).send({ error: 'MEDIA_STORAGE_UNAVAILABLE', message: 'Постоянное хранилище для загрузки видео ещё не подключено' });
+    const params = parseOrReply(mediaParams, request.params, reply);
+    const query = parseOrReply(uploadPartsQuery, request.query, reply);
+    if (!params || !query) return;
+    const asset = await store.getMedia(params.id);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Медиафайл не найден' });
+    if (asset.status !== 'uploading' || !asset.uploadId || !asset.partCount) {
+      return reply.code(409).send({ error: 'UPLOAD_NOT_ACTIVE', message: 'Для этого медиафайла нет активной multipart-загрузки' });
+    }
+    const page = await buildUploadPartPage(asset, query.from ?? 1, query.limit ?? multipartPartPageSize);
+    return { assetId: asset.id, partSize: asset.partSize, partCount: asset.partCount, ...page };
+  });
+
+  app.post('/v1/admin/assets/:id/upload-complete', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    if (!multipartStoreAvailable()) return reply.code(503).send({ error: 'MEDIA_STORAGE_UNAVAILABLE', message: 'Постоянное хранилище для загрузки видео ещё не подключено' });
+    const params = parseOrReply(mediaParams, request.params, reply);
+    const body = parseOrReply(uploadCompleteInput, request.body, reply);
+    if (!params || !body) return;
+    const before = await store.getMedia(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Медиафайл не найден' });
+    if (before.status !== 'uploading' || !before.uploadId || !before.partCount) {
+      return reply.code(409).send({ error: 'UPLOAD_NOT_ACTIVE', message: 'Эта загрузка уже завершена или отменена' });
+    }
+    const orderedParts = [...body.parts].sort((left, right) => left.number - right.number);
+    const completeSet = orderedParts.length === before.partCount
+      && orderedParts.every((part, index) => part.number === index + 1);
+    if (!completeSet) {
+      return reply.code(400).send({
+        error: 'INVALID_UPLOAD_PARTS',
+        message: `Нужен полный список уникальных частей от 1 до ${before.partCount}`
+      });
+    }
+    try {
+      await mediaStore.completeMultipartUpload({
+        storageKey: before.storageKey,
+        uploadId: before.uploadId,
+        parts: orderedParts
+      });
+    } catch (error) {
+      request.log.error(error);
+      return reply.code(502).send({ error: 'UPLOAD_COMPLETE_FAILED', message: 'Не удалось подтвердить загрузку в хранилище. Повторите завершение.' });
+    }
+    const uploaded = await store.updateMedia(before.id, {
+      status: 'uploaded',
+      completedAt: now(),
+      metadata: { ...before.metadata, processingState: 'waiting' }
+    });
+    await audit(request, 'media.upload.complete', 'media_asset', uploaded.id, before, uploaded);
+    const queued = await store.updateMedia(uploaded.id, {
+      status: 'queued',
+      queuedAt: now(),
+      metadata: { ...uploaded.metadata, processingState: 'queued' }
+    });
+    await audit(request, 'media.transcode.queue', 'media_asset', queued.id, uploaded, queued);
+    return { asset: queued };
+  });
+
+  app.post('/v1/admin/assets/:id/upload-abort', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    if (!multipartStoreAvailable()) return reply.code(503).send({ error: 'MEDIA_STORAGE_UNAVAILABLE', message: 'Постоянное хранилище для загрузки видео ещё не подключено' });
+    const params = parseOrReply(mediaParams, request.params, reply);
+    if (!params) return;
+    const before = await store.getMedia(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Медиафайл не найден' });
+    if (before.status !== 'uploading' || !before.uploadId) {
+      return reply.code(409).send({ error: 'UPLOAD_NOT_ACTIVE', message: 'Активная multipart-загрузка не найдена' });
+    }
+    try {
+      await mediaStore.abortMultipartUpload({ storageKey: before.storageKey, uploadId: before.uploadId });
+    } catch (error) {
+      request.log.error(error);
+      return reply.code(502).send({ error: 'UPLOAD_ABORT_FAILED', message: 'Не удалось отменить загрузку в хранилище. Повторите попытку.' });
+    }
+    const item = await store.updateMedia(before.id, {
+      status: 'aborted',
+      abortedAt: now(),
+      metadata: { ...before.metadata, processingState: 'aborted' }
+    });
+    await audit(request, 'media.upload.abort', 'media_asset', item.id, before, item);
+    return { asset: item };
+  });
+
   app.post('/v1/admin/media/banner', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
     if (!mediaStore) return reply.code(503).send({ error: 'MEDIA_STORAGE_UNAVAILABLE', message: 'Постоянное хранилище медиа ещё не подключено' });
     const part = await request.file();
@@ -300,6 +674,11 @@ export function buildApp(options = {}) {
     if (!params) return;
     const item = await store.getMedia(params.id);
     if (!item) return reply.code(404).send({ error: 'NOT_FOUND' });
+    // Raw source files are private upload inputs, never viewer media. A later
+    // entitlement-aware playback path will expose processed renditions only.
+    if (item.relation === 'source' || item.storageKey.startsWith('incoming/')) {
+      return reply.code(404).send({ error: 'NOT_FOUND' });
+    }
     try {
       const object = await mediaStore.get(item.storageKey);
       reply.header('content-type', object.ContentType || item.contentType);

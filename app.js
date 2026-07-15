@@ -65,6 +65,242 @@ const shortIcons = {
   save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5h12v16l-6-3.6-6 3.6Z"/></svg>'
 };
 
+const catalogApi = {
+  available: false,
+  sessionId: createPlaybackSessionId()
+};
+let playerTrackingStop = null;
+let shortTrackingStop = null;
+
+function createPlaybackSessionId() {
+  const key = 'sakhatube-playback-session';
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const id = typeof window.crypto?.randomUUID === 'function'
+      ? window.crypto.randomUUID()
+      : `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    sessionStorage.setItem(key, id);
+    return id;
+  } catch {
+    return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function canUseCatalogApi() {
+  return window.location.protocol === 'https:' || window.location.protocol === 'http:';
+}
+
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+  })[character]);
+}
+
+function safeMediaUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  try {
+    const url = new URL(value, window.location.href);
+    return ['https:', 'http:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function pickText(...values) {
+  return values.find((value) => typeof value === 'string' && value.trim())?.trim() || '';
+}
+
+function mediaValue(item, key) {
+  const sources = [item, item.media, item.video, item.stream, item.playback].filter((value) => value && typeof value === 'object');
+  return pickText(...sources.map((source) => source[key]));
+}
+
+function mapPublicContent(item, index = 0) {
+  if (!item || typeof item !== 'object') return null;
+  const title = pickText(item.title, item.name);
+  if (!title) return null;
+  const kind = pickText(item.kind, item.type).toLowerCase();
+  const access = pickText(item.access, item.accessType).toLowerCase();
+  const episodes = Number.isFinite(item.episodes) ? item.episodes : Number(item.episodeCount);
+  const accessLabel = { free: 'Бесплатно', subscription: 'По подписке', purchase: 'Покупка' }[access] || 'Видео';
+  const episodeLabel = Number.isFinite(episodes) && episodes > 0 ? ` · ${episodes} ${episodes === 1 ? 'серия' : 'серий'}` : '';
+  const posterUrl = safeMediaUrl(pickText(
+    item.posterUrl,
+    item.thumbnailUrl,
+    item.coverUrl,
+    typeof item.poster === 'string' ? item.poster : '',
+    mediaValue(item, 'posterUrl'),
+    mediaValue(item, 'thumbnailUrl')
+  ));
+  const mp4 = safeMediaUrl(pickText(item.mp4, item.mp4Url, item.mediaUrl, mediaValue(item, 'mp4'), mediaValue(item, 'mp4Url'), mediaValue(item, 'url')));
+  const hls = safeMediaUrl(pickText(item.hls, item.hlsUrl, item.manifestUrl, mediaValue(item, 'hls'), mediaValue(item, 'hlsUrl'), mediaValue(item, 'manifestUrl')));
+  const contentId = pickText(item.id, item.contentId);
+  return {
+    contentId,
+    title,
+    meta: pickText(item.meta, item.subtitle, `${accessLabel}${episodeLabel}`),
+    poster: `poster-${['one', 'two', 'three', 'four', 'five'][index % 5]}`,
+    posterUrl,
+    genre: pickText(item.genre, item.category, kind === 'clip' ? 'Клипы' : 'Видео'),
+    mp4,
+    hls,
+    playerMeta: pickText(item.playerMeta, item.label, kind ? kind.toUpperCase() : '', accessLabel.toUpperCase()) || 'ВИДЕО'
+  };
+}
+
+function isPublicShort(item) {
+  const kind = pickText(item?.kind, item?.type, item?.format).toLowerCase();
+  const ratio = pickText(item?.aspectRatio, item?.ratio).replaceAll(' ', '');
+  return item?.isShort === true || ['clip', 'short', 'shorts'].includes(kind) || ratio === '9:16';
+}
+
+function mapPublicShort(item, index) {
+  const content = mapPublicContent(item, index);
+  if (!content) return null;
+  return {
+    ...content,
+    category: pickText(item.category, item.genre, content.playerMeta, 'КЛИП').toUpperCase(),
+    text: pickText(item.synopsis, item.description, item.summary, 'Короткий фрагмент большой истории.'),
+    likes: pickText(String(item.likes || ''), item.likesLabel, '—'),
+    comments: pickText(String(item.comments || ''), item.commentsLabel, '—'),
+    tone: ['linear-gradient(160deg,#17283c,#09111c 48%,#293e57)', 'linear-gradient(160deg,#3e2b1f,#10151a 48%,#1c5265)'][index % 2],
+    poster: content.posterUrl
+  };
+}
+
+function resolveCatalogEntries(payload) {
+  const initialItems = Array.isArray(payload?.items) ? payload.items.filter((item) => item && typeof item === 'object') : [];
+  const byId = new Map(initialItems.map((item) => [String(item.id ?? item.contentId ?? ''), item]).filter(([id]) => id));
+  const resolveItem = (entry) => {
+    if (entry && typeof entry === 'object') return entry;
+    return byId.get(String(entry)) || null;
+  };
+  const shelfItems = Array.isArray(payload?.shelves)
+    ? payload.shelves.flatMap((shelf) => {
+      if (Array.isArray(shelf)) return shelf.map(resolveItem);
+      const entries = Array.isArray(shelf?.items) ? shelf.items : (Array.isArray(shelf?.contentIds) ? shelf.contentIds : []);
+      return entries.map(resolveItem);
+    })
+    : [];
+  const hero = resolveItem(payload?.hero?.item ?? payload?.hero?.content ?? payload?.hero);
+  const unique = new Map();
+  [hero, ...shelfItems, ...initialItems].filter(Boolean).forEach((item) => {
+    const key = String(item.id ?? item.contentId ?? item.title ?? item.name ?? unique.size);
+    if (!unique.has(key)) unique.set(key, item);
+  });
+  return { hero, items: [...unique.values()] };
+}
+
+function applyPublicCatalog(payload) {
+  const { hero, items } = resolveCatalogEntries(payload);
+  const mapped = items.map(mapPublicContent).filter(Boolean);
+  if (!mapped.length) return false;
+  const mappedHero = mapPublicContent(hero);
+  const ordered = mappedHero
+    ? [mappedHero, ...mapped.filter((item) => item.contentId !== mappedHero.contentId || item.title !== mappedHero.title)]
+    : mapped;
+  shows.splice(0, shows.length, ...ordered);
+  const remoteShorts = items.filter(isPublicShort).map(mapPublicShort).filter(Boolean);
+  if (remoteShorts.length) shorts.splice(0, shorts.length, ...remoteShorts);
+  currentCarousel = 0;
+  currentShort = Math.min(currentShort, Math.max(shorts.length - 1, 0));
+  return true;
+}
+
+function setCatalogSourceStatus(state) {
+  const node = document.querySelector('#catalog-source-status');
+  if (!node) return;
+  if (state === 'live') {
+    node.hidden = true;
+    return;
+  }
+  node.textContent = state === 'file' ? 'Демо-режим' : 'Локальный каталог';
+  node.hidden = false;
+}
+
+async function loadPublicCatalog() {
+  if (!canUseCatalogApi()) {
+    setCatalogSourceStatus('file');
+    return false;
+  }
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 4500);
+  try {
+    const response = await fetch('/v1/catalog/home', {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`catalog_${response.status}`);
+    const payload = await response.json();
+    if (!applyPublicCatalog(payload)) throw new Error('catalog_empty');
+    catalogApi.available = true;
+    setCatalogSourceStatus('live');
+    applyLocale();
+    renderShort();
+    startCarousel();
+    return true;
+  } catch {
+    catalogApi.available = false;
+    setCatalogSourceStatus('fallback');
+    return false;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function reportPlayback(contentId, event, extra = {}) {
+  if (!catalogApi.available || !contentId) return;
+  const payload = {
+    contentId,
+    sessionId: catalogApi.sessionId,
+    event,
+    ...extra
+  };
+  void fetch('/v1/events/playback', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'same-origin',
+    keepalive: true,
+    body: JSON.stringify(payload)
+  }).catch(() => {});
+}
+
+function attachPlaybackTracking(video, contentId) {
+  if (!catalogApi.available || !contentId || !video) return () => {};
+  const controller = new AbortController();
+  const { signal } = controller;
+  let firstFrameSent = false;
+  let buffering = false;
+  const position = () => ({ positionMs: Math.max(0, Math.floor((video.currentTime || 0) * 1000)) });
+  const sendBuffer = () => {
+    if (buffering || video.ended) return;
+    buffering = true;
+    reportPlayback(contentId, 'buffer_start', position());
+  };
+  reportPlayback(contentId, 'intent', position());
+  video.addEventListener('playing', () => {
+    if (!firstFrameSent) {
+      firstFrameSent = true;
+      reportPlayback(contentId, 'first_frame', position());
+    }
+    if (buffering) {
+      buffering = false;
+      reportPlayback(contentId, 'buffer_end', position());
+    }
+  }, { signal });
+  video.addEventListener('waiting', sendBuffer, { signal });
+  video.addEventListener('stalled', sendBuffer, { signal });
+  video.addEventListener('error', () => {
+    reportPlayback(contentId, 'error', { ...position(), errorCode: `media_${video.error?.code || 'unknown'}` });
+  }, { signal });
+  video.addEventListener('ended', () => reportPlayback(contentId, 'complete', position()), { signal });
+  return () => controller.abort();
+}
+
 const locales = {
   ru: {
     label: 'Русский',
@@ -192,15 +428,20 @@ function showToast(message) {
 }
 
 function playbackData(show) {
-  return show.mp4 ? ` data-mp4="${show.mp4}" data-player-meta="${show.playerMeta}"` : '';
+  const attributes = [];
+  if (show.contentId) attributes.push(`data-content-id="${escapeHTML(show.contentId)}"`);
+  if (show.mp4) attributes.push(`data-mp4="${escapeHTML(show.mp4)}"`);
+  if (show.hls) attributes.push(`data-hls="${escapeHTML(show.hls)}"`);
+  if (show.playerMeta) attributes.push(`data-player-meta="${escapeHTML(show.playerMeta)}"`);
+  return attributes.length ? ` ${attributes.join(' ')}` : '';
 }
 
 function posterStyle(show) {
-  return show.posterUrl ? ` style="background-image:linear-gradient(180deg,transparent 42%,rgba(4,6,10,.72)),url('${show.posterUrl}')"` : '';
+  return show.posterUrl ? ` style="background-image:linear-gradient(180deg,transparent 42%,rgba(4,6,10,.72)),url('${encodeURI(show.posterUrl).replaceAll("'", '%27')}')"` : '';
 }
 
 function mediaCard(show) {
-  return `<button class="media-card play-button" data-title="${show.title}"${playbackData(show)} type="button"><div class="card-poster ${show.poster}"${posterStyle(show)}><span>${show.genre.toUpperCase()}</span></div><h3>${show.title}</h3><p>${show.meta}</p></button>`;
+  return `<button class="media-card play-button" data-title="${escapeHTML(show.title)}"${playbackData(show)} type="button"><div class="card-poster ${escapeHTML(show.poster)}"${posterStyle(show)}><span>${escapeHTML(show.genre.toUpperCase())}</span></div><h3>${escapeHTML(show.title)}</h3><p>${escapeHTML(show.meta)}</p></button>`;
 }
 
 function renderCatalog() {
@@ -219,8 +460,8 @@ function renderHomeFeatured() {
 }
 
 function renderCarousel() {
-  carouselNode.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="carousel-slide ${index === currentCarousel ? 'is-current' : ''}" data-carousel-index="${index}" data-title="${show.title}"${playbackData(show)} type="button"><div class="carousel-cover ${show.poster}"${posterStyle(show)}><span>${t('premiere')}</span><div class="carousel-copy"><p>${show.genre}</p><h2>${show.title}</h2><small>${show.meta}</small></div></div></button>`).join('');
-  carouselDots.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="${index === currentCarousel ? 'is-current' : ''}" data-carousel-dot="${index}" type="button" aria-label="${t('home.premieres')}: ${show.title}"></button>`).join('');
+  carouselNode.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="carousel-slide ${index === currentCarousel ? 'is-current' : ''}" data-carousel-index="${index}" data-title="${escapeHTML(show.title)}"${playbackData(show)} type="button"><div class="carousel-cover ${escapeHTML(show.poster)}"${posterStyle(show)}><span>${t('premiere')}</span><div class="carousel-copy"><p>${escapeHTML(show.genre)}</p><h2>${escapeHTML(show.title)}</h2><small>${escapeHTML(show.meta)}</small></div></div></button>`).join('');
+  carouselDots.innerHTML = shows.slice(0, 5).map((show, index) => `<button class="${index === currentCarousel ? 'is-current' : ''}" data-carousel-dot="${index}" type="button" aria-label="${escapeHTML(`${t('home.premieres')}: ${show.title}`)}"></button>`).join('');
 }
 
 function setCarousel(index, shouldScroll = true) {
@@ -301,6 +542,8 @@ function renderShort() {
   const stage = document.querySelector('#shorts-stage');
   const layout = document.querySelector('.shorts-layout');
   const previousVideo = stage.querySelector('video');
+  shortTrackingStop?.();
+  shortTrackingStop = null;
   if (previousVideo) {
     previousVideo.pause();
     previousVideo.removeAttribute('src');
@@ -309,16 +552,19 @@ function renderShort() {
   window.clearTimeout(shortCleanTimer);
   stage.classList.remove('is-clean', 'is-paused');
   stage.style.background = short.tone;
-  layout.style.setProperty('--short-backdrop', `url("${short.poster}")`);
-  const video = short.mp4 ? `<video class="short-video" src="${short.mp4}" poster="${short.poster}" autoplay muted loop playsinline preload="auto"></video>` : '';
-  stage.innerHTML = `${video}<div class="short-topbar"><button data-short-action="exit" type="button" aria-label="Выйти из раздела Для вас">${shortIcons.back}</button><span>Для вас</span></div><div class="short-top-actions"><button data-short-action="sound" type="button" aria-label="Включить звук">${shortIcons.soundOff}</button><button data-short-action="more" type="button" aria-label="Дополнительно">${shortIcons.more}</button></div><div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится"><b>${shortIcons.heart}</b><small>${short.likes}</small></button><button data-short-action="comments" type="button" aria-label="Комментарии"><b>${shortIcons.comment}</b><small>${short.comments}</small></button><button data-short-action="share" type="button" aria-label="Поделиться"><b>${shortIcons.share}</b><small>Поделиться</small></button><button data-short-action="save" type="button" aria-label="Сохранить"><b>${shortIcons.save}</b><small>Сохранить</small></button></div><div class="short-content"><span class="short-category">${short.category}</span><h2>${short.title}</h2><p>${short.text}</p><span class="short-hint">Нажми — пауза · свайпни вверх</span></div>`;
+  layout.style.setProperty('--short-backdrop', `url("${encodeURI(short.poster).replaceAll('"', '%22')}")`);
+  const video = short.mp4 ? `<video class="short-video" src="${escapeHTML(short.mp4)}" poster="${escapeHTML(short.poster)}" autoplay muted loop playsinline preload="auto"></video>` : '';
+  stage.innerHTML = `${video}<div class="short-topbar"><button data-short-action="exit" type="button" aria-label="Выйти из раздела Для вас">${shortIcons.back}</button><span>Для вас</span></div><div class="short-top-actions"><button data-short-action="sound" type="button" aria-label="Включить звук">${shortIcons.soundOff}</button><button data-short-action="more" type="button" aria-label="Дополнительно">${shortIcons.more}</button></div><div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится"><b>${shortIcons.heart}</b><small>${escapeHTML(short.likes)}</small></button><button data-short-action="comments" type="button" aria-label="Комментарии"><b>${shortIcons.comment}</b><small>${escapeHTML(short.comments)}</small></button><button data-short-action="share" type="button" aria-label="Поделиться"><b>${shortIcons.share}</b><small>Поделиться</small></button><button data-short-action="save" type="button" aria-label="Сохранить"><b>${shortIcons.save}</b><small>Сохранить</small></button></div><div class="short-content"><span class="short-category">${escapeHTML(short.category)}</span><h2>${escapeHTML(short.title)}</h2><p>${escapeHTML(short.text)}</p><span class="short-hint">Нажми — пауза · свайпни вверх</span></div>`;
   document.querySelector('#shorts-counter').textContent = `${String(currentShort + 1).padStart(2, '0')} / ${String(shorts.length).padStart(2, '0')}`;
   const next = shorts[(currentShort + 1) % shorts.length];
   const preloader = document.querySelector('#short-preload');
   preloader.src = next.mp4;
   preloader.load();
   const activeVideo = stage.querySelector('.short-video');
-  if (activeVideo) void activeVideo.play().catch(() => {});
+  if (activeVideo) {
+    shortTrackingStop = attachPlaybackTracking(activeVideo, short.contentId);
+    void activeVideo.play().catch(() => {});
+  }
   shortCleanTimer = window.setTimeout(() => stage.classList.add('is-clean'), 3600);
 }
 
@@ -329,6 +575,8 @@ function changeShort(direction) {
 }
 
 function stopPlayer() {
+  playerTrackingStop?.();
+  playerTrackingStop = null;
   playerVideo.pause();
   playerVideo.removeAttribute('src');
   playerVideo.load();
@@ -338,6 +586,8 @@ function stopPlayer() {
 }
 
 function openPlayer(title, source = {}) {
+  playerTrackingStop?.();
+  playerTrackingStop = null;
   playerTitle.textContent = title;
   const playbackUrl = source.mp4 || source.hls;
   playerMeta.textContent = source.playerMeta || 'ОБРАБОТКА ВИДЕО';
@@ -347,6 +597,7 @@ function openPlayer(title, source = {}) {
     playerPoster.hidden = true;
     document.querySelector('#player-controls').hidden = false;
     openDialog(player);
+    playerTrackingStop = attachPlaybackTracking(playerVideo, source.contentId);
     void playerVideo.play().catch(() => {});
     return;
   } else {
@@ -361,7 +612,8 @@ function openPlayerFrom(element) {
   openPlayer(title, {
     hls: element.dataset.hls,
     mp4: element.dataset.mp4,
-    playerMeta: element.dataset.playerMeta
+    playerMeta: element.dataset.playerMeta,
+    contentId: element.dataset.contentId
   });
 }
 
@@ -480,6 +732,7 @@ recommendationNode.innerHTML = shows.slice(0, 5).map(mediaCard).join('');
 applyLocale();
 renderShort();
 startCarousel();
+void loadPublicCatalog();
 
 document.addEventListener('click', (event) => {
   const closeButton = event.target.closest('[data-close-dialog]');

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
-import { buildApp } from '../server/app.js';
+import { buildApp, createMemoryStore } from '../server/app.js';
 
-async function createTestApp() {
-  const app = buildApp({ jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters', allowDevTokens: true });
+async function createTestApp(options = {}) {
+  const app = buildApp({ jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters', allowDevTokens: true, ...options });
   await app.ready();
   return app;
 }
@@ -50,6 +50,135 @@ test('editor can create content and arrange the home shelf', async (t) => {
   assert.deepEqual(JSON.parse(home.body).items.map((item) => item.id), [created.id, 'midnight']);
 });
 
+test('public catalog and home expose only published content', async (t) => {
+  const app = await createTestApp();
+  t.after(() => app.close());
+  const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
+  assert.equal(catalog.statusCode, 200);
+  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['midnight', 'signal']);
+
+  const hiddenDetail = await app.inject({ method: 'GET', url: '/v1/catalog/floor' });
+  assert.equal(hiddenDetail.statusCode, 404);
+
+  const home = await app.inject({ method: 'GET', url: '/v1/catalog/home' });
+  assert.equal(home.statusCode, 200);
+  const payload = JSON.parse(home.body);
+  assert.equal(payload.hero.id, 'midnight');
+  assert.deepEqual(payload.shelves, [{ id: 'featured', title: 'Популярное', items: payload.items }]);
+  assert.deepEqual(payload.items.map((item) => item.id), ['midnight', 'signal']);
+});
+
+test('content lifecycle enforces review, publication roles, reasons, and audit', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({ store });
+  t.after(() => app.close());
+  const editor = await tokenFor(app, ['content_editor']);
+  const superadmin = await tokenFor(app, ['superadmin']);
+
+  const bypassCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/content',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { title: 'Материал для релиза', kind: 'series', genre: 'Драма', status: 'published' }
+  });
+  assert.equal(bypassCreate.statusCode, 400);
+
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/content',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { title: 'Материал для релиза', kind: 'series', genre: 'Драма' }
+  });
+  assert.equal(create.statusCode, 201);
+  const created = JSON.parse(create.body).item;
+  assert.equal(created.status, 'draft');
+
+  const bypassPatch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/admin/content/${created.id}`,
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { status: 'published' }
+  });
+  assert.equal(bypassPatch.statusCode, 400);
+
+  const submit = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/submit-review`,
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { note: 'Проверены права и метаданные' }
+  });
+  assert.equal(submit.statusCode, 200);
+  assert.equal(JSON.parse(submit.body).item.status, 'review');
+
+  const forbiddenPublish = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/publish`,
+    headers: { authorization: `Bearer ${editor}` },
+    payload: {}
+  });
+  assert.equal(forbiddenPublish.statusCode, 403);
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/publish`,
+    headers: { authorization: `Bearer ${superadmin}` },
+    payload: {}
+  });
+  assert.equal(publish.statusCode, 200);
+  assert.equal(JSON.parse(publish.body).item.status, 'published');
+
+  const missingReason = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/unpublish`,
+    headers: { authorization: `Bearer ${superadmin}` },
+    payload: {}
+  });
+  assert.equal(missingReason.statusCode, 400);
+
+  const unpublish = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/unpublish`,
+    headers: { authorization: `Bearer ${superadmin}` },
+    payload: { reason: 'Истёк срок показа' }
+  });
+  assert.equal(unpublish.statusCode, 200);
+  assert.equal(JSON.parse(unpublish.body).item.status, 'unpublished');
+
+  const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
+  assert.equal(JSON.parse(catalog.body).items.some((item) => item.id === created.id), false);
+  assert.deepEqual(store.listAudit().slice(0, 3).map((item) => item.action), ['content.unpublish', 'content.publish', 'content.submit_review']);
+});
+
+test('superadmin can schedule reviewed content without exposing it early', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({ store });
+  t.after(() => app.close());
+  const editor = await tokenFor(app, ['content_editor']);
+  const superadmin = await tokenFor(app, ['superadmin']);
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/content',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { title: 'Премьера по расписанию', kind: 'trailer', genre: 'Драма' }
+  });
+  const id = JSON.parse(create.body).item.id;
+  const submit = await app.inject({ method: 'POST', url: `/v1/admin/content/${id}/submit-review`, headers: { authorization: `Bearer ${editor}` }, payload: {} });
+  assert.equal(submit.statusCode, 200);
+  const scheduledAt = new Date(Date.now() + 60_000).toISOString();
+  const publish = await app.inject({ method: 'POST', url: `/v1/admin/content/${id}/publish`, headers: { authorization: `Bearer ${superadmin}` }, payload: { scheduledAt } });
+  assert.equal(publish.statusCode, 200);
+  const scheduled = JSON.parse(publish.body).item;
+  assert.equal(scheduled.status, 'scheduled');
+  assert.equal(scheduled.scheduledAt, scheduledAt);
+  const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
+  assert.equal(JSON.parse(catalog.body).items.some((item) => item.id === id), false);
+
+  await store.updateContent(id, { scheduledAt: new Date(Date.now() - 1_000).toISOString() });
+  const publishedCatalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
+  assert.equal(JSON.parse(publishedCatalog.body).items.some((item) => item.id === id), true);
+  assert.equal(store.listAudit()[0].action, 'content.publish.scheduled');
+});
+
 test('moderator can hide a comment but cannot create a series', async (t) => {
   const app = await createTestApp();
   t.after(() => app.close());
@@ -78,6 +207,202 @@ test('playback event is validated and accepted without exposing admin access', a
   assert.equal(invalid.statusCode, 400);
   const accepted = await app.inject({ method: 'POST', url: '/v1/events/playback', payload: { contentId: 'midnight', sessionId: 'abcdef0123456789', event: 'first_frame', positionMs: 0 } });
   assert.equal(accepted.statusCode, 202);
+});
+
+test('private multipart upload is role-protected, paged, validated, and queued after completion', async (t) => {
+  const uploads = [];
+  const completed = [];
+  const mediaStore = {
+    async createMultipartUpload({ storageKey, contentType, metadata }) {
+      uploads.push({ storageKey, contentType, metadata });
+      return { uploadId: 'upload-demo-1' };
+    },
+    async presignUploadPart({ storageKey, uploadId, partNumber }) {
+      return `https://private-upload.example/${uploadId}/${storageKey}?partNumber=${partNumber}`;
+    },
+    async completeMultipartUpload(input) { completed.push(input); },
+    async abortMultipartUpload() { assert.fail('upload should not be aborted'); }
+  };
+  const store = createMemoryStore();
+  const app = await createTestApp({ mediaStore, store });
+  t.after(() => app.close());
+  const editor = await tokenFor(app, ['content_editor']);
+  const moderator = await tokenFor(app, ['moderator']);
+
+  const unauthenticated = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    payload: { fileName: 'episode.mp4', contentType: 'video/mp4', size: 16 * 1024 * 1024 }
+  });
+  assert.equal(unauthenticated.statusCode, 401);
+
+  const forbidden = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${moderator}` },
+    payload: { fileName: 'episode.mp4', contentType: 'video/mp4', size: 16 * 1024 * 1024 }
+  });
+  assert.equal(forbidden.statusCode, 403);
+
+  const emptyFile = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { fileName: 'episode.mp4', contentType: 'video/mp4', size: 0 }
+  });
+  assert.equal(emptyFile.statusCode, 400);
+
+  const tooLarge = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { fileName: 'episode.mp4', contentType: 'video/mp4', size: 50 * 1024 * 1024 * 1024 + 1 }
+  });
+  assert.equal(tooLarge.statusCode, 400);
+
+  const unsafe = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { fileName: '../episode.exe', contentType: 'application/x-msdownload', size: 1 }
+  });
+  assert.equal(unsafe.statusCode, 400);
+
+  const missingContent = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { fileName: 'episode.mp4', contentType: 'video/mp4', size: 1, contentId: 'missing-content' }
+  });
+  assert.equal(missingContent.statusCode, 404);
+
+  const init = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { fileName: 'episode-final.mp4', contentType: 'video/mp4', size: 20 * 1024 * 1024, contentId: 'midnight' }
+  });
+  assert.equal(init.statusCode, 201);
+  const started = JSON.parse(init.body);
+  assert.equal(started.asset.status, 'uploading');
+  assert.equal(started.asset.relation, 'source');
+  assert.equal(started.asset.contentId, 'midnight');
+  assert.equal(started.asset.durationMs, null);
+  assert.match(started.asset.storageKey, /^incoming\//);
+  assert.equal(started.partSize, 16 * 1024 * 1024);
+  assert.equal(started.partCount, 2);
+  assert.deepEqual(started.parts.map((part) => part.number), [1, 2]);
+  assert.equal(started.nextPartNumber, null);
+  assert.equal(uploads.length, 1);
+
+  const invalidComplete = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/assets/${started.asset.id}/upload-complete`,
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { parts: [{ number: 1, etag: 'etag-1' }, { number: 1, etag: 'etag-duplicate' }] }
+  });
+  assert.equal(invalidComplete.statusCode, 400);
+
+  const complete = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/assets/${started.asset.id}/upload-complete`,
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { parts: [{ number: 2, etag: 'etag-2' }, { number: 1, etag: 'etag-1' }] }
+  });
+  assert.equal(complete.statusCode, 200);
+  assert.equal(JSON.parse(complete.body).asset.status, 'queued');
+  assert.deepEqual(completed[0].parts, [{ number: 1, etag: 'etag-1' }, { number: 2, etag: 'etag-2' }]);
+  assert.deepEqual(store.listAudit().slice(0, 3).map((entry) => entry.action), ['media.transcode.queue', 'media.upload.complete', 'media.upload.init']);
+
+  const rawSource = await app.inject({ method: 'GET', url: `/v1/media/${started.asset.id}` });
+  assert.equal(rawSource.statusCode, 404);
+});
+
+test('multipart upload part URLs are paged instead of returning thousands at once', async (t) => {
+  const mediaStore = {
+    async createMultipartUpload() { return { uploadId: 'upload-many-parts' }; },
+    async presignUploadPart({ partNumber }) { return `https://private-upload.example/part/${partNumber}`; },
+    async completeMultipartUpload() {},
+    async abortMultipartUpload() {}
+  };
+  const app = await createTestApp({ mediaStore });
+  t.after(() => app.close());
+  const editor = await tokenFor(app, ['content_editor']);
+  const init = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { fileName: 'large-source.webm', contentType: 'video/webm', size: 101 * 16 * 1024 * 1024 }
+  });
+  assert.equal(init.statusCode, 201);
+  const started = JSON.parse(init.body);
+  assert.equal(started.partCount, 101);
+  assert.equal(started.parts.length, 100);
+  assert.equal(started.nextPartNumber, 101);
+  const nextPage = await app.inject({
+    method: 'GET',
+    url: `/v1/admin/assets/${started.asset.id}/upload-parts?from=101&limit=100`,
+    headers: { authorization: `Bearer ${editor}` }
+  });
+  assert.equal(nextPage.statusCode, 200);
+  assert.deepEqual(JSON.parse(nextPage.body).parts.map((part) => part.number), [101]);
+  assert.equal(JSON.parse(nextPage.body).nextPartNumber, null);
+});
+
+test('an editor can abort only an active private multipart upload', async (t) => {
+  const aborted = [];
+  const mediaStore = {
+    async createMultipartUpload() { return { uploadId: 'upload-to-abort' }; },
+    async presignUploadPart() { return 'https://private-upload.example/part'; },
+    async completeMultipartUpload() {},
+    async abortMultipartUpload(input) { aborted.push(input); }
+  };
+  const store = createMemoryStore();
+  const app = await createTestApp({ mediaStore, store });
+  t.after(() => app.close());
+  const editor = await tokenFor(app, ['content_editor']);
+  const init = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { fileName: 'cancel-me.mov', contentType: 'video/quicktime', size: 1 }
+  });
+  const asset = JSON.parse(init.body).asset;
+
+  const abort = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/assets/${asset.id}/upload-abort`,
+    headers: { authorization: `Bearer ${editor}` }
+  });
+  assert.equal(abort.statusCode, 200);
+  const abortedAsset = JSON.parse(abort.body).asset;
+  assert.equal(abortedAsset.status, 'aborted');
+  assert.ok(abortedAsset.abortedAt);
+  assert.equal(abortedAsset.metadata.processingState, 'aborted');
+  assert.deepEqual(aborted, [{ storageKey: asset.storageKey, uploadId: 'upload-to-abort' }]);
+  assert.equal(store.listAudit()[0].action, 'media.upload.abort');
+
+  const retry = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/assets/${asset.id}/upload-abort`,
+    headers: { authorization: `Bearer ${editor}` }
+  });
+  assert.equal(retry.statusCode, 409);
+  const rawSource = await app.inject({ method: 'GET', url: `/v1/media/${asset.id}` });
+  assert.equal(rawSource.statusCode, 404);
+});
+
+test('multipart upload does not start without a persistent media store', async (t) => {
+  const app = await createTestApp();
+  t.after(() => app.close());
+  const editor = await tokenFor(app, ['content_editor']);
+  const init = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/assets/upload-init',
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { fileName: 'episode.mp4', contentType: 'video/mp4', size: 1 }
+  });
+  assert.equal(init.statusCode, 503);
 });
 
 test('temporary demo media is public but restricted to its own prefix', async (t) => {

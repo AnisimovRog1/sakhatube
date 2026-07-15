@@ -25,6 +25,13 @@ const studioDefaults = {
 };
 
 const storageKey = 'sakhatube-studio-demo';
+const tokenKey = 'sakhatube-studio-access-token';
+const posterTones = ['poster-one', 'poster-two', 'poster-three', 'poster-four', 'poster-five'];
+const apiKindByStudioKind = { 'Сериал': 'series', 'Эпизод': 'episode', 'Трейлер': 'trailer', 'Короткое видео': 'clip' };
+const studioKindByApiKind = { series: 'Сериал', episode: 'Эпизод', trailer: 'Трейлер', clip: 'Короткое видео' };
+const apiStatusByStudioStatus = { hidden: 'unpublished' };
+const studioStatusByApiStatus = { unpublished: 'hidden' };
+
 let studio = loadStudio();
 let contentFilter = 'all';
 let commentFilter = 'pending';
@@ -32,6 +39,11 @@ let pendingDeleteId = null;
 let previewMode = 'phone';
 let bannerMediaDraft = null;
 let toastTimer;
+let remoteOverview = null;
+let homeHasUnsavedChanges = false;
+let apiState = { state: 'preview', message: 'Локальный предпросмотр', loading: false };
+let activeUpload = null;
+let abortingUpload = false;
 
 const contentTable = document.querySelector('#content-table');
 const homeOrderGrid = document.querySelector('#home-order-grid');
@@ -42,9 +54,21 @@ const homeLivePreview = document.querySelector('#home-live-preview');
 const contentDialog = document.querySelector('#content-dialog');
 const bannerDialog = document.querySelector('#banner-dialog');
 const confirmDialog = document.querySelector('#confirm-dialog');
+const connectionDialog = document.querySelector('#connection-dialog');
 const contentForm = document.querySelector('#content-form');
 const bannerForm = document.querySelector('#banner-form');
+const connectionForm = document.querySelector('#connection-form');
 const studioToast = document.querySelector('#studio-toast');
+const connectionBadge = document.querySelector('#studio-connection');
+const uploadInput = document.querySelector('#video-upload');
+const uploadContentField = document.querySelector('#upload-content-field');
+const uploadContentSelect = document.querySelector('#video-upload-content');
+const uploadTransfer = document.querySelector('#upload-transfer');
+const uploadTransferTitle = document.querySelector('#upload-transfer-title');
+const uploadTransferCopy = document.querySelector('#upload-transfer-copy');
+const uploadTransferProgress = document.querySelector('#upload-transfer-progress');
+const uploadTransferPercent = document.querySelector('#upload-transfer-percent');
+const uploadCancelButton = document.querySelector('#upload-cancel');
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -62,7 +86,36 @@ function loadStudio() {
   }
 }
 
+function getAccessToken() {
+  try {
+    return sessionStorage.getItem(tokenKey) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setAccessToken(token) {
+  try {
+    sessionStorage.setItem(tokenKey, token);
+  } catch {
+    throw new Error('Браузер не позволил сохранить сессию Studio. Разреши session storage и повтори попытку.');
+  }
+}
+
+function clearAccessToken() {
+  try {
+    sessionStorage.removeItem(tokenKey);
+  } catch {
+    // The visible state is still reset even if the browser storage is unavailable.
+  }
+}
+
+function isApiMode() {
+  return Boolean(getAccessToken());
+}
+
 function saveStudio() {
+  if (isApiMode()) return;
   localStorage.setItem(storageKey, JSON.stringify(studio));
 }
 
@@ -71,11 +124,14 @@ function escapeHTML(value) {
 }
 
 function compact(value) {
-  return new Intl.NumberFormat('ru-RU', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  return new Intl.NumberFormat('ru-RU', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value) || 0);
 }
 
 function statusLabel(status) {
-  return { published: 'Опубликовано', draft: 'Черновик', hidden: 'Скрыто' }[status] || status;
+  return {
+    published: 'Опубликовано', draft: 'Черновик', hidden: 'Скрыто', review: 'На проверке',
+    scheduled: 'По расписанию', unpublished: 'Снято с показа', archived: 'В архиве'
+  }[status] || status;
 }
 
 function accessLabel(access, price = 0) {
@@ -90,6 +146,82 @@ function contentById(id) {
 
 function bannerById(id) {
   return studio.banners.find((item) => item.id === id);
+}
+
+function posterFor(id) {
+  let hash = 0;
+  for (const character of String(id)) hash = ((hash << 5) - hash) + character.charCodeAt(0);
+  return posterTones[Math.abs(hash) % posterTones.length];
+}
+
+function relativeTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'недавно';
+  const diff = Math.max(0, Date.now() - date.getTime());
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return 'только что';
+  if (minutes < 60) return `${minutes} мин. назад`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ч. назад`;
+  return `${Math.floor(hours / 24)} дн. назад`;
+}
+
+function initials(name) {
+  return String(name || 'Гость').trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+}
+
+function apiStatusFromStudio(status) {
+  return apiStatusByStudioStatus[status] || status;
+}
+
+function studioStatusFromApi(status) {
+  return studioStatusByApiStatus[status] || status;
+}
+
+function normalizeApiContent(item) {
+  const previous = contentById(item.id);
+  return {
+    id: item.id,
+    title: item.title,
+    kind: studioKindByApiKind[item.kind] || item.kind,
+    apiKind: item.kind,
+    genre: item.genre,
+    synopsis: item.synopsis || '',
+    episodes: item.episodes || 1,
+    status: studioStatusFromApi(item.status),
+    apiStatus: item.status,
+    access: item.access || 'free',
+    price: previous?.price || 0,
+    poster: previous?.poster || posterFor(item.id),
+    views: Number(item.views) || 0,
+    likes: Number(item.likes) || 0,
+    comments: previous?.comments || 0,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt
+  };
+}
+
+function normalizeApiComment(item) {
+  return {
+    id: item.id,
+    author: item.authorName || 'Гость',
+    initials: initials(item.authorName),
+    text: item.text,
+    contentId: item.contentId,
+    content: contentById(item.contentId)?.title || 'Контент',
+    time: relativeTime(item.createdAt),
+    status: item.status,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt
+  };
+}
+
+function refreshCommentMetadata() {
+  studio.comments = studio.comments.map((comment) => ({ ...comment, content: contentById(comment.contentId)?.title || comment.content || 'Контент' }));
+  studio.content = studio.content.map((item) => {
+    const count = studio.comments.filter((comment) => comment.contentId === item.id && comment.status !== 'deleted').length;
+    return { ...item, comments: isApiMode() ? count : count || item.comments || 0 };
+  });
 }
 
 function isSafeBannerMedia(media) {
@@ -123,7 +255,7 @@ function renderBannerMediaState() {
     preview.src = bannerMediaDraft.src;
     preview.hidden = false;
     name.textContent = bannerMediaDraft.name || 'Изображение баннера';
-    meta.textContent = `Готово для витрины · ${formatBytes(bannerMediaDraft.size)}`;
+    meta.textContent = `Готово для локального предпросмотра · ${formatBytes(bannerMediaDraft.size)}`;
     remove.hidden = false;
     return;
   }
@@ -170,7 +302,7 @@ function showToast(message) {
   studioToast.textContent = message;
   studioToast.classList.add('is-visible');
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => studioToast.classList.remove('is-visible'), 2800);
+  toastTimer = window.setTimeout(() => studioToast.classList.remove('is-visible'), 3200);
 }
 
 function openDialog(dialog) {
@@ -181,24 +313,384 @@ function closeDialog(dialog) {
   if (dialog.open) dialog.close();
 }
 
+function apiError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+async function apiRequest(path, options = {}) {
+  const token = getAccessToken();
+  if (!token) throw apiError('Сначала подключи токен Studio API.', 401);
+  const headers = new Headers(options.headers || {});
+  headers.set('accept', 'application/json');
+  headers.set('authorization', `Bearer ${token}`);
+  if (options.body !== undefined) headers.set('content-type', 'application/json');
+  let response;
+  try {
+    response = await fetch(path, { ...options, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
+  } catch {
+    throw apiError('Нет связи с Studio API. Проверь интернет или адрес SakhaTube.', 0);
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw apiError(payload.message || `Studio API вернул ошибку ${response.status}.`, response.status);
+  return payload;
+}
+
+function normalizeUploadPlan(payload, file) {
+  const assetId = payload?.asset?.id;
+  const partSize = Number(payload?.partSize);
+  const parts = Array.isArray(payload?.parts) ? payload.parts : [];
+  if (!assetId || !Number.isInteger(partSize) || partSize < 1 || !parts.length) {
+    throw apiError('Studio API вернул неполный план загрузки. Файл не был передан.', 0);
+  }
+  const expectedParts = Math.ceil(file.size / partSize);
+  if (parts.length !== expectedParts) {
+    throw apiError('Studio API вернул неверное количество частей. Файл не был передан.', 0);
+  }
+  const orderedParts = [...parts].sort((left, right) => Number(left.number) - Number(right.number));
+  const valid = orderedParts.every((part, index) => Number(part.number) === index + 1 && typeof part.url === 'string' && /^https:\/\//i.test(part.url));
+  if (!valid) throw apiError('Studio API вернул недействительные адреса защищённой загрузки. Файл не был передан.', 0);
+  return { assetId, partSize, parts: orderedParts };
+}
+
+function updateUploadTransfer({ title, copy, percent = 0, cancellable = false, hidden = false } = {}) {
+  uploadTransfer.hidden = hidden;
+  if (hidden) return;
+  uploadTransferTitle.textContent = title || 'Загрузка видео';
+  uploadTransferCopy.textContent = copy || '';
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  uploadTransferProgress.value = safePercent;
+  uploadTransferProgress.textContent = `${safePercent}%`;
+  uploadTransferPercent.textContent = `${safePercent}%`;
+  uploadCancelButton.hidden = !cancellable;
+  uploadCancelButton.disabled = !cancellable;
+}
+
+function uploadProgressPercent(upload) {
+  if (!upload?.fileSize) return 0;
+  const loaded = [...upload.partProgress.values()].reduce((sum, value) => sum + value, 0);
+  return Math.min(99, Math.round((loaded / upload.fileSize) * 100));
+}
+
+function updateUploadRecord(upload, changes) {
+  const index = studio.uploads.findIndex((item) => item.id === upload.recordId);
+  if (index < 0) return;
+  studio.uploads[index] = { ...studio.uploads[index], ...changes };
+  renderUploads();
+}
+
+async function abortActiveUpload() {
+  if (!activeUpload) return;
+  const upload = activeUpload;
+  upload.cancelled = true;
+  upload.requests.forEach((request) => request.abort());
+  activeUpload = null;
+  abortingUpload = true;
+  updateUploadRecord(upload, {
+    status: upload.assetId ? 'Останавливаем загрузку и закрываем серверный черновик…' : 'Загрузка остановлена до создания серверного черновика.',
+    tone: 'stopped',
+    progress: uploadProgressPercent(upload)
+  });
+  updateUploadTransfer({
+    title: 'Загрузка остановлена',
+    copy: upload.assetId ? 'Передача частей прекращена. Подтверждаем закрытие серверного черновика…' : 'Передача частей прекращена до создания серверного черновика.',
+    percent: uploadProgressPercent(upload),
+    hidden: false
+  });
+  renderConnectionState();
+  if (!upload.assetId) {
+    abortingUpload = false;
+    renderConnectionState();
+    showToast('Загрузка остановлена до создания серверного черновика.');
+    return;
+  }
+  try {
+    await apiRequest(`/v1/admin/assets/${encodeURIComponent(upload.assetId)}/upload-abort`, { method: 'POST', body: {} });
+    updateUploadRecord(upload, {
+      status: 'Загрузка остановлена. Серверный черновик закрыт.',
+      tone: 'stopped',
+      progress: uploadProgressPercent(upload)
+    });
+    updateUploadTransfer({
+      title: 'Загрузка остановлена',
+      copy: 'Передача частей прекращена. Сервер подтвердил закрытие черновика.',
+      percent: uploadProgressPercent(upload),
+      hidden: false
+    });
+    showToast('Загрузка остановлена. Серверный черновик закрыт.');
+  } catch (error) {
+    updateUploadRecord(upload, {
+      status: `Загрузка остановлена в браузере. Сервер не подтвердил закрытие черновика: ${error.message || 'попробуй позже.'}`,
+      tone: 'error',
+      progress: uploadProgressPercent(upload)
+    });
+    updateUploadTransfer({
+      title: 'Загрузка остановлена в браузере',
+      copy: `Сервер не подтвердил закрытие черновика: ${error.message || 'попробуй позже.'}`,
+      percent: uploadProgressPercent(upload),
+      hidden: false
+    });
+    showToast('Загрузка остановлена, но сервер не подтвердил закрытие черновика.');
+  } finally {
+    abortingUpload = false;
+    renderConnectionState();
+  }
+}
+
+function putUploadPart(upload, part, blob) {
+  return new Promise((resolve, reject) => {
+    if (upload.cancelled || upload.failed) { reject(apiError('Загрузка остановлена.', 0)); return; }
+    const request = new XMLHttpRequest();
+    upload.requests.add(request);
+    request.open('PUT', part.url, true);
+    request.upload.onprogress = (event) => {
+      if (!event.lengthComputable || upload.cancelled || upload.failed) return;
+      upload.partProgress.set(part.number, event.loaded);
+      const percent = uploadProgressPercent(upload);
+      updateUploadRecord(upload, { status: `Передача в защищённое хранилище · ${percent}%`, tone: 'processing', progress: percent });
+      updateUploadTransfer({
+        title: 'Передаём видео',
+        copy: 'Файл идёт напрямую в защищённое хранилище. Он ещё не опубликован.',
+        percent,
+        cancellable: true
+      });
+    };
+    request.onerror = () => reject(apiError('Не удалось передать одну из частей файла в защищённое хранилище.', 0));
+    request.onabort = () => reject(apiError('Загрузка остановлена.', 0));
+    request.onload = () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(apiError(`Хранилище не приняло часть файла (${request.status}).`, request.status));
+        return;
+      }
+      const etag = request.getResponseHeader('etag');
+      if (!etag) {
+        reject(apiError('Хранилище не вернуло ETag для части файла. Проверь CORS и повтори загрузку.', 0));
+        return;
+      }
+      upload.partProgress.set(part.number, blob.size);
+      resolve({ number: part.number, etag: etag.replace(/^"|"$/g, '') });
+    };
+    request.onloadend = () => upload.requests.delete(request);
+    request.send(blob);
+  });
+}
+
+async function uploadPartsWithLimit(upload, plan, file) {
+  const results = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (!upload.cancelled && !upload.failed) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= plan.parts.length) return;
+      const part = plan.parts[index];
+      const start = (part.number - 1) * plan.partSize;
+      const blob = file.slice(start, Math.min(file.size, start + plan.partSize));
+      const result = await putUploadPart(upload, part, blob);
+      results.push(result);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, plan.parts.length) }, () => worker()));
+  if (upload.cancelled) throw apiError('Загрузка остановлена.', 0);
+  return results.sort((left, right) => left.number - right.number);
+}
+
+async function closeLateInitializedUpload(upload) {
+  abortingUpload = true;
+  updateUploadRecord(upload, {
+    status: 'Загрузка остановлена. Закрываем серверный черновик…',
+    tone: 'stopped',
+    progress: uploadProgressPercent(upload)
+  });
+  updateUploadTransfer({
+    title: 'Загрузка остановлена',
+    copy: 'Studio успела создать черновик. Подтверждаем его закрытие на сервере…',
+    percent: uploadProgressPercent(upload),
+    hidden: false
+  });
+  try {
+    await apiRequest(`/v1/admin/assets/${encodeURIComponent(upload.assetId)}/upload-abort`, { method: 'POST', body: {} });
+    updateUploadRecord(upload, {
+      status: 'Загрузка остановлена. Серверный черновик закрыт.',
+      tone: 'stopped',
+      progress: uploadProgressPercent(upload)
+    });
+    updateUploadTransfer({
+      title: 'Загрузка остановлена',
+      copy: 'Передача частей прекращена. Сервер подтвердил закрытие черновика.',
+      percent: uploadProgressPercent(upload),
+      hidden: false
+    });
+  } catch (error) {
+    updateUploadRecord(upload, {
+      status: `Загрузка остановлена в браузере. Сервер не подтвердил закрытие черновика: ${error.message || 'попробуй позже.'}`,
+      tone: 'error',
+      progress: uploadProgressPercent(upload)
+    });
+    updateUploadTransfer({
+      title: 'Загрузка остановлена в браузере',
+      copy: `Сервер не подтвердил закрытие черновика: ${error.message || 'попробуй позже.'}`,
+      percent: uploadProgressPercent(upload),
+      hidden: false
+    });
+  } finally {
+    abortingUpload = false;
+    renderConnectionState();
+  }
+}
+
+async function uploadVideoToStudio(file) {
+  if (!file || !/^video\//i.test(file.type)) throw apiError('Выбери видеофайл.');
+  if (!file.size) throw apiError('Пустой файл нельзя отправить.');
+  if (activeUpload || abortingUpload) { showToast('Дождись завершения текущей операции с загрузкой.'); return; }
+
+  const recordId = `remote-upload-${Date.now()}`;
+  const upload = {
+    recordId,
+    fileSize: file.size,
+    partProgress: new Map(),
+    requests: new Set(),
+    cancelled: false
+  };
+  activeUpload = upload;
+  studio.uploads.unshift({ id: recordId, name: file.name, size: formatBytes(file.size), status: 'Подготовка защищённой загрузки', tone: 'processing', progress: 0, source: 'remote' });
+  renderUploads();
+  renderConnectionState();
+  updateUploadTransfer({ title: 'Подготавливаем загрузку', copy: 'Получаем одноразовый план передачи. Файл ещё не отправлен.', percent: 0, cancellable: true });
+  try {
+    const contentId = uploadContentSelect.value || undefined;
+    const init = await apiRequest('/v1/admin/assets/upload-init', {
+      method: 'POST',
+      body: { fileName: file.name, contentType: file.type, size: file.size, ...(contentId ? { contentId } : {}) }
+    });
+    const plan = normalizeUploadPlan(init, file);
+    upload.assetId = plan.assetId;
+    if (upload.cancelled) {
+      await closeLateInitializedUpload(upload);
+      throw apiError('Загрузка остановлена.', 0);
+    }
+    updateUploadRecord(upload, { status: 'Передача в защищённое хранилище · 0%', tone: 'processing', progress: 0, assetId: plan.assetId });
+    updateUploadTransfer({ title: 'Передаём видео', copy: 'Файл идёт напрямую в защищённое хранилище. Он ещё не опубликован.', percent: 0, cancellable: true });
+    const parts = await uploadPartsWithLimit(upload, plan, file);
+    if (upload.cancelled) throw apiError('Загрузка остановлена.', 0);
+    updateUploadRecord(upload, { status: 'Подтверждаем приём файла', tone: 'processing', progress: 100 });
+    updateUploadTransfer({ title: 'Подтверждаем приём', copy: 'Studio передаёт список частей. Публикация не выполняется.', percent: 100, cancellable: false });
+    await apiRequest(`/v1/admin/assets/${encodeURIComponent(plan.assetId)}/upload-complete`, { method: 'POST', body: { parts } });
+    if (upload.cancelled) throw apiError('Загрузка остановлена.', 0);
+    updateUploadRecord(upload, { status: 'Файл принят. Очередь обработки: ожидает.', tone: 'queued', progress: 100 });
+    updateUploadTransfer({ title: 'Файл принят', copy: 'Очередь обработки: ожидает. Файл не опубликован.', percent: 100, cancellable: false });
+    showToast('Файл принят. Очередь обработки: ожидает.');
+  } catch (error) {
+    if (!upload.cancelled) {
+      upload.failed = true;
+      upload.requests.forEach((request) => request.abort());
+      updateUploadRecord(upload, { status: error.message || 'Не удалось передать файл.', tone: 'error', progress: uploadProgressPercent(upload) });
+      updateUploadTransfer({ title: 'Загрузка не завершена', copy: error.message || 'Не удалось передать файл.', percent: uploadProgressPercent(upload), cancellable: false });
+      showToast(error.message || 'Не удалось передать файл.');
+    }
+  } finally {
+    if (activeUpload === upload) activeUpload = null;
+    renderConnectionState();
+  }
+}
+
+function renderConnectionState() {
+  const hasToken = isApiMode();
+  connectionBadge.className = `connection-badge ${apiState.state === 'connected' ? 'is-connected' : apiState.state === 'loading' ? 'is-loading' : apiState.state === 'error' ? 'is-error' : 'is-preview'}`;
+  connectionBadge.textContent = apiState.message;
+  document.querySelectorAll('[data-action="connect-api"]').forEach((button) => { button.textContent = hasToken ? 'Управлять API' : 'Подключить API'; });
+  document.documentElement.toggleAttribute('data-studio-loading', apiState.loading);
+  document.body.setAttribute('aria-busy', apiState.loading || activeUpload ? 'true' : 'false');
+  const remote = hasToken;
+  document.querySelector('#upload-phase-note').textContent = remote
+    ? 'Защищённый режим: видео передаётся напрямую в приватное хранилище. После приёма оно попадёт в очередь обработки и не будет опубликовано автоматически.'
+    : 'Локальная очередь: файл не покидает устройство и не сохраняется в Studio. Для проверки остаётся только название и размер файла в этом браузере.';
+  uploadContentField.hidden = !remote;
+  document.querySelectorAll('[data-action="upload"]').forEach((button) => {
+    button.disabled = Boolean(activeUpload) || abortingUpload || apiState.loading;
+    button.title = activeUpload || abortingUpload ? 'Идёт другая операция с загрузкой. Дождись её завершения.' : '';
+  });
+  uploadContentSelect.disabled = Boolean(activeUpload) || abortingUpload || !remote;
+  document.querySelectorAll('[data-action="new-banner"]').forEach((button) => {
+    button.disabled = remote;
+    button.title = remote ? 'Публикация баннеров будет подключена следующим серверным этапом.' : '';
+  });
+}
+
+function setConnectionError(message = '') {
+  const target = document.querySelector('#connection-error');
+  target.textContent = message;
+  target.hidden = !message;
+}
+
+async function loadRemoteStudio({ silent = false } = {}) {
+  if (!isApiMode() || apiState.loading) return false;
+  apiState = { state: 'loading', message: 'Studio API · синхронизация…', loading: true };
+  renderConnectionState();
+  const [overviewResult, contentResult, homeResult, commentsResult] = await Promise.allSettled([
+    apiRequest('/v1/admin/overview'),
+    apiRequest('/v1/admin/content'),
+    apiRequest('/v1/admin/home/slots'),
+    apiRequest('/v1/admin/comments')
+  ]);
+  const allResults = [overviewResult, contentResult, homeResult, commentsResult];
+  const rejected = allResults.filter((result) => result.status === 'rejected');
+  const accessError = rejected.find((result) => result.reason?.status === 401);
+  if (contentResult.status === 'fulfilled') studio.content = contentResult.value.items.map(normalizeApiContent);
+  if (homeResult.status === 'fulfilled') studio.homeOrder = homeResult.value.items.map((item) => item.id);
+  if (commentsResult.status === 'fulfilled') studio.comments = commentsResult.value.items.map(normalizeApiComment);
+  refreshCommentMetadata();
+  if (overviewResult.status === 'fulfilled') remoteOverview = overviewResult.value;
+  homeHasUnsavedChanges = false;
+  if (contentResult.status === 'rejected' && overviewResult.status === 'rejected') {
+    apiState = { state: 'error', message: accessError ? 'Studio API · токен недействителен' : 'Studio API · нет связи', loading: false };
+    renderConnectionState();
+    renderStudio();
+    if (!silent) showToast(accessError ? 'Токен не принят. Вставь новый токен или отключи API.' : 'Не удалось загрузить данные Studio API.');
+    return false;
+  }
+  const restricted = rejected.length;
+  apiState = { state: 'connected', message: restricted ? 'Studio API · частичный доступ' : 'Studio API · подключено', loading: false };
+  renderConnectionState();
+  renderStudio();
+  if (restricted && !silent) showToast('Часть разделов недоступна для этой роли. Проверь права токена.');
+  return true;
+}
+
 function renderDashboard() {
-  const totalViews = studio.content.reduce((sum, item) => sum + item.views, 0);
-  const totalLikes = studio.content.reduce((sum, item) => sum + item.likes, 0);
-  const totalComments = studio.comments.filter((item) => item.status !== 'hidden').length + studio.content.reduce((sum, item) => sum + item.comments, 0);
-  const published = studio.content.filter((item) => item.status === 'published').length;
-  const pending = studio.comments.filter((item) => item.status === 'pending').length;
-  document.querySelector('#metrics-grid').innerHTML = [
-    { label: 'Просмотры', value: compact(Math.round(totalViews * .032)), delta: '+12,4% к прошлой неделе' },
-    { label: 'Реакции', value: compact(totalLikes), delta: '+8,1% к прошлой неделе' },
-    { label: 'Комментарии', value: compact(totalComments), delta: `${pending} ждут проверки`, neutral: pending === 0 },
-    { label: 'В эфире', value: `${published} сериалов`, delta: 'Контент доступен зрителям', neutral: true }
-  ].map((metric) => `<article class="metric-card"><p>${metric.label}</p><strong>${metric.value}</strong><small class="${metric.neutral ? 'is-neutral' : ''}">${metric.delta}</small></article>`).join('');
+  const isRemote = Boolean(remoteOverview && isApiMode() && apiState.state === 'connected');
+  const totalViews = isRemote ? remoteOverview.totalViews : studio.content.reduce((sum, item) => sum + item.views, 0);
+  const totalLikes = isRemote ? remoteOverview.totalLikes : studio.content.reduce((sum, item) => sum + item.likes, 0);
+  const totalComments = isRemote ? remoteOverview.pendingComments : studio.comments.filter((item) => item.status !== 'hidden').length + studio.content.reduce((sum, item) => sum + item.comments, 0);
+  const published = isRemote ? remoteOverview.published : studio.content.filter((item) => item.status === 'published').length;
+  const pending = isRemote ? remoteOverview.pendingComments : studio.comments.filter((item) => item.status === 'pending').length;
+  const metrics = isRemote
+    ? [
+      { label: 'Просмотры', value: compact(totalViews), delta: 'По данным сервера', neutral: true },
+      { label: 'Реакции', value: compact(totalLikes), delta: 'По данным сервера', neutral: true },
+      { label: 'На проверке', value: compact(totalComments), delta: `${pending} ждут проверки`, neutral: pending === 0 },
+      { label: 'В эфире', value: `${published} карточек`, delta: 'Контент доступен зрителям', neutral: true }
+    ]
+    : [
+      { label: 'Просмотры', value: compact(Math.round(totalViews * .032)), delta: 'Предпросмотр данных', neutral: true },
+      { label: 'Реакции', value: compact(totalLikes), delta: 'Предпросмотр данных', neutral: true },
+      { label: 'Комментарии', value: compact(totalComments), delta: `${pending} ждут проверки`, neutral: pending === 0 },
+      { label: 'В эфире', value: `${published} сериалов`, delta: 'Предпросмотр витрины', neutral: true }
+    ];
+  document.querySelector('#metrics-grid').innerHTML = metrics.map((metric) => `<article class="metric-card"><p>${metric.label}</p><strong>${metric.value}</strong><small class="${metric.neutral ? 'is-neutral' : ''}">${metric.delta}</small></article>`).join('');
   document.querySelector('#chart-total').textContent = compact(totalViews);
   document.querySelector('#comment-badge').textContent = pending;
+  const overviewCard = document.querySelector('#overview-card');
+  const note = document.querySelector('#overview-note');
+  overviewCard.classList.toggle('is-live', isRemote);
+  document.querySelector('#chart-title').textContent = isRemote ? 'Сводка Studio API' : 'Динамика за неделю';
+  note.hidden = !isRemote;
+  note.textContent = isRemote ? `Первые кадры: ${compact(remoteOverview.firstFrameEvents)} · буферизаций: ${compact(remoteOverview.bufferStartEvents)}. Недельный график появится с аналитическим хранилищем.` : '';
   const attention = studio.comments.filter((item) => item.status === 'pending').slice(0, 3);
   document.querySelector('#attention-list').innerHTML = attention.length ? attention.map((comment) => `<div class="attention-item"><i></i><div><strong>${escapeHTML(comment.author)}</strong><span>${escapeHTML(comment.text)}</span></div><button data-view="comments" type="button">Проверить</button></div>`).join('') : '<div class="attention-item"><i style="background:var(--green)"></i><div><strong>Всё чисто</strong><span>Новых комментариев нет</span></div></div>';
-  const top = studio.content.filter((item) => item.status === 'published').sort((a, b) => b.views - a.views).slice(0, 3);
-  document.querySelector('#top-content-list').innerHTML = top.map((item) => `<article class="top-content-item"><div class="mini-poster ${item.poster}"></div><div><h4>${escapeHTML(item.title)}</h4><p>${item.genre} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}</p><strong>${compact(item.views)} просмотров</strong></div></article>`).join('') || '<p class="empty-copy">Пока нет опубликованного контента.</p>';
+  const top = isRemote ? remoteOverview.topContent.map(normalizeApiContent) : studio.content.filter((item) => item.status === 'published').sort((a, b) => b.views - a.views).slice(0, 3);
+  document.querySelector('#top-content-list').innerHTML = top.map((item) => `<article class="top-content-item"><div class="mini-poster ${item.poster}"></div><div><h4>${escapeHTML(item.title)}</h4><p>${escapeHTML(item.genre)} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}</p><strong>${compact(item.views)} просмотров</strong></div></article>`).join('') || '<p class="empty-copy">Пока нет опубликованного контента.</p>';
 }
 
 function renderContent() {
@@ -208,13 +700,15 @@ function renderContent() {
     return matchesFilter && `${item.title} ${item.genre} ${item.kind}`.toLocaleLowerCase().includes(query);
   });
   const head = '<div class="table-head"><span>КОНТЕНТ</span><span>СТАТУС</span><span>ДОСТУП</span><span>ПРОСМОТРЫ</span><span>РЕАКЦИИ</span><span>КОММЕНТАРИИ</span><span></span></div>';
-  const rows = visible.map((item) => `<article class="content-row"><div class="content-title"><div class="content-poster ${item.poster}"></div><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.kind)} · ${escapeHTML(item.genre)} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}</small></div></div><div><span class="status ${item.status}">${statusLabel(item.status)}</span></div><span class="access ${item.access}">${accessLabel(item.access, item.price)}</span><span class="table-value"><strong>${compact(item.views)}</strong>всего</span><span class="table-value"><strong>${compact(item.likes)}</strong>нравится</span><span class="table-value"><strong>${compact(item.comments)}</strong>всего</span><div class="row-menu"><button data-action="edit-content" data-id="${item.id}" type="button">Изменить</button><button data-action="delete-content" data-id="${item.id}" type="button">Удалить</button></div></article>`).join('');
+  const rows = visible.map((item) => `<article class="content-row"><div class="content-title"><div class="content-poster ${item.poster}"></div><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.kind)} · ${escapeHTML(item.genre)} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}</small></div></div><div><span class="status ${item.status}">${statusLabel(item.status)}</span></div><span class="access ${item.access}">${accessLabel(item.access, item.price)}</span><span class="table-value"><strong>${compact(item.views)}</strong>всего</span><span class="table-value"><strong>${compact(item.likes)}</strong>нравится</span><span class="table-value"><strong>${compact(item.comments)}</strong>всего</span><div class="row-menu"><button data-action="edit-content" data-id="${escapeHTML(item.id)}" type="button">Изменить</button><button data-action="delete-content" data-id="${escapeHTML(item.id)}" type="button">${isApiMode() ? 'В архив' : 'Удалить'}</button></div></article>`).join('');
   contentTable.innerHTML = head + (rows || '<div class="empty-table">Ничего не найдено. Сбрось фильтр или добавь новый контент.</div>');
 }
 
 function renderHomeOrder() {
   const items = studio.homeOrder.map(contentById).filter(Boolean);
-  homeOrderGrid.innerHTML = items.map((item, index) => `<article class="order-card"><div class="order-poster ${item.poster}"><span class="order-number">${index + 1}</span></div><div class="order-info"><h3>${escapeHTML(item.title)}</h3><p>${escapeHTML(item.genre)} · ${accessLabel(item.access, item.price)}</p><div class="reorder-actions"><button data-action="move-home" data-id="${item.id}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''}>↑ Выше</button><button data-action="move-home" data-id="${item.id}" data-direction="down" type="button" ${index === items.length - 1 ? 'disabled' : ''}>↓ Ниже</button></div></div></article>`).join('') || '<p class="empty-copy">Добавь сериал, чтобы собрать витрину.</p>';
+  homeOrderGrid.innerHTML = items.map((item, index) => `<article class="order-card"><div class="order-poster ${item.poster}"><span class="order-number">${index + 1}</span></div><div class="order-info"><h3>${escapeHTML(item.title)}</h3><p>${escapeHTML(item.genre)} · ${accessLabel(item.access, item.price)}</p><div class="reorder-actions"><button data-action="move-home" data-id="${escapeHTML(item.id)}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''}>↑ Выше</button><button data-action="move-home" data-id="${escapeHTML(item.id)}" data-direction="down" type="button" ${index === items.length - 1 ? 'disabled' : ''}>↓ Ниже</button></div></div></article>`).join('') || '<p class="empty-copy">Добавь сериал, чтобы собрать витрину.</p>';
+  const save = document.querySelector('[data-action="save-home"]');
+  save.textContent = homeHasUnsavedChanges ? 'Сохранить изменения •' : 'Сохранить изменения';
 }
 
 function renderHomePreview() {
@@ -231,21 +725,40 @@ function renderHomePreview() {
 }
 
 function renderBanners() {
+  const phaseNotice = isApiMode() ? '<p class="phase-notice">Баннеры и их изображения пока работают только в локальном предпросмотре. Их публикация будет подключена после серверной модели витрины и медиазагрузки.</p>' : '';
   const banners = studio.banners;
-  bannerList.innerHTML = banners.map((banner, index) => {
+  bannerList.innerHTML = phaseNotice + (banners.map((banner, index) => {
     const linked = contentById(banner.contentId);
-    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}" data-banner-art="${escapeHTML(banner.id)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${banner.id}" type="button">Изменить</button><button data-action="toggle-banner" data-id="${banner.id}" type="button">${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${banner.id}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${banner.id}" data-direction="down" type="button" ${index === banners.length - 1 ? 'disabled' : ''} aria-label="Опустить баннер">↓</button></div></div></article>`;
-  }).join('') || '<p class="empty-copy">Добавь первый баннер, чтобы собрать верхний экран.</p>';
+    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}" data-banner-art="${escapeHTML(banner.id)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${escapeHTML(banner.id)}" type="button" ${isApiMode() ? 'disabled' : ''}>Изменить</button><button data-action="toggle-banner" data-id="${escapeHTML(banner.id)}" type="button" ${isApiMode() ? 'disabled' : ''}>${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="up" type="button" ${index === 0 || isApiMode() ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="down" type="button" ${index === banners.length - 1 || isApiMode() ? 'disabled' : ''} aria-label="Опустить баннер">↓</button></div></div></article>`;
+  }).join('') || '<p class="empty-copy">Добавь первый баннер, чтобы собрать верхний экран.</p>');
   studio.banners.forEach((banner) => applyBannerMedia(bannerList.querySelector(`[data-banner-art="${banner.id}"]`), banner.media));
+}
+
+function commentStatusLabel(status) {
+  return { pending: 'на проверке', approved: 'опубликован', hidden: 'скрыт', deleted: 'удалён' }[status] || status;
 }
 
 function renderComments() {
   const visible = studio.comments.filter((comment) => commentFilter === 'all' || comment.status === commentFilter);
-  commentList.innerHTML = visible.map((comment) => `<article class="comment-card"><span class="comment-avatar">${escapeHTML(comment.initials)}</span><div class="comment-copy"><h3>${escapeHTML(comment.author)}<span>${escapeHTML(comment.time)}</span></h3><p>${escapeHTML(comment.text)}</p><small>${escapeHTML(comment.content)} · ${comment.status === 'pending' ? 'на проверке' : comment.status === 'hidden' ? 'скрыт' : 'опубликован'}</small></div><div class="comment-actions">${comment.status !== 'approved' ? `<button data-action="approve-comment" data-id="${comment.id}" type="button">Одобрить</button>` : ''}${comment.status !== 'hidden' ? `<button data-action="hide-comment" data-id="${comment.id}" type="button">Скрыть</button>` : ''}<button class="is-danger" data-action="delete-comment" data-id="${comment.id}" type="button">Удалить</button></div></article>`).join('') || '<article class="comment-card"><span class="comment-avatar">✓</span><div class="comment-copy"><h3>Нет комментариев</h3><p>В этой папке пока пусто.</p></div></article>';
+  commentList.innerHTML = visible.map((comment) => `<article class="comment-card ${comment.status === 'deleted' ? 'is-deleted' : ''}"><span class="comment-avatar">${escapeHTML(comment.initials)}</span><div class="comment-copy"><h3>${escapeHTML(comment.author)}<span>${escapeHTML(comment.time)}</span></h3><p>${escapeHTML(comment.text)}</p><small>${escapeHTML(comment.content)} · ${commentStatusLabel(comment.status)}</small></div><div class="comment-actions">${comment.status !== 'approved' && comment.status !== 'deleted' ? `<button data-action="approve-comment" data-id="${escapeHTML(comment.id)}" type="button">Одобрить</button>` : ''}${comment.status !== 'hidden' && comment.status !== 'deleted' ? `<button data-action="hide-comment" data-id="${escapeHTML(comment.id)}" type="button">Скрыть</button>` : ''}${comment.status !== 'deleted' ? `<button class="is-danger" data-action="delete-comment" data-id="${escapeHTML(comment.id)}" type="button">Удалить</button>` : ''}</div></article>`).join('') || '<article class="comment-card"><span class="comment-avatar">✓</span><div class="comment-copy"><h3>Нет комментариев</h3><p>В этой папке пока пусто.</p></div></article>';
 }
 
 function renderUploads() {
-  uploadList.innerHTML = studio.uploads.map((upload) => `<article class="upload-item"><span>▶</span><div><strong>${escapeHTML(upload.name)}</strong><small>${escapeHTML(upload.size)} · ${escapeHTML(upload.status)}</small></div><span class="status ${upload.tone === 'ready' ? 'published' : 'draft'}">${upload.tone === 'ready' ? 'Готово' : 'В работе'}</span></article>`).join('') || '<p class="empty-copy">Файлов пока нет.</p>';
+  const selectedContent = uploadContentSelect.value;
+  uploadContentSelect.innerHTML = `<option value="">Привязать позже</option>${studio.content.map((item) => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.title)} · ${escapeHTML(statusLabel(item.status))}</option>`).join('')}`;
+  if ([...uploadContentSelect.options].some((option) => option.value === selectedContent)) uploadContentSelect.value = selectedContent;
+  const tone = (upload) => {
+    if (upload.tone === 'ready') return { className: 'published', label: 'Готово' };
+    if (upload.tone === 'queued') return { className: 'queued', label: 'В очереди' };
+    if (upload.tone === 'error') return { className: 'error', label: 'Ошибка' };
+    if (upload.tone === 'stopped') return { className: 'stopped', label: 'Остановлено' };
+    return { className: 'draft', label: 'В работе' };
+  };
+  uploadList.innerHTML = studio.uploads.map((upload) => {
+    const state = tone(upload);
+    const hasProgress = Number.isFinite(upload.progress);
+    return `<article class="upload-item"><span aria-hidden="true">▶</span><div><strong>${escapeHTML(upload.name)}</strong><small>${escapeHTML(upload.size)} · ${escapeHTML(upload.status)}</small>${hasProgress ? `<progress class="upload-item-progress" aria-label="Передача ${escapeHTML(upload.name)}" max="100" value="${Math.max(0, Math.min(100, Number(upload.progress)))}">${Math.round(Number(upload.progress))}%</progress>` : ''}</div><span class="status ${state.className}">${state.label}</span></article>`;
+  }).join('') || '<p class="empty-copy">Файлов пока нет.</p>';
 }
 
 function renderStudio() {
@@ -256,6 +769,7 @@ function renderStudio() {
   renderBanners();
   renderComments();
   renderUploads();
+  renderConnectionState();
 }
 
 function navigate(view) {
@@ -277,7 +791,7 @@ function openContentDialog(item = null) {
     document.querySelector('#content-genre').value = item.genre;
     document.querySelector('#content-kind').value = item.kind;
     document.querySelector('#content-episodes').value = item.episodes;
-    document.querySelector('#content-status').value = item.status;
+    document.querySelector('#content-status').value = ['published', 'draft', 'hidden'].includes(item.status) ? item.status : 'draft';
     document.querySelector('#content-access').value = item.access || 'free';
     document.querySelector('#content-price').value = item.price || 0;
   }
@@ -285,6 +799,7 @@ function openContentDialog(item = null) {
 }
 
 function openBannerDialog(banner = null) {
+  if (isApiMode()) { showToast('Баннеры нельзя публиковать через текущий Studio API — этот серверный этап ещё не подключён.'); return; }
   bannerForm.reset();
   bannerMediaDraft = isSafeBannerMedia(banner?.media) ? clone(banner.media) : null;
   const contentSelect = document.querySelector('#banner-content');
@@ -309,8 +824,12 @@ function askDelete(id) {
   const item = contentById(id);
   if (!item) return;
   pendingDeleteId = id;
-  document.querySelector('#confirm-title').textContent = `Удалить «${item.title}»?`;
-  document.querySelector('#confirm-copy').textContent = 'Карточка исчезнет из Studio и с главной витрины. В настоящем сервисе удаление видео потребует отдельного подтверждения прав.';
+  const remote = isApiMode();
+  document.querySelector('#confirm-title').textContent = remote ? `Архивировать «${item.title}»?` : `Удалить «${item.title}»?`;
+  document.querySelector('#confirm-copy').textContent = remote
+    ? 'Карточка будет снята с витрины и помечена архивной на сервере. Файл и аудит сохранятся.'
+    : 'Карточка исчезнет из локального предпросмотра и с главной витрины.';
+  document.querySelector('#confirm-delete').textContent = remote ? 'Архивировать' : 'Удалить карточку';
   openDialog(confirmDialog);
 }
 
@@ -319,10 +838,39 @@ function moveHome(id, direction) {
   const nextIndex = direction === 'up' ? index - 1 : index + 1;
   if (index < 0 || nextIndex < 0 || nextIndex >= studio.homeOrder.length) return;
   [studio.homeOrder[index], studio.homeOrder[nextIndex]] = [studio.homeOrder[nextIndex], studio.homeOrder[index]];
-  saveStudio();
+  homeHasUnsavedChanges = isApiMode();
+  if (!isApiMode()) saveStudio();
   renderHomeOrder();
   renderHomePreview();
-  showToast('Порядок витрины обновлён');
+  showToast(isApiMode() ? 'Порядок изменён. Нажми «Сохранить изменения».': 'Порядок витрины обновлён');
+}
+
+async function saveHomeSlots({ silent = false } = {}) {
+  if (!isApiMode()) {
+    saveStudio();
+    homeHasUnsavedChanges = false;
+    renderHomeOrder();
+    if (!silent) showToast('Порядок главной сохранён локально');
+    return true;
+  }
+  const saveButton = document.querySelector('[data-action="save-home"]');
+  saveButton.disabled = true;
+  saveButton.textContent = 'Сохраняем…';
+  try {
+    const result = await apiRequest('/v1/admin/home/slots', { method: 'PATCH', body: { contentIds: studio.homeOrder } });
+    studio.homeOrder = result.items.map((item) => item.id);
+    homeHasUnsavedChanges = false;
+    renderHomeOrder();
+    renderHomePreview();
+    if (!silent) showToast('Главная витрина опубликована');
+    return true;
+  } catch (error) {
+    showToast(error.message || 'Не удалось сохранить порядок главной.');
+    return false;
+  } finally {
+    saveButton.disabled = false;
+    renderHomeOrder();
+  }
 }
 
 function moveBanner(id, direction) {
@@ -336,14 +884,202 @@ function moveBanner(id, direction) {
   showToast('Порядок баннеров обновлён');
 }
 
-function updateComment(id, status) {
+async function updateComment(id, status) {
   const comment = studio.comments.find((item) => item.id === id);
   if (!comment) return;
-  comment.status = status;
-  saveStudio();
+  if (!isApiMode()) {
+    comment.status = status;
+    saveStudio();
+  } else {
+    try {
+      const result = await apiRequest(`/v1/admin/comments/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status } });
+      Object.assign(comment, normalizeApiComment(result.item));
+      remoteOverview = null;
+      await loadRemoteStudio({ silent: true });
+    } catch (error) {
+      showToast(error.message || 'Не удалось изменить статус комментария.');
+      return;
+    }
+  }
   renderDashboard();
   renderComments();
-  showToast(status === 'approved' ? 'Комментарий опубликован' : 'Комментарий скрыт');
+  showToast(status === 'approved' ? 'Комментарий опубликован' : status === 'hidden' ? 'Комментарий скрыт' : 'Комментарий удалён');
+}
+
+function contentPayloadFromForm(data, existing) {
+  return {
+    title: data.title,
+    genre: data.genre,
+    kind: apiKindByStudioKind[data.kind] || 'series',
+    episodes: data.episodes,
+    status: apiStatusFromStudio(data.status),
+    access: data.access,
+    ...(existing ? {} : { synopsis: '' })
+  };
+}
+
+async function saveContentFromForm() {
+  const id = document.querySelector('#content-id').value;
+  const existing = id ? contentById(id) : null;
+  const data = {
+    title: document.querySelector('#content-title').value.trim(),
+    genre: document.querySelector('#content-genre').value,
+    kind: document.querySelector('#content-kind').value,
+    episodes: Number(document.querySelector('#content-episodes').value),
+    status: document.querySelector('#content-status').value,
+    access: document.querySelector('#content-access').value,
+    price: Math.max(0, Number(document.querySelector('#content-price').value) || 0)
+  };
+  const submit = contentForm.querySelector('[type="submit"]');
+  const original = submit.textContent;
+  submit.disabled = true;
+  submit.textContent = 'Сохраняем…';
+  try {
+    if (isApiMode()) {
+      const result = await apiRequest(id ? `/v1/admin/content/${encodeURIComponent(id)}` : '/v1/admin/content', { method: id ? 'PATCH' : 'POST', body: contentPayloadFromForm(data, existing) });
+      const updated = normalizeApiContent(result.item);
+      updated.price = data.price;
+      if (id) studio.content = studio.content.map((item) => item.id === id ? { ...item, ...updated } : item);
+      else {
+        studio.content.unshift(updated);
+        studio.homeOrder.push(updated.id);
+        homeHasUnsavedChanges = true;
+      }
+      refreshCommentMetadata();
+      closeDialog(contentDialog);
+      renderStudio();
+      showToast(id ? 'Карточка обновлена на сервере' : 'Черновик создан. Сохрани витрину, если хочешь показать его на главной.');
+      return;
+    }
+    if (id) Object.assign(existing, data);
+    else {
+      const newId = `item-${Date.now()}`;
+      studio.content.unshift({ id: newId, ...data, poster: posterFor(newId), views: 0, likes: 0, comments: 0 });
+      studio.homeOrder.push(newId);
+    }
+    saveStudio();
+    closeDialog(contentDialog);
+    renderStudio();
+    showToast(id ? 'Карточка обновлена в предпросмотре' : 'Черновик добавлен в предпросмотр');
+  } catch (error) {
+    showToast(error.message || 'Не удалось сохранить карточку.');
+  } finally {
+    submit.disabled = false;
+    submit.textContent = original;
+  }
+}
+
+async function archiveOrDeleteContent() {
+  if (!pendingDeleteId) return;
+  const id = pendingDeleteId;
+  const button = document.querySelector('#confirm-delete');
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = isApiMode() ? 'Архивируем…' : 'Удаляем…';
+  try {
+    if (isApiMode()) {
+      const result = await apiRequest(`/v1/admin/content/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status: 'archived' } });
+      const archived = normalizeApiContent(result.item);
+      studio.content = studio.content.map((item) => item.id === id ? { ...item, ...archived } : item);
+      studio.homeOrder = studio.homeOrder.filter((contentId) => contentId !== id);
+      homeHasUnsavedChanges = true;
+      const homeSaved = await saveHomeSlots({ silent: true });
+      closeDialog(confirmDialog);
+      pendingDeleteId = null;
+      renderStudio();
+      showToast(homeSaved ? 'Карточка архивирована и снята с витрины' : 'Карточка архивирована. Не забудь сохранить витрину.');
+      return;
+    }
+    studio.content = studio.content.filter((item) => item.id !== id);
+    studio.homeOrder = studio.homeOrder.filter((contentId) => contentId !== id);
+    saveStudio();
+    closeDialog(confirmDialog);
+    pendingDeleteId = null;
+    renderStudio();
+    showToast('Карточка удалена из предпросмотра');
+  } catch (error) {
+    showToast(error.message || 'Не удалось архивировать карточку.');
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function connectToApi() {
+  const field = document.querySelector('#studio-access-token');
+  const token = field.value.trim();
+  if (token.length < 16) { setConnectionError('Вставь действующий access token. Он обычно длиннее 16 символов.'); return; }
+  const submit = document.querySelector('#connection-submit');
+  const original = submit.textContent;
+  submit.disabled = true;
+  submit.textContent = 'Проверяем…';
+  setConnectionError('');
+  try {
+    setAccessToken(token);
+    const connected = await loadRemoteStudio({ silent: true });
+    if (!connected) {
+      setConnectionError(apiState.state === 'error' ? 'Токен не принят или Studio API недоступен. Токен не показан и хранится только в этой вкладке — можешь заменить или отключить его.' : 'Не удалось подключиться.');
+      return;
+    }
+    field.value = '';
+    closeDialog(connectionDialog);
+    showToast('Studio API подключён. Контент, витрина и модерация теперь работают с сервером.');
+  } catch (error) {
+    setConnectionError(error.message || 'Не удалось сохранить сессию Studio.');
+  } finally {
+    submit.disabled = false;
+    submit.textContent = original;
+  }
+}
+
+function disconnectApi() {
+  if (activeUpload || abortingUpload) { showToast('Сначала заверши текущую операцию с загрузкой.'); return; }
+  clearAccessToken();
+  remoteOverview = null;
+  homeHasUnsavedChanges = false;
+  studio = loadStudio();
+  apiState = { state: 'preview', message: 'Локальный предпросмотр', loading: false };
+  updateUploadTransfer({ hidden: true });
+  closeDialog(connectionDialog);
+  renderStudio();
+  showToast('Studio API отключён. Открыт локальный предпросмотр этого браузера.');
+}
+
+async function handleAction(name, action) {
+  const { id } = action.dataset;
+  if (name === 'connect-api') {
+    document.querySelector('#studio-access-token').value = '';
+    setConnectionError('');
+    openDialog(connectionDialog);
+    window.setTimeout(() => document.querySelector('#studio-access-token').focus(), 0);
+  }
+  if (name === 'disconnect-api') disconnectApi();
+  if (name === 'new-series') openContentDialog();
+  if (name === 'new-banner') openBannerDialog();
+  if (name === 'upload') {
+    if (activeUpload || abortingUpload) { showToast('Дождись завершения текущей операции с загрузкой.'); return; }
+    uploadInput.click();
+  }
+  if (name === 'select-banner-media') document.querySelector('#banner-media').click();
+  if (name === 'remove-banner-media') { bannerMediaDraft = null; document.querySelector('#banner-media').value = ''; renderBannerMediaState(); showToast('Изображение убрано из баннера'); }
+  if (name === 'edit-content') openContentDialog(contentById(id));
+  if (name === 'delete-content') askDelete(id);
+  if (name === 'move-home') moveHome(id, action.dataset.direction);
+  if (name === 'move-banner') moveBanner(id, action.dataset.direction);
+  if (name === 'edit-banner') openBannerDialog(bannerById(id));
+  if (name === 'toggle-banner') {
+    if (isApiMode()) { showToast('Публикация баннеров будет доступна после следующего серверного этапа.'); return; }
+    const banner = bannerById(id);
+    if (banner) { banner.active = !banner.active; saveStudio(); renderHomePreview(); renderBanners(); showToast(banner.active ? 'Баннер показан в предпросмотре' : 'Баннер скрыт в предпросмотре'); }
+  }
+  if (name === 'save-home') await saveHomeSlots();
+  if (name === 'approve-comment') await updateComment(id, 'approved');
+  if (name === 'hide-comment') await updateComment(id, 'hidden');
+  if (name === 'delete-comment') await updateComment(id, 'deleted');
+  if (name === 'reset-demo') {
+    if (isApiMode()) { await loadRemoteStudio(); return; }
+    if (window.confirm('Сбросить все локальные изменения Studio на этом устройстве?')) { studio = clone(studioDefaults); saveStudio(); renderStudio(); showToast('Локальные демо-данные восстановлены'); }
+  }
 }
 
 document.addEventListener('click', (event) => {
@@ -358,68 +1094,16 @@ document.addEventListener('click', (event) => {
   const previewButton = event.target.closest('[data-preview-mode]');
   if (previewButton) { previewMode = previewButton.dataset.previewMode; document.querySelectorAll('[data-preview-mode]').forEach((button) => button.classList.toggle('is-active', button.dataset.previewMode === previewMode)); renderHomePreview(); return; }
   const action = event.target.closest('[data-action]');
-  if (!action) return;
-  const { action: name, id } = action.dataset;
-  if (name === 'new-series') openContentDialog();
-  if (name === 'new-banner') openBannerDialog();
-  if (name === 'upload') document.querySelector('#video-upload').click();
-  if (name === 'select-banner-media') document.querySelector('#banner-media').click();
-  if (name === 'remove-banner-media') { bannerMediaDraft = null; document.querySelector('#banner-media').value = ''; renderBannerMediaState(); showToast('Изображение убрано из баннера'); }
-  if (name === 'edit-content') openContentDialog(contentById(id));
-  if (name === 'delete-content') askDelete(id);
-  if (name === 'move-home') moveHome(id, action.dataset.direction);
-  if (name === 'move-banner') moveBanner(id, action.dataset.direction);
-  if (name === 'edit-banner') openBannerDialog(bannerById(id));
-  if (name === 'toggle-banner') { const banner = bannerById(id); if (banner) { banner.active = !banner.active; saveStudio(); renderHomePreview(); renderBanners(); showToast(banner.active ? 'Баннер показан зрителю' : 'Баннер скрыт'); } }
-  if (name === 'save-home') showToast('Порядок главной сохранён');
-  if (name === 'approve-comment') updateComment(id, 'approved');
-  if (name === 'hide-comment') updateComment(id, 'hidden');
-  if (name === 'delete-comment') { studio.comments = studio.comments.filter((comment) => comment.id !== id); saveStudio(); renderDashboard(); renderComments(); showToast('Комментарий удалён'); }
-  if (name === 'reset-demo') {
-    if (window.confirm('Сбросить все демо-изменения Studio на этом устройстве?')) { studio = clone(studioDefaults); saveStudio(); renderStudio(); showToast('Демо-данные восстановлены'); }
-  }
+  if (action) void handleAction(action.dataset.action, action);
 });
 
-document.querySelector('#confirm-delete').addEventListener('click', () => {
-  if (!pendingDeleteId) return;
-  studio.content = studio.content.filter((item) => item.id !== pendingDeleteId);
-  studio.homeOrder = studio.homeOrder.filter((id) => id !== pendingDeleteId);
-  saveStudio();
-  closeDialog(confirmDialog);
-  pendingDeleteId = null;
-  renderStudio();
-  showToast('Карточка удалена из Studio');
-});
-
-contentForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const id = document.querySelector('#content-id').value;
-  const data = {
-    title: document.querySelector('#content-title').value.trim(),
-    genre: document.querySelector('#content-genre').value,
-    kind: document.querySelector('#content-kind').value,
-    episodes: Number(document.querySelector('#content-episodes').value),
-    status: document.querySelector('#content-status').value,
-    access: document.querySelector('#content-access').value,
-    price: Math.max(0, Number(document.querySelector('#content-price').value) || 0)
-  };
-  if (id) {
-    Object.assign(contentById(id), data);
-    showToast('Карточка обновлена');
-  } else {
-    const newId = `item-${Date.now()}`;
-    const posters = ['poster-one', 'poster-two', 'poster-three', 'poster-four', 'poster-five'];
-    studio.content.unshift({ id: newId, ...data, poster: posters[studio.content.length % posters.length], views: 0, likes: 0, comments: 0 });
-    studio.homeOrder.push(newId);
-    showToast('Черновик добавлен в Studio');
-  }
-  saveStudio();
-  closeDialog(contentDialog);
-  renderStudio();
-});
+document.querySelector('#confirm-delete').addEventListener('click', () => { void archiveOrDeleteContent(); });
+contentForm.addEventListener('submit', (event) => { event.preventDefault(); void saveContentFromForm(); });
+connectionForm.addEventListener('submit', (event) => { event.preventDefault(); void connectToApi(); });
 
 bannerForm.addEventListener('submit', (event) => {
   event.preventDefault();
+  if (isApiMode()) { showToast('Баннеры пока не публикуются через Studio API.'); return; }
   const id = document.querySelector('#banner-id').value;
   const data = {
     contentId: document.querySelector('#banner-content').value,
@@ -431,21 +1115,18 @@ bannerForm.addEventListener('submit', (event) => {
     active: document.querySelector('#banner-active').checked,
     media: bannerMediaDraft
   };
-  if (id) {
-    Object.assign(bannerById(id), data);
-    showToast('Баннер обновлён');
-  } else {
-    studio.banners.push({ id: `banner-${Date.now()}`, ...data });
-    showToast('Баннер добавлен в главную');
-  }
+  if (id) Object.assign(bannerById(id), data);
+  else studio.banners.push({ id: `banner-${Date.now()}`, ...data });
   saveStudio();
   closeDialog(bannerDialog);
   renderHomePreview();
   renderBanners();
+  showToast(id ? 'Баннер обновлён в предпросмотре' : 'Баннер добавлен в предпросмотр');
 });
 
 document.querySelector('#content-search').addEventListener('input', renderContent);
 document.querySelector('#banner-media').addEventListener('change', async (event) => {
+  if (isApiMode()) { event.target.value = ''; showToast('Загрузка изображений будет доступна после серверного медиамодуля.'); return; }
   const [file] = event.target.files;
   if (!file) return;
   const button = document.querySelector('[data-action="select-banner-media"]');
@@ -454,7 +1135,7 @@ document.querySelector('#banner-media').addEventListener('change', async (event)
   try {
     bannerMediaDraft = await optimizeBannerImage(file);
     renderBannerMediaState();
-    showToast('Изображение подготовлено для баннера');
+    showToast('Изображение подготовлено для предпросмотра');
   } catch (error) {
     event.target.value = '';
     showToast(error.message || 'Не удалось добавить изображение');
@@ -463,22 +1144,29 @@ document.querySelector('#banner-media').addEventListener('change', async (event)
     button.textContent = 'Выбрать файл';
   }
 });
-document.querySelector('#video-upload').addEventListener('change', (event) => {
+
+uploadInput.addEventListener('change', (event) => {
   const [file] = event.target.files;
   if (!file) return;
+  if (isApiMode()) {
+    void uploadVideoToStudio(file);
+    event.target.value = '';
+    return;
+  }
   const title = file.name.replace(/\.[^.]+$/, '').trim() || 'Новое видео';
   const id = `upload-${Date.now()}`;
   const sizeInMb = file.size / 1024 / 1024;
-  const fileSize = sizeInMb >= 1024
-    ? `${(sizeInMb / 1024).toFixed(1).replace('.', ',')} ГБ`
-    : `${sizeInMb.toFixed(1).replace('.', ',')} МБ`;
-  studio.uploads.unshift({ id, name: file.name, size: fileSize, status: 'Файл добавлен в демо', tone: 'processing' });
+  const fileSize = sizeInMb >= 1024 ? `${(sizeInMb / 1024).toFixed(1).replace('.', ',')} ГБ` : `${sizeInMb.toFixed(1).replace('.', ',')} МБ`;
+  studio.uploads.unshift({ id, name: file.name, size: fileSize, status: 'Файл добавлен в локальную очередь', tone: 'processing' });
   studio.content.unshift({ id, title, kind: 'Короткое видео', genre: 'Драма', episodes: 1, status: 'draft', access: 'free', price: 0, poster: 'poster-four', views: 0, likes: 0, comments: 0 });
   studio.homeOrder.push(id);
   saveStudio();
   renderStudio();
-  showToast('Файл добавлен в демо-очередь');
+  showToast('Файл добавлен в локальную демо-очередь');
   event.target.value = '';
 });
 
+uploadCancelButton.addEventListener('click', abortActiveUpload);
+
 renderStudio();
+if (isApiMode()) void loadRemoteStudio({ silent: true });
