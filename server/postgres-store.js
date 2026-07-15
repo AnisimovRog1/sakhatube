@@ -15,6 +15,7 @@ const mapContent = (row) => row && ({
   episodes: Number(row.episodes),
   views: Number(row.views),
   likes: Number(row.likes),
+  compliance: row.compliance ?? null,
   scheduledAt: row.scheduled_at ? row.scheduled_at.toISOString() : null,
   publishedAt: row.published_at ? row.published_at.toISOString() : null,
   unpublishedReason: row.unpublished_reason ?? null,
@@ -56,6 +57,19 @@ const mapMedia = (row) => row && ({
   updatedAt: row.updated_at ? row.updated_at.toISOString() : row.created_at.toISOString()
 });
 
+const mapPublicRequest = (row) => row && ({
+  id: row.id,
+  type: row.type,
+  email: row.email,
+  accountEmail: row.account_email,
+  message: row.message,
+  status: row.status,
+  resolutionNote: row.resolution_note,
+  resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
+  createdAt: row.created_at.toISOString(),
+  updatedAt: row.updated_at.toISOString()
+});
+
 async function migrate(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_items (
@@ -69,6 +83,7 @@ async function migrate(pool) {
       episodes INTEGER NOT NULL,
       views BIGINT NOT NULL DEFAULT 0,
       likes BIGINT NOT NULL DEFAULT 0,
+      compliance JSONB,
       scheduled_at TIMESTAMPTZ,
       published_at TIMESTAMPTZ,
       unpublished_reason TEXT,
@@ -78,6 +93,7 @@ async function migrate(pool) {
     ALTER TABLE content_items ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
     ALTER TABLE content_items ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
     ALTER TABLE content_items ADD COLUMN IF NOT EXISTS unpublished_reason TEXT;
+    ALTER TABLE content_items ADD COLUMN IF NOT EXISTS compliance JSONB;
     CREATE TABLE IF NOT EXISTS home_slots (
       slot_index INTEGER PRIMARY KEY,
       content_id TEXT NOT NULL REFERENCES content_items(id) ON DELETE CASCADE
@@ -150,11 +166,24 @@ async function migrate(pool) {
       request_id TEXT,
       ip TEXT
     );
+    CREATE TABLE IF NOT EXISTS public_requests (
+      id UUID PRIMARY KEY,
+      type TEXT NOT NULL CHECK (type IN ('deletion', 'support')),
+      email TEXT NOT NULL,
+      account_email TEXT,
+      message TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL CHECK (status IN ('received', 'in_progress', 'completed', 'rejected')),
+      resolution_note TEXT,
+      resolved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
     CREATE INDEX IF NOT EXISTS media_assets_content_idx ON media_assets(content_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS media_assets_status_idx ON media_assets(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS public_requests_queue_idx ON public_requests(type, status, created_at ASC);
   `);
 }
 
@@ -164,10 +193,11 @@ async function seed(pool, seed) {
     await client.query('BEGIN');
     for (const item of seed.content) {
       await client.query(
-        `INSERT INTO content_items (id, title, kind, genre, synopsis, status, access, episodes, views, likes, scheduled_at, published_at, unpublished_reason, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-         ON CONFLICT (id) DO NOTHING`,
-        [item.id, item.title, item.kind, item.genre, item.synopsis, item.status, item.access, item.episodes, item.views, item.likes, item.scheduledAt ?? null, item.publishedAt ?? null, item.unpublishedReason ?? null, item.createdAt, item.updatedAt]
+        `INSERT INTO content_items (id, title, kind, genre, synopsis, status, access, episodes, views, likes, compliance, scheduled_at, published_at, unpublished_reason, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         ON CONFLICT (id) DO UPDATE SET compliance = EXCLUDED.compliance
+         WHERE content_items.compliance IS NULL`,
+        [item.id, item.title, item.kind, item.genre, item.synopsis, item.status, item.access, item.episodes, item.views, item.likes, item.compliance ? JSON.stringify(item.compliance) : null, item.scheduledAt ?? null, item.publishedAt ?? null, item.unpublishedReason ?? null, item.createdAt, item.updatedAt]
       );
     }
     for (const [slotIndex, contentId] of seed.homeSlots.entries()) {
@@ -214,14 +244,15 @@ export async function createPostgresStore(connectionString, seedData) {
         scheduledAt: null,
         publishedAt: null,
         unpublishedReason: null,
+        compliance: null,
         createdAt: now(),
         updatedAt: now(),
         ...data
       };
       const { rows } = await pool.query(
-        `INSERT INTO content_items (id, title, kind, genre, synopsis, status, access, episodes, views, likes, scheduled_at, published_at, unpublished_reason, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
-        [item.id, item.title, item.kind, item.genre, item.synopsis, item.status, item.access, item.episodes, item.views, item.likes, item.scheduledAt, item.publishedAt, item.unpublishedReason, item.createdAt, item.updatedAt]
+        `INSERT INTO content_items (id, title, kind, genre, synopsis, status, access, episodes, views, likes, compliance, scheduled_at, published_at, unpublished_reason, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+        [item.id, item.title, item.kind, item.genre, item.synopsis, item.status, item.access, item.episodes, item.views, item.likes, item.compliance ? JSON.stringify(item.compliance) : null, item.scheduledAt, item.publishedAt, item.unpublishedReason, item.createdAt, item.updatedAt]
       );
       return mapContent(rows[0]);
     },
@@ -234,13 +265,14 @@ export async function createPostgresStore(connectionString, seedData) {
         status: 'status',
         access: 'access',
         episodes: 'episodes',
+        compliance: 'compliance',
         scheduledAt: 'scheduled_at',
         publishedAt: 'published_at',
         unpublishedReason: 'unpublished_reason'
       };
       const entries = Object.entries(patch).filter(([key]) => fields[key]);
       if (!entries.length) return this.getContent(id);
-      const values = entries.map(([, value]) => value);
+      const values = entries.map(([key, value]) => key === 'compliance' ? JSON.stringify(value) : value);
       const sets = entries.map(([key], index) => `${fields[key]} = $${index + 1}`);
       values.push(now(), id);
       const { rows } = await pool.query(`UPDATE content_items SET ${sets.join(', ')}, updated_at = $${values.length - 1} WHERE id = $${values.length} RETURNING *`, values);
@@ -297,6 +329,49 @@ export async function createPostgresStore(connectionString, seedData) {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [randomUUID(), event.contentId, event.viewerId, event.sessionId, event.event, event.positionMs ?? null, event.errorCode ?? null, now()]
       );
+    },
+    async createPublicRequest(data) {
+      const record = {
+        id: randomUUID(),
+        status: 'received',
+        resolutionNote: null,
+        resolvedAt: null,
+        createdAt: now(),
+        updatedAt: now(),
+        ...data
+      };
+      const { rows } = await pool.query(
+        `INSERT INTO public_requests (id, type, email, account_email, message, status, resolution_note, resolved_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+        [record.id, record.type, record.email, record.accountEmail ?? null, record.message ?? '', record.status, record.resolutionNote, record.resolvedAt, record.createdAt, record.updatedAt]
+      );
+      return mapPublicRequest(rows[0]);
+    },
+    async getPublicRequest(id) {
+      const { rows } = await pool.query('SELECT * FROM public_requests WHERE id = $1', [id]);
+      return mapPublicRequest(rows[0]);
+    },
+    async listPublicRequests({ type, status } = {}) {
+      const filters = [];
+      const values = [];
+      if (type) { values.push(type); filters.push(`type = $${values.length}`); }
+      if (status) { values.push(status); filters.push(`status = $${values.length}`); }
+      const { rows } = await pool.query(`SELECT * FROM public_requests${filters.length ? ` WHERE ${filters.join(' AND ')}` : ''} ORDER BY created_at ASC`, values);
+      return rows.map(mapPublicRequest);
+    },
+    async updatePublicRequest(id, patch) {
+      const fields = {
+        status: 'status',
+        resolutionNote: 'resolution_note',
+        resolvedAt: 'resolved_at'
+      };
+      const entries = Object.entries(patch).filter(([key]) => fields[key]);
+      if (!entries.length) return this.getPublicRequest(id);
+      const values = entries.map(([, value]) => value);
+      const sets = entries.map(([key], index) => `${fields[key]} = $${index + 1}`);
+      values.push(now(), id);
+      const { rows } = await pool.query(`UPDATE public_requests SET ${sets.join(', ')}, updated_at = $${values.length - 1} WHERE id = $${values.length} RETURNING *`, values);
+      return mapPublicRequest(rows[0]);
     },
     async overview() {
       const [summary, quality, top] = await Promise.all([

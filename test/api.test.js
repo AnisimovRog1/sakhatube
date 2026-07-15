@@ -13,6 +13,21 @@ async function tokenFor(app, roles) {
   return app.jwt.sign({ sub: 'editor-1', roles });
 }
 
+function publishableCompliance(overrides = {}) {
+  return {
+    ageRating: '16+',
+    rightsBasis: 'contract',
+    rightsHolder: 'ООО Правообладатель',
+    licenseReference: 'ST-2026-001',
+    territories: ['RU', 'KZ'],
+    startsAt: '2026-01-01T00:00:00.000Z',
+    endsAt: '2027-01-01T00:00:00.000Z',
+    audioLanguages: ['ru'],
+    subtitleLanguages: ['en'],
+    ...overrides
+  };
+}
+
 test('health is public and content is protected', async (t) => {
   const app = await createTestApp();
   t.after(() => app.close());
@@ -26,6 +41,9 @@ test('health is public and content is protected', async (t) => {
   assert.match(landing.body, /SakhaTube/);
   const privateFile = await app.inject({ method: 'GET', url: '/package.json' });
   assert.equal(privateFile.statusCode, 404);
+  const privacy = await app.inject({ method: 'GET', url: '/privacy' });
+  assert.equal(privacy.statusCode, 200);
+  assert.match(privacy.body, /Политика конфиденциальности/);
 });
 
 test('editor can create content and arrange the home shelf', async (t) => {
@@ -56,6 +74,9 @@ test('public catalog and home expose only published content', async (t) => {
   const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
   assert.equal(catalog.statusCode, 200);
   assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['midnight', 'signal']);
+  assert.equal(JSON.parse(catalog.body).items[0].ageRating, '16+');
+  assert.equal('compliance' in JSON.parse(catalog.body).items[0], false);
+  assert.equal('licenseReference' in JSON.parse(catalog.body).items[0], false);
 
   const hiddenDetail = await app.inject({ method: 'GET', url: '/v1/catalog/floor' });
   assert.equal(hiddenDetail.statusCode, 404);
@@ -124,8 +145,34 @@ test('content lifecycle enforces review, publication roles, reasons, and audit',
     headers: { authorization: `Bearer ${superadmin}` },
     payload: {}
   });
-  assert.equal(publish.statusCode, 200);
-  assert.equal(JSON.parse(publish.body).item.status, 'published');
+  assert.equal(publish.statusCode, 409);
+  assert.equal(JSON.parse(publish.body).error, 'PUBLISH_BLOCKED_BY_COMPLIANCE');
+
+  const addCompliance = await app.inject({
+    method: 'PATCH',
+    url: `/v1/admin/content/${created.id}`,
+    headers: { authorization: `Bearer ${editor}` },
+    payload: { compliance: publishableCompliance() }
+  });
+  assert.equal(addCompliance.statusCode, 200);
+
+  const verifyRights = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/verify-rights`,
+    headers: { authorization: `Bearer ${superadmin}` },
+    payload: { reference: 'LEGAL-REVIEW-2026-001' }
+  });
+  assert.equal(verifyRights.statusCode, 200);
+  assert.equal(JSON.parse(verifyRights.body).item.compliance.verifiedBy, 'editor-1');
+
+  const publishAfterCompliance = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/publish`,
+    headers: { authorization: `Bearer ${superadmin}` },
+    payload: {}
+  });
+  assert.equal(publishAfterCompliance.statusCode, 200);
+  assert.equal(JSON.parse(publishAfterCompliance.body).item.status, 'published');
 
   const missingReason = await app.inject({
     method: 'POST',
@@ -146,7 +193,7 @@ test('content lifecycle enforces review, publication roles, reasons, and audit',
 
   const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
   assert.equal(JSON.parse(catalog.body).items.some((item) => item.id === created.id), false);
-  assert.deepEqual(store.listAudit().slice(0, 3).map((item) => item.action), ['content.unpublish', 'content.publish', 'content.submit_review']);
+  assert.deepEqual(store.listAudit().slice(0, 3).map((item) => item.action), ['content.unpublish', 'content.publish', 'content.rights.verify']);
 });
 
 test('superadmin can schedule reviewed content without exposing it early', async (t) => {
@@ -159,9 +206,11 @@ test('superadmin can schedule reviewed content without exposing it early', async
     method: 'POST',
     url: '/v1/admin/content',
     headers: { authorization: `Bearer ${editor}` },
-    payload: { title: 'Премьера по расписанию', kind: 'trailer', genre: 'Драма' }
+    payload: { title: 'Премьера по расписанию', kind: 'trailer', genre: 'Драма', compliance: publishableCompliance() }
   });
   const id = JSON.parse(create.body).item.id;
+  const verifyRights = await app.inject({ method: 'POST', url: `/v1/admin/content/${id}/verify-rights`, headers: { authorization: `Bearer ${superadmin}` }, payload: { reference: 'LEGAL-REVIEW-2026-002' } });
+  assert.equal(verifyRights.statusCode, 200);
   const submit = await app.inject({ method: 'POST', url: `/v1/admin/content/${id}/submit-review`, headers: { authorization: `Bearer ${editor}` }, payload: {} });
   assert.equal(submit.statusCode, 200);
   const scheduledAt = new Date(Date.now() + 60_000).toISOString();
@@ -207,6 +256,35 @@ test('playback event is validated and accepted without exposing admin access', a
   assert.equal(invalid.statusCode, 400);
   const accepted = await app.inject({ method: 'POST', url: '/v1/events/playback', payload: { contentId: 'midnight', sessionId: 'abcdef0123456789', event: 'first_frame', positionMs: 0 } });
   assert.equal(accepted.statusCode, 202);
+});
+
+test('public privacy requests are rate-limited, private to staff, and auditable without storing email in audit snapshots', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({ store });
+  t.after(() => app.close());
+  const rejected = await app.inject({ method: 'POST', url: '/v1/privacy/deletion-requests', payload: { email: 'viewer@example.com', confirmation: false } });
+  assert.equal(rejected.statusCode, 400);
+
+  const accepted = await app.inject({
+    method: 'POST',
+    url: '/v1/privacy/deletion-requests',
+    payload: { email: 'viewer@example.com', accountEmail: 'account@example.com', message: 'Удалить данные', confirmation: true }
+  });
+  assert.equal(accepted.statusCode, 202);
+  const requestId = JSON.parse(accepted.body).requestId;
+  assert.match(requestId, /^[0-9a-f-]{36}$/);
+  assert.equal(store.listAudit()[0].action, 'privacy.deletion_request.create');
+  assert.equal(JSON.stringify(store.listAudit()[0]).includes('viewer@example.com'), false);
+
+  const anonymousList = await app.inject({ method: 'GET', url: '/v1/admin/requests' });
+  assert.equal(anonymousList.statusCode, 401);
+  const support = await tokenFor(app, ['support']);
+  const listed = await app.inject({ method: 'GET', url: '/v1/admin/requests?type=deletion&status=received', headers: { authorization: `Bearer ${support}` } });
+  assert.equal(listed.statusCode, 200);
+  assert.equal(JSON.parse(listed.body).items[0].id, requestId);
+  const completed = await app.inject({ method: 'PATCH', url: `/v1/admin/requests/${requestId}`, headers: { authorization: `Bearer ${support}` }, payload: { status: 'completed', note: 'Подтверждено' } });
+  assert.equal(completed.statusCode, 200);
+  assert.equal(JSON.parse(completed.body).item.status, 'completed');
 });
 
 test('private multipart upload is role-protected, paged, validated, and queued after completion', async (t) => {
@@ -439,4 +517,17 @@ test('temporary demo media is public but restricted to its own prefix', async (t
 test('production refuses a memory store unless preview mode is explicitly enabled', () => {
   assert.throws(() => buildApp({ nodeEnv: 'production', jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters' }), /DATABASE_URL/);
   assert.doesNotThrow(() => buildApp({ nodeEnv: 'production', allowDemoStore: true, jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters' }));
+});
+
+test('production never exposes demo rights records as commercial catalogue entries', async (t) => {
+  const app = buildApp({
+    nodeEnv: 'production',
+    allowDemoStore: true,
+    jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters'
+  });
+  await app.ready();
+  t.after(() => app.close());
+  const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
+  assert.equal(catalog.statusCode, 200);
+  assert.deepEqual(JSON.parse(catalog.body).items, []);
 });

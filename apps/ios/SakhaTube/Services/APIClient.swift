@@ -3,7 +3,13 @@ import Foundation
 /// Базовый адрес задаётся в Build Settings через `SAKHATUBE_API_BASE_URL`.
 /// Значение по умолчанию рассчитано на локальный сервер, запущенный на Mac для iOS Simulator.
 enum AppConfiguration {
+    private static let productionURL = URL(string: "https://sakhatube-production.up.railway.app")!
+
+    #if DEBUG
     private static let fallbackURL = URL(string: "http://127.0.0.1:3000")!
+    #else
+    private static let fallbackURL = productionURL
+    #endif
 
     static var apiBaseURL: URL {
         guard let rawValue = Bundle.main.object(forInfoDictionaryKey: "SakhaTubeAPIBaseURL") as? String else {
@@ -14,10 +20,17 @@ enum AppConfiguration {
         guard !value.isEmpty,
               !value.contains("$("),
               let url = URL(string: value),
-              let scheme = url.scheme,
-              ["http", "https"].contains(scheme.lowercased()) else {
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme) else {
             return fallbackURL
         }
+
+        #if !DEBUG
+        guard scheme == "https" else {
+            return productionURL
+        }
+        #endif
+
         return url
     }
 }

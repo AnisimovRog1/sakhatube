@@ -196,6 +196,7 @@ function normalizeApiContent(item) {
     views: Number(item.views) || 0,
     likes: Number(item.likes) || 0,
     comments: previous?.comments || 0,
+    compliance: item.compliance || null,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt
   };
@@ -333,7 +334,11 @@ async function apiRequest(path, options = {}) {
     throw apiError('Нет связи с Studio API. Проверь интернет или адрес SakhaTube.', 0);
   }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw apiError(payload.message || `Studio API вернул ошибку ${response.status}.`, response.status);
+  if (!response.ok) {
+    const error = apiError(payload.message || `Studio API вернул ошибку ${response.status}.`, response.status);
+    error.payload = payload;
+    throw error;
+  }
   return payload;
 }
 
@@ -700,7 +705,19 @@ function renderContent() {
     return matchesFilter && `${item.title} ${item.genre} ${item.kind}`.toLocaleLowerCase().includes(query);
   });
   const head = '<div class="table-head"><span>КОНТЕНТ</span><span>СТАТУС</span><span>ДОСТУП</span><span>ПРОСМОТРЫ</span><span>РЕАКЦИИ</span><span>КОММЕНТАРИИ</span><span></span></div>';
-  const rows = visible.map((item) => `<article class="content-row"><div class="content-title"><div class="content-poster ${item.poster}"></div><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.kind)} · ${escapeHTML(item.genre)} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}</small></div></div><div><span class="status ${item.status}">${statusLabel(item.status)}</span></div><span class="access ${item.access}">${accessLabel(item.access, item.price)}</span><span class="table-value"><strong>${compact(item.views)}</strong>всего</span><span class="table-value"><strong>${compact(item.likes)}</strong>нравится</span><span class="table-value"><strong>${compact(item.comments)}</strong>всего</span><div class="row-menu"><button data-action="edit-content" data-id="${escapeHTML(item.id)}" type="button">Изменить</button><button data-action="delete-content" data-id="${escapeHTML(item.id)}" type="button">${isApiMode() ? 'В архив' : 'Удалить'}</button></div></article>`).join('');
+  const workflowAction = (item) => {
+    if (!isApiMode()) return '';
+    const status = item.apiStatus || apiStatusFromStudio(item.status);
+    const verification = item.compliance && !item.compliance.verifiedAt
+      ? `<button data-action="verify-rights" data-id="${escapeHTML(item.id)}" type="button">Проверить права</button>`
+      : '';
+    if (status === 'draft' || status === 'unpublished') return `${verification}<button data-action="submit-review" data-id="${escapeHTML(item.id)}" type="button">На проверку</button>`;
+    if (status === 'review') return `${verification}<button data-action="publish-content" data-id="${escapeHTML(item.id)}" type="button">Опубликовать</button>`;
+    if (status === 'published' || status === 'scheduled') return `${verification}<button data-action="unpublish-content" data-id="${escapeHTML(item.id)}" type="button">Снять с показа</button>`;
+    return verification;
+  };
+  const complianceHint = (item) => item.compliance?.ageRating ? ` · ${escapeHTML(item.compliance.ageRating)}` : isApiMode() ? ' · паспорт публикации не заполнен' : '';
+  const rows = visible.map((item) => `<article class="content-row"><div class="content-title"><div class="content-poster ${item.poster}"></div><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.kind)} · ${escapeHTML(item.genre)} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}${complianceHint(item)}</small></div></div><div><span class="status ${item.status}">${statusLabel(item.status)}</span></div><span class="access ${item.access}">${accessLabel(item.access, item.price)}</span><span class="table-value"><strong>${compact(item.views)}</strong>всего</span><span class="table-value"><strong>${compact(item.likes)}</strong>нравится</span><span class="table-value"><strong>${compact(item.comments)}</strong>всего</span><div class="row-menu">${workflowAction(item)}<button data-action="edit-content" data-id="${escapeHTML(item.id)}" type="button">Изменить</button><button data-action="delete-content" data-id="${escapeHTML(item.id)}" type="button">${isApiMode() ? 'В архив' : 'Удалить'}</button></div></article>`).join('');
   contentTable.innerHTML = head + (rows || '<div class="empty-table">Ничего не найдено. Сбрось фильтр или добавь новый контент.</div>');
 }
 
@@ -786,6 +803,10 @@ function openContentDialog(item = null) {
   document.querySelector('#content-id').value = item?.id || '';
   document.querySelector('#content-dialog-eyebrow').textContent = item ? 'РЕДАКТИРОВАНИЕ' : 'НОВЫЙ КОНТЕНТ';
   document.querySelector('#content-dialog-title').textContent = item ? 'Изменить карточку' : 'Добавить сериал';
+  const statusField = document.querySelector('#content-status');
+  const statusHelp = document.querySelector('#content-status-help');
+  statusField.disabled = isApiMode();
+  statusHelp.hidden = !isApiMode();
   if (item) {
     document.querySelector('#content-title').value = item.title;
     document.querySelector('#content-genre').value = item.genre;
@@ -795,6 +816,16 @@ function openContentDialog(item = null) {
     document.querySelector('#content-access').value = item.access || 'free';
     document.querySelector('#content-price').value = item.price || 0;
   }
+  const compliance = item?.compliance || null;
+  document.querySelector('#content-age-rating').value = compliance?.ageRating || '';
+  document.querySelector('#content-rights-basis').value = compliance?.rightsBasis || '';
+  document.querySelector('#content-rights-holder').value = compliance?.rightsHolder || '';
+  document.querySelector('#content-license-reference').value = compliance?.licenseReference || '';
+  document.querySelector('#content-territories').value = Array.isArray(compliance?.territories) ? compliance.territories.join(', ') : '';
+  document.querySelector('#content-audio-languages').value = Array.isArray(compliance?.audioLanguages) ? compliance.audioLanguages.join(', ') : '';
+  document.querySelector('#content-subtitle-languages').value = Array.isArray(compliance?.subtitleLanguages) ? compliance.subtitleLanguages.join(', ') : '';
+  document.querySelector('#content-rights-starts-at').value = dateTimeLocalValue(compliance?.startsAt);
+  document.querySelector('#content-rights-ends-at').value = dateTimeLocalValue(compliance?.endsAt);
   openDialog(contentDialog);
 }
 
@@ -906,35 +937,88 @@ async function updateComment(id, status) {
   showToast(status === 'approved' ? 'Комментарий опубликован' : status === 'hidden' ? 'Комментарий скрыт' : 'Комментарий удалён');
 }
 
+function dateTimeLocalValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 16);
+}
+
+function commaSeparatedValues(value) {
+  return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function complianceFromForm() {
+  const raw = {
+    ageRating: document.querySelector('#content-age-rating').value,
+    rightsBasis: document.querySelector('#content-rights-basis').value,
+    rightsHolder: document.querySelector('#content-rights-holder').value.trim(),
+    licenseReference: document.querySelector('#content-license-reference').value.trim(),
+    territories: commaSeparatedValues(document.querySelector('#content-territories').value),
+    startsAt: document.querySelector('#content-rights-starts-at').value,
+    endsAt: document.querySelector('#content-rights-ends-at').value,
+    audioLanguages: commaSeparatedValues(document.querySelector('#content-audio-languages').value),
+    subtitleLanguages: commaSeparatedValues(document.querySelector('#content-subtitle-languages').value)
+  };
+  const hasAny = raw.ageRating || raw.rightsBasis || raw.rightsHolder || raw.licenseReference || raw.territories.length || raw.startsAt || raw.endsAt || raw.audioLanguages.length || raw.subtitleLanguages.length;
+  if (!hasAny) return null;
+  const missing = [
+    !raw.ageRating && 'возрастной рейтинг',
+    !raw.rightsBasis && 'основание прав',
+    !raw.rightsHolder && 'правообладатель',
+    !raw.licenseReference && 'договор или лицензия',
+    !raw.territories.length && 'территории показа',
+    !raw.startsAt && 'начало прав',
+    !raw.audioLanguages.length && 'язык аудио'
+  ].filter(Boolean);
+  if (missing.length) throw new Error(`Заполни паспорт публикации: ${missing.join(', ')}.`);
+  const startsAt = new Date(raw.startsAt);
+  const endsAt = raw.endsAt ? new Date(raw.endsAt) : null;
+  if (Number.isNaN(startsAt.getTime()) || (endsAt && Number.isNaN(endsAt.getTime()))) throw new Error('Проверь даты действия прав.');
+  if (endsAt && endsAt.getTime() <= startsAt.getTime()) throw new Error('Дата окончания прав должна быть позже даты начала.');
+  return {
+    ageRating: raw.ageRating,
+    rightsBasis: raw.rightsBasis,
+    rightsHolder: raw.rightsHolder,
+    licenseReference: raw.licenseReference,
+    territories: raw.territories,
+    startsAt: startsAt.toISOString(),
+    endsAt: endsAt ? endsAt.toISOString() : null,
+    audioLanguages: raw.audioLanguages,
+    subtitleLanguages: raw.subtitleLanguages
+  };
+}
+
 function contentPayloadFromForm(data, existing) {
   return {
     title: data.title,
     genre: data.genre,
     kind: apiKindByStudioKind[data.kind] || 'series',
     episodes: data.episodes,
-    status: apiStatusFromStudio(data.status),
     access: data.access,
-    ...(existing ? {} : { synopsis: '' })
+    ...(existing ? {} : { synopsis: '' }),
+    ...(data.compliance ? { compliance: data.compliance } : {})
   };
 }
 
 async function saveContentFromForm() {
   const id = document.querySelector('#content-id').value;
   const existing = id ? contentById(id) : null;
-  const data = {
-    title: document.querySelector('#content-title').value.trim(),
-    genre: document.querySelector('#content-genre').value,
-    kind: document.querySelector('#content-kind').value,
-    episodes: Number(document.querySelector('#content-episodes').value),
-    status: document.querySelector('#content-status').value,
-    access: document.querySelector('#content-access').value,
-    price: Math.max(0, Number(document.querySelector('#content-price').value) || 0)
-  };
   const submit = contentForm.querySelector('[type="submit"]');
   const original = submit.textContent;
   submit.disabled = true;
   submit.textContent = 'Сохраняем…';
   try {
+    const data = {
+      title: document.querySelector('#content-title').value.trim(),
+      genre: document.querySelector('#content-genre').value,
+      kind: document.querySelector('#content-kind').value,
+      episodes: Number(document.querySelector('#content-episodes').value),
+      status: document.querySelector('#content-status').value,
+      access: document.querySelector('#content-access').value,
+      price: Math.max(0, Number(document.querySelector('#content-price').value) || 0),
+      compliance: complianceFromForm()
+    };
     if (isApiMode()) {
       const result = await apiRequest(id ? `/v1/admin/content/${encodeURIComponent(id)}` : '/v1/admin/content', { method: id ? 'PATCH' : 'POST', body: contentPayloadFromForm(data, existing) });
       const updated = normalizeApiContent(result.item);
@@ -966,6 +1050,41 @@ async function saveContentFromForm() {
   } finally {
     submit.disabled = false;
     submit.textContent = original;
+  }
+}
+
+async function updateContentLifecycle(id, action) {
+  if (!isApiMode()) return;
+  const item = contentById(id);
+  if (!item) return;
+  const requests = {
+    'submit-review': { path: 'submit-review', body: {}, success: 'Материал отправлен на проверку.' },
+    'publish-content': { path: 'publish', body: {}, success: 'Материал опубликован.' }
+  };
+  if (action === 'verify-rights') {
+    const reference = window.prompt('Введи номер юридической проверки, договора или записи в реестре.');
+    if (reference === null) return;
+    if (reference.trim().length < 3) { showToast('Укажи номер проверки минимум из 3 символов.'); return; }
+    request = { path: 'verify-rights', body: { reference: reference.trim() }, success: 'Права подтверждены. Теперь материал можно публиковать.' };
+  }
+  let request = requests[action];
+  if (action === 'unpublish-content') {
+    const reason = window.prompt('Почему снимаем материал с показа? Эта причина останется в аудите.');
+    if (reason === null) return;
+    if (reason.trim().length < 3) { showToast('Укажи причину минимум из 3 символов.'); return; }
+    request = { path: 'unpublish', body: { reason: reason.trim() }, success: 'Материал снят с показа.' };
+  }
+  if (!request) return;
+  try {
+    const result = await apiRequest(`/v1/admin/content/${encodeURIComponent(id)}/${request.path}`, { method: 'POST', body: request.body });
+    const updated = normalizeApiContent(result.item);
+    studio.content = studio.content.map((entry) => entry.id === id ? { ...entry, ...updated } : entry);
+    refreshCommentMetadata();
+    renderStudio();
+    showToast(request.success);
+  } catch (error) {
+    const blocks = Array.isArray(error.payload?.blocks) ? error.payload.blocks : [];
+    showToast(blocks.length ? `Публикация заблокирована: ${blocks.join('; ')}.` : (error.message || 'Не удалось изменить статус публикации.'));
   }
 }
 
@@ -1063,6 +1182,7 @@ async function handleAction(name, action) {
   if (name === 'select-banner-media') document.querySelector('#banner-media').click();
   if (name === 'remove-banner-media') { bannerMediaDraft = null; document.querySelector('#banner-media').value = ''; renderBannerMediaState(); showToast('Изображение убрано из баннера'); }
   if (name === 'edit-content') openContentDialog(contentById(id));
+  if (name === 'submit-review' || name === 'verify-rights' || name === 'publish-content' || name === 'unpublish-content') await updateContentLifecycle(id, name);
   if (name === 'delete-content') askDelete(id);
   if (name === 'move-home') moveHome(id, action.dataset.direction);
   if (name === 'move-banner') moveBanner(id, action.dataset.direction);

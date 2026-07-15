@@ -12,10 +12,13 @@ import { z, ZodError } from 'zod';
 import { createMediaStore } from './media-store.js';
 import { createPostgresStore } from './postgres-store.js';
 
-const roles = ['superadmin', 'content_editor', 'moderator', 'support', 'analyst'];
+const roles = ['superadmin', 'content_editor', 'legal_reviewer', 'moderator', 'support', 'analyst'];
 const contentKinds = ['series', 'episode', 'trailer', 'clip'];
 const accessKinds = ['free', 'subscription', 'purchase'];
+const ageRatings = ['0+', '6+', '12+', '16+', '18+'];
+const rightsBases = ['original', 'contract', 'license', 'demo'];
 const commentStatuses = ['pending', 'approved', 'hidden', 'deleted'];
+const publicRequestStatuses = ['received', 'in_progress', 'completed', 'rejected'];
 const playbackEvents = ['intent', 'first_frame', 'pause', 'buffer_start', 'buffer_end', 'error', 'complete'];
 const bannerMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const sourceVideoTypes = new Map([
@@ -37,14 +40,31 @@ const publicFiles = new Map([
   ['/app.js', 'app.js'],
   ['/admin.html', 'admin.html'],
   ['/admin.css', 'admin.css'],
-  ['/admin.js', 'admin.js']
+  ['/admin.js', 'admin.js'],
+  ['/legal.css', 'legal/legal.css'],
+  ['/legal.js', 'legal/legal.js']
 ]);
+
+const demoCompliance = {
+  ageRating: '16+',
+  rightsBasis: 'demo',
+  rightsHolder: 'SakhaTube demo catalog',
+  licenseReference: 'DEMO-ONLY — replace before commercial release',
+  territories: ['global'],
+  startsAt: '2026-07-01T00:00:00.000Z',
+  endsAt: null,
+  audioLanguages: ['ru'],
+  subtitleLanguages: [],
+  verifiedAt: '2026-07-14T09:00:00.000Z',
+  verifiedBy: 'local-demo-reviewer',
+  verificationReference: 'DEMO-REVIEW-ONLY'
+};
 
 export const defaultSeed = {
   content: [
-    { id: 'midnight', title: 'После полуночи', kind: 'series', genre: 'Драма', synopsis: 'История, в которой одна ночь меняет всё.', status: 'published', access: 'subscription', episodes: 8, views: 128430, likes: 18320, createdAt: '2026-07-10T10:00:00.000Z', updatedAt: '2026-07-14T09:00:00.000Z' },
-    { id: 'signal', title: 'Тихий сигнал', kind: 'series', genre: 'Мистика', synopsis: 'Каждый новый сигнал открывает ещё одну тайну.', status: 'published', access: 'free', episodes: 10, views: 96420, likes: 12180, createdAt: '2026-07-09T10:00:00.000Z', updatedAt: '2026-07-14T09:00:00.000Z' },
-    { id: 'floor', title: 'Пятый этаж', kind: 'series', genre: 'Триллер', synopsis: 'Черновик нового сериала.', status: 'draft', access: 'subscription', episodes: 6, views: 0, likes: 0, createdAt: '2026-07-14T10:00:00.000Z', updatedAt: '2026-07-14T10:00:00.000Z' }
+    { id: 'midnight', title: 'После полуночи', kind: 'series', genre: 'Драма', synopsis: 'История, в которой одна ночь меняет всё.', status: 'published', access: 'subscription', episodes: 8, views: 128430, likes: 18320, compliance: demoCompliance, createdAt: '2026-07-10T10:00:00.000Z', updatedAt: '2026-07-14T09:00:00.000Z' },
+    { id: 'signal', title: 'Тихий сигнал', kind: 'series', genre: 'Мистика', synopsis: 'Каждый новый сигнал открывает ещё одну тайну.', status: 'published', access: 'free', episodes: 10, views: 96420, likes: 12180, compliance: demoCompliance, createdAt: '2026-07-09T10:00:00.000Z', updatedAt: '2026-07-14T09:00:00.000Z' },
+    { id: 'floor', title: 'Пятый этаж', kind: 'series', genre: 'Триллер', synopsis: 'Черновик нового сериала.', status: 'draft', access: 'subscription', episodes: 6, views: 0, likes: 0, compliance: demoCompliance, createdAt: '2026-07-14T10:00:00.000Z', updatedAt: '2026-07-14T10:00:00.000Z' }
   ],
   homeSlots: ['midnight', 'signal'],
   comments: [
@@ -59,6 +79,7 @@ export function createMemoryStore(seed = defaultSeed) {
   const state = clone({
     ...seed,
     media: seed.media ?? [],
+    publicRequests: seed.publicRequests ?? [],
     content: seed.content.map((item) => ({
       scheduledAt: null,
       publishedAt: null,
@@ -73,6 +94,10 @@ export function createMemoryStore(seed = defaultSeed) {
 
   function findMedia(id) {
     return state.media.find((item) => item.id === id);
+  }
+
+  function findPublicRequest(id) {
+    return state.publicRequests.find((item) => item.id === id);
   }
 
   return {
@@ -122,6 +147,31 @@ export function createMemoryStore(seed = defaultSeed) {
       return clone(comment);
     },
     addPlayback(event) { state.playback.push({ id: randomUUID(), receivedAt: now(), ...event }); },
+    createPublicRequest(data) {
+      const record = {
+        id: randomUUID(),
+        status: 'received',
+        resolutionNote: null,
+        resolvedAt: null,
+        createdAt: now(),
+        updatedAt: now(),
+        ...data
+      };
+      state.publicRequests.unshift(record);
+      return clone(record);
+    },
+    listPublicRequests({ type, status } = {}) {
+      return state.publicRequests
+        .filter((item) => (!type || item.type === type) && (!status || item.status === status))
+        .map(clone);
+    },
+    getPublicRequest(id) { const item = findPublicRequest(id); return item && clone(item); },
+    updatePublicRequest(id, patch) {
+      const item = findPublicRequest(id);
+      if (!item) return null;
+      Object.assign(item, patch, { updatedAt: now() });
+      return clone(item);
+    },
     createMedia(data) {
       const record = {
         id: data.id ?? randomUUID(),
@@ -171,13 +221,35 @@ export function createMemoryStore(seed = defaultSeed) {
   };
 }
 
+const complianceInput = z.object({
+  ageRating: z.enum(ageRatings),
+  rightsBasis: z.enum(rightsBases),
+  rightsHolder: z.string().trim().min(2).max(160),
+  licenseReference: z.string().trim().min(3).max(240),
+  territories: z.array(z.string().trim().min(2).max(16)).min(1).max(250).refine((value) => new Set(value.map((item) => item.toLowerCase())).size === value.length, 'Территории не должны повторяться'),
+  startsAt: z.string().datetime({ offset: true }),
+  endsAt: z.string().datetime({ offset: true }).nullable().optional(),
+  audioLanguages: z.array(z.string().trim().min(2).max(16)).min(1).max(20),
+  subtitleLanguages: z.array(z.string().trim().min(2).max(16)).max(20).default([]),
+  verifiedAt: z.string().datetime({ offset: true }).optional()
+}).strict().superRefine((value, context) => {
+  if (value.endsAt && new Date(value.endsAt).getTime() <= new Date(value.startsAt).getTime()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['endsAt'], message: 'Дата окончания прав должна быть позже даты начала' });
+  }
+});
+
+const rightsVerificationInput = z.object({
+  reference: z.string().trim().min(3).max(240)
+}).strict();
+
 const contentInput = z.object({
   title: z.string().trim().min(1).max(120),
   kind: z.enum(contentKinds),
   genre: z.string().trim().min(1).max(64),
   synopsis: z.string().trim().max(2000).default(''),
   access: z.enum(accessKinds).default('free'),
-  episodes: z.number().int().min(1).max(999).default(1)
+  episodes: z.number().int().min(1).max(999).default(1),
+  compliance: complianceInput.optional()
 }).strict();
 
 const contentPatch = contentInput.partial().strict();
@@ -187,6 +259,21 @@ const contentParams = z.object({ id: z.string().min(1).max(80) });
 const submitReviewInput = z.object({ note: z.string().trim().max(500).optional() }).default({});
 const publishInput = z.object({ scheduledAt: z.string().datetime({ offset: true }).optional() }).default({});
 const unpublishInput = z.object({ reason: z.string().trim().min(3).max(500) });
+const publicRequestInput = z.object({
+  email: z.string().trim().email().max(254),
+  accountEmail: z.string().trim().email().max(254).optional(),
+  message: z.string().trim().max(1_000).optional(),
+  confirmation: z.literal(true)
+}).strict();
+const publicRequestParams = z.object({ id: z.string().uuid() });
+const publicRequestQuery = z.object({
+  type: z.enum(['deletion', 'support']).optional(),
+  status: z.enum(publicRequestStatuses).optional()
+}).strict();
+const publicRequestAction = z.object({
+  status: z.enum(['in_progress', 'completed', 'rejected']),
+  note: z.string().trim().max(1_000).optional()
+}).strict();
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
   sessionId: z.string().min(16).max(128),
@@ -250,8 +337,49 @@ function parseOrReply(schema, input, reply) {
   return null;
 }
 
+function contentPublicationBlocks(item, at = now(), { allowDemoRights = false, requireLegalVerification = true } = {}) {
+  const compliance = item?.compliance;
+  const blocks = [];
+  if (!compliance) return ['Не заполнены права, возрастной рейтинг и языки контента'];
+  if (!ageRatings.includes(compliance.ageRating)) blocks.push('Не указан допустимый возрастной рейтинг');
+  if (!rightsBases.includes(compliance.rightsBasis)) blocks.push('Не указано основание прав на показ');
+  if (compliance.rightsBasis === 'demo' && !allowDemoRights) blocks.push('Демо-материал нельзя публиковать в production');
+  if (!compliance.rightsHolder?.trim()) blocks.push('Не указан правообладатель');
+  if (!compliance.licenseReference?.trim()) blocks.push('Не указан договор, лицензия или иной документ-основание');
+  if (!Array.isArray(compliance.territories) || !compliance.territories.length) blocks.push('Не указаны территории показа');
+  if (!Array.isArray(compliance.audioLanguages) || !compliance.audioLanguages.length) blocks.push('Не указан язык аудио');
+  const startsAt = new Date(compliance.startsAt).getTime();
+  const endsAt = compliance.endsAt ? new Date(compliance.endsAt).getTime() : null;
+  const targetAt = new Date(at).getTime();
+  if (!Number.isFinite(startsAt) || startsAt > targetAt) blocks.push('Права ещё не действуют на дату публикации');
+  if (endsAt !== null && (!Number.isFinite(endsAt) || endsAt <= targetAt)) blocks.push('Срок прав истёк');
+  if (requireLegalVerification && (!compliance.verifiedAt || !compliance.verifiedBy || !compliance.verificationReference)) {
+    blocks.push('Права не подтверждены юридическим проверяющим');
+  }
+  return blocks;
+}
+
+function isPubliclyAvailable(item, at = now(), options = {}) {
+  return item?.status === 'published' && contentPublicationBlocks(item, at, options).length === 0;
+}
+
+// Rights records belong to the internal Studio only.  The public catalogue
+// receives the information a viewer needs (rating and available languages),
+// but never contract references or the name of a rights holder.
+function publicContent(item) {
+  if (!item) return null;
+  const { compliance, ...content } = item;
+  return {
+    ...content,
+    ageRating: compliance?.ageRating ?? null,
+    audioLanguages: Array.isArray(compliance?.audioLanguages) ? compliance.audioLanguages : [],
+    subtitleLanguages: Array.isArray(compliance?.subtitleLanguages) ? compliance.subtitleLanguages : []
+  };
+}
+
 export function buildApp(options = {}) {
   const config = configFrom(options);
+  const publicationGate = { allowDemoRights: !config.production };
   let store = options.store ?? null;
   const mediaStore = options.mediaStore ?? createMediaStore(config.media);
   const app = Fastify({ logger: options.logger ?? false, requestIdHeader: 'x-request-id', genReqId: () => randomUUID() });
@@ -322,11 +450,14 @@ export function buildApp(options = {}) {
   })).catch((error) => request.log.error(error));
 
   const promoteDueScheduledContent = async (request) => {
-    if (typeof store.publishDueContent !== 'function') return;
-    const dueItems = await store.publishDueContent(now());
-    for (const item of dueItems) {
-      const before = { ...item, status: 'scheduled', publishedAt: null, scheduledAt: item.scheduledAt };
-      await audit(request, 'content.publish.scheduled', 'content', item.id, before, item, { id: 'system', roles: [] });
+    const at = now();
+    const scheduledItems = (await store.listContent()).filter((item) => item.status === 'scheduled' && item.scheduledAt && new Date(item.scheduledAt).getTime() <= new Date(at).getTime());
+    for (const before of scheduledItems) {
+      const blocks = contentPublicationBlocks(before, at, publicationGate);
+      const item = blocks.length
+        ? await store.updateContent(before.id, { status: 'unpublished', scheduledAt: null, unpublishedReason: `Автоматическая проверка заблокировала публикацию: ${blocks.join('; ')}` })
+        : await store.updateContent(before.id, { status: 'published', scheduledAt: null, publishedAt: at, unpublishedReason: null });
+      await audit(request, blocks.length ? 'content.schedule.blocked' : 'content.publish.scheduled', 'content', item.id, before, item, { id: 'system', roles: [] });
     }
   };
 
@@ -364,7 +495,9 @@ export function buildApp(options = {}) {
 
   const catalogHome = async (request) => {
     await promoteDueScheduledContent(request);
-    const items = await store.listPublishedHomeSlots();
+    const items = (await store.listPublishedHomeSlots())
+      .filter((item) => isPubliclyAvailable(item, now(), publicationGate))
+      .map(publicContent);
     return {
       hero: items[0] ?? null,
       shelves: [{ id: 'featured', title: 'Популярное', items }],
@@ -397,7 +530,18 @@ export function buildApp(options = {}) {
     if (!params || !body) return;
     const before = await store.getContent(params.id);
     if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
-    const item = await store.updateContent(params.id, body);
+    // Any material change to the rights passport invalidates its legal approval.
+    const passportKeys = ['ageRating', 'rightsBasis', 'rightsHolder', 'licenseReference', 'territories', 'startsAt', 'endsAt', 'audioLanguages', 'subtitleLanguages'];
+    const rightsChanged = body.compliance && passportKeys.some((key) => JSON.stringify(body.compliance[key] ?? null) !== JSON.stringify(before.compliance?.[key] ?? null));
+    const patch = body.compliance
+      ? {
+          ...body,
+          compliance: rightsChanged
+            ? { ...body.compliance, verifiedAt: null, verifiedBy: null, verificationReference: null }
+            : { ...body.compliance, verifiedAt: before.compliance?.verifiedAt ?? null, verifiedBy: before.compliance?.verifiedBy ?? null, verificationReference: before.compliance?.verificationReference ?? null }
+        }
+      : body;
+    const item = await store.updateContent(params.id, patch);
     audit(request, 'content.update', 'content', item.id, before, item);
     return { item };
   });
@@ -414,6 +558,27 @@ export function buildApp(options = {}) {
     return { item };
   });
 
+  app.post('/v1/admin/content/:id/verify-rights', { preHandler: app.allowRoles(['superadmin', 'legal_reviewer']) }, async (request, reply) => {
+    const params = parseOrReply(contentParams, request.params, reply);
+    const body = parseOrReply(rightsVerificationInput, request.body, reply);
+    if (!params || !body) return;
+    const before = await store.getContent(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    const blocks = contentPublicationBlocks(before, now(), { ...publicationGate, requireLegalVerification: false });
+    if (blocks.length) return reply.code(409).send({ error: 'RIGHTS_VERIFICATION_BLOCKED', message: 'Юридическая проверка невозможна: заполните паспорт публикации', blocks });
+    const verifiedAt = now();
+    const item = await store.updateContent(params.id, {
+      compliance: {
+        ...before.compliance,
+        verifiedAt,
+        verifiedBy: request.user.sub,
+        verificationReference: body.reference
+      }
+    });
+    await audit(request, 'content.rights.verify', 'content', item.id, before, item);
+    return { item };
+  });
+
   app.post('/v1/admin/content/:id/publish', { preHandler: app.allowRoles(['superadmin']) }, async (request, reply) => {
     const params = parseOrReply(contentParams, request.params, reply);
     const body = parseOrReply(publishInput, request.body, reply);
@@ -421,6 +586,15 @@ export function buildApp(options = {}) {
     const before = await store.getContent(params.id);
     if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
     if (before.status !== 'review') return lifecycleConflict(reply, before, 'Опубликовать можно только материал, прошедший этап review');
+    const publicationAt = body.scheduledAt ?? now();
+    const publicationBlocks = contentPublicationBlocks(before, publicationAt, publicationGate);
+    if (publicationBlocks.length) {
+      return reply.code(409).send({
+        error: 'PUBLISH_BLOCKED_BY_COMPLIANCE',
+        message: 'Публикация заблокирована: заполните права, возрастной рейтинг и доступность контента',
+        blocks: publicationBlocks
+      });
+    }
 
     if (body.scheduledAt) {
       const scheduledAt = new Date(body.scheduledAt).toISOString();
@@ -451,7 +625,7 @@ export function buildApp(options = {}) {
 
   app.get('/v1/catalog', async (request) => {
     await promoteDueScheduledContent(request);
-    return { items: await store.listPublishedContent() };
+    return { items: (await store.listPublishedContent()).filter((item) => isPubliclyAvailable(item, now(), publicationGate)).map(publicContent) };
   });
   app.get('/v1/catalog/home', async (request) => catalogHome(request));
   app.get('/v1/catalog/:id', async (request, reply) => {
@@ -459,10 +633,57 @@ export function buildApp(options = {}) {
     const params = parseOrReply(contentParams, request.params, reply);
     if (!params) return;
     const item = await store.getContent(params.id);
-    if (!item || item.status !== 'published') return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
-    return { item };
+    if (!isPubliclyAvailable(item, now(), publicationGate)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    return { item: publicContent(item) };
   });
   app.get('/v1/home', async (request) => catalogHome(request));
+
+  app.post('/v1/privacy/deletion-requests', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
+    const body = parseOrReply(publicRequestInput, request.body, reply);
+    if (!body) return;
+    const item = await store.createPublicRequest({
+      type: 'deletion',
+      email: body.email.toLowerCase(),
+      accountEmail: body.accountEmail?.toLowerCase() ?? null,
+      message: body.message ?? ''
+    });
+    await audit(request, 'privacy.deletion_request.create', 'public_request', item.id, null, { type: item.type, status: item.status });
+    return reply.code(202).send({ requestId: item.id, status: item.status });
+  });
+
+  app.post('/v1/support/requests', { config: { rateLimit: { max: 8, timeWindow: '1 hour' } } }, async (request, reply) => {
+    const body = parseOrReply(publicRequestInput, request.body, reply);
+    if (!body) return;
+    const item = await store.createPublicRequest({
+      type: 'support',
+      email: body.email.toLowerCase(),
+      accountEmail: body.accountEmail?.toLowerCase() ?? null,
+      message: body.message ?? ''
+    });
+    await audit(request, 'support.request.create', 'public_request', item.id, null, { type: item.type, status: item.status });
+    return reply.code(202).send({ requestId: item.id, status: item.status });
+  });
+
+  app.get('/v1/admin/requests', { preHandler: app.allowRoles(['superadmin', 'support']) }, async (request, reply) => {
+    const query = parseOrReply(publicRequestQuery, request.query, reply);
+    if (!query) return;
+    return { items: await store.listPublicRequests(query) };
+  });
+
+  app.patch('/v1/admin/requests/:id', { preHandler: app.allowRoles(['superadmin', 'support']) }, async (request, reply) => {
+    const params = parseOrReply(publicRequestParams, request.params, reply);
+    const body = parseOrReply(publicRequestAction, request.body, reply);
+    if (!params || !body) return;
+    const before = await store.getPublicRequest?.(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Обращение не найдено' });
+    const item = await store.updatePublicRequest(params.id, {
+      status: body.status,
+      resolutionNote: body.note ?? null,
+      resolvedAt: ['completed', 'rejected'].includes(body.status) ? now() : null
+    });
+    await audit(request, 'public_request.update', 'public_request', item.id, { type: before.type, status: before.status }, { type: item.type, status: item.status });
+    return { item };
+  });
 
   app.get('/v1/admin/home/slots', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({ items: await store.listHomeSlots() }));
   app.patch('/v1/admin/home/slots', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
@@ -721,6 +942,16 @@ export function buildApp(options = {}) {
 
   if (options.serveStatic !== false) {
     app.register(fastifyStatic, { root: projectRoot, serve: false });
+    const legalPages = new Map([
+      ['/privacy', 'legal/privacy.html'],
+      ['/terms', 'legal/terms.html'],
+      ['/community-rules', 'legal/community-rules.html'],
+      ['/support', 'legal/support.html'],
+      ['/delete-account', 'legal/delete-account.html']
+    ]);
+    for (const [route, file] of legalPages) {
+      app.get(route, async (request, reply) => reply.type('text/html; charset=utf-8').sendFile(file));
+    }
     app.get('/', async (request, reply) => reply.type('text/html; charset=utf-8').sendFile(publicFiles.get('/')));
     app.get('/:asset', async (request, reply) => {
       const file = publicFiles.get(`/${request.params.asset}`);

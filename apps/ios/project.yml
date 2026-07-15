@@ -11,7 +11,11 @@ settings:
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
-    SAKHATUBE_API_BASE_URL: http://127.0.0.1:3000
+  configs:
+    Debug:
+      SAKHATUBE_API_BASE_URL: "http://127.0.0.1:3000"
+    Release:
+      SAKHATUBE_API_BASE_URL: "https://sakhatube-production.up.railway.app"
 targets:
   SakhaTube:
     type: application

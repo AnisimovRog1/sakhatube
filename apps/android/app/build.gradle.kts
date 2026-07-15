@@ -1,0 +1,80 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
+val catalogBaseUrl = providers.gradleProperty("SAKHATUBE_CATALOG_BASE_URL")
+    .orElse("https://sakhatube-production.up.railway.app")
+val privacyPolicyUrl = providers.gradleProperty("SAKHATUBE_PRIVACY_URL").orElse("https://sakhatube-production.up.railway.app/privacy")
+val termsUrl = providers.gradleProperty("SAKHATUBE_TERMS_URL").orElse("https://sakhatube-production.up.railway.app/terms")
+val accountDeletionUrl = providers.gradleProperty("SAKHATUBE_ACCOUNT_DELETION_URL").orElse("https://sakhatube-production.up.railway.app/delete-account")
+
+android {
+    namespace = "com.sakhatube.android"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.sakhatube.app"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = "0.1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "CATALOG_BASE_URL", catalogBaseUrl.get().asBuildConfigString())
+        buildConfigField("String", "PRIVACY_POLICY_URL", privacyPolicyUrl.get().asBuildConfigString())
+        buildConfigField("String", "TERMS_URL", termsUrl.get().asBuildConfigString())
+        buildConfigField("String", "ACCOUNT_DELETION_URL", accountDeletionUrl.get().asBuildConfigString())
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    val composeBom = platform("androidx.compose:compose-bom:2025.06.01")
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.1")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.foundation:foundation")
+
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("junit:junit:4.13.2")
+}
