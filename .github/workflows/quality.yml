@@ -1,0 +1,28 @@
+name: Quality gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  server-and-release-files:
+    name: Server API and release files
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v22
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:api
+      - run: node --check server/app.js
+      - run: node --check server/postgres-store.js
+      - run: node --check legal/legal.js
+      - run: node -e "JSON.parse(require('fs').readFileSync('release/store-submission-checklist.json', 'utf8')); console.log('release checklist valid')"

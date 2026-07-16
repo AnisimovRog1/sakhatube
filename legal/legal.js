@@ -81,3 +81,34 @@ if (developmentVerifyButton) {
     }
   });
 }
+
+const emailVerification = document.querySelector('[data-email-verification]');
+const emailVerifyButton = document.querySelector('[data-email-verify]');
+const emailVerifyStatus = document.querySelector('[data-email-verify-status]');
+const verificationRequestId = new URLSearchParams(window.location.search).get('request');
+const verificationToken = new URLSearchParams(window.location.search).get('token');
+
+if (emailVerification && emailVerifyButton && verificationRequestId && verificationToken) {
+  emailVerification.hidden = false;
+  emailVerifyButton.addEventListener('click', async () => {
+    emailVerifyButton.disabled = true;
+    emailVerifyStatus.className = 'form-status';
+    try {
+      const response = await fetch(`/v1/privacy/deletion-requests/${encodeURIComponent(verificationRequestId)}/verify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ token: verificationToken })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message || 'Ссылка недействительна или истекла.');
+      emailVerifyStatus.classList.add('success');
+      emailVerifyStatus.textContent = 'Запрос подтверждён. Мы начнём безопасное удаление данных.';
+      emailVerifyButton.hidden = true;
+      window.history.replaceState({}, document.title, '/delete-account');
+    } catch (error) {
+      emailVerifyStatus.classList.add('error');
+      emailVerifyStatus.textContent = error.message || 'Не удалось подтвердить запрос.';
+      emailVerifyButton.disabled = false;
+    }
+  });
+}

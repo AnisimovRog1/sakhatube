@@ -300,7 +300,15 @@ test('deletion requests require a one-time verification before staff can complet
 
 test('production deletion responses never disclose a verification token', async (t) => {
   const store = createMemoryStore();
-  const app = await createTestApp({ store, nodeEnv: 'production', allowDemoStore: true, allowDevTokens: false });
+  const deliveries = [];
+  const app = await createTestApp({
+    store,
+    nodeEnv: 'production',
+    allowDemoStore: true,
+    allowDevTokens: false,
+    publicBaseUrl: 'https://sakhatube.example',
+    mailer: async (message) => { deliveries.push(message); }
+  });
   t.after(() => app.close());
   const accepted = await app.inject({
     method: 'POST',
@@ -312,6 +320,21 @@ test('production deletion responses never disclose a verification token', async 
   assert.equal('developmentVerification' in body, false);
   assert.equal(JSON.stringify(store.getPublicRequest(body.requestId)).includes('viewer@example.com'), true);
   assert.match(store.getPublicRequest(body.requestId).verificationTokenHash, /^[a-f0-9]{64}$/);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].to, 'viewer@example.com');
+  assert.match(deliveries[0].verificationUrl, /^https:\/\/sakhatube\.example\/delete-account\?request=/);
+});
+
+test('production rejects deletion requests until mail delivery is configured', async (t) => {
+  const app = await createTestApp({ nodeEnv: 'production', allowDemoStore: true, allowDevTokens: false });
+  t.after(() => app.close());
+  const response = await app.inject({
+    method: 'POST',
+    url: '/v1/privacy/deletion-requests',
+    payload: { email: 'viewer@example.com', confirmation: true }
+  });
+  assert.equal(response.statusCode, 503);
+  assert.equal(JSON.parse(response.body).error, 'DELETION_EMAIL_UNAVAILABLE');
 });
 
 test('private multipart upload is role-protected, paged, validated, and queued after completion', async (t) => {

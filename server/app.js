@@ -327,6 +327,10 @@ function configFrom(overrides = {}) {
   const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
   const deletionVerificationSecret = overrides.deletionVerificationSecret ?? process.env.DELETION_VERIFICATION_SECRET ?? jwtSecret;
   const deletionVerificationTtlMs = overrides.deletionVerificationTtlMs ?? Number(process.env.DELETION_VERIFICATION_TTL_MS || 24 * 60 * 60 * 1000);
+  const publicBaseUrl = (overrides.publicBaseUrl ?? process.env.PUBLIC_APP_URL ?? (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')).replace(/\/$/, '');
+  const mailerWebhookUrl = overrides.mailerWebhookUrl ?? process.env.MAILER_WEBHOOK_URL ?? '';
+  const mailerWebhookBearerToken = overrides.mailerWebhookBearerToken ?? process.env.MAILER_WEBHOOK_BEARER_TOKEN ?? '';
+  const mailer = overrides.mailer ?? null;
   const media = overrides.media ?? {
     endpoint: process.env.S3_ENDPOINT,
     accessKeyId: process.env.S3_ACCESS_KEY_ID,
@@ -338,7 +342,7 @@ function configFrom(overrides = {}) {
   if (production && !databaseUrl && !allowDemoStore) throw new Error('DATABASE_URL обязателен в production: in-memory store нельзя публиковать');
   if (!Number.isInteger(deletionVerificationTtlMs) || deletionVerificationTtlMs < 60_000 || deletionVerificationTtlMs > 7 * 24 * 60 * 60 * 1000) throw new Error('DELETION_VERIFICATION_TTL_MS должен быть от 1 минуты до 7 дней');
   if (production && deletionVerificationSecret.length < 32) throw new Error('DELETION_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs };
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer };
 }
 
 function deletionTokenHash(token, secret) {
@@ -354,6 +358,31 @@ function publicRequestForStaff(item) {
   if (!item) return item;
   const { verificationTokenHash, ...safe } = item;
   return { ...safe, verificationStatus: item.type === 'deletion' ? (item.verifiedAt ? 'verified' : 'pending') : null };
+}
+
+async function sendDeletionVerification(config, item, token) {
+  const verificationUrl = `${config.publicBaseUrl}/delete-account?request=${encodeURIComponent(item.id)}&token=${encodeURIComponent(token)}`;
+  const message = {
+    type: 'sakhatube.deletion_verification',
+    to: item.email,
+    subject: 'Подтверди удаление данных SakhaTube',
+    text: `Подтверди запрос на удаление данных: ${verificationUrl}\nСсылка действует до ${item.verificationExpiresAt}. Если это не ты — просто проигнорируй письмо.`,
+    requestId: item.id,
+    verificationUrl,
+    expiresAt: item.verificationExpiresAt
+  };
+  if (config.mailer) return config.mailer(message);
+  if (!config.mailerWebhookUrl) throw new Error('MAILER_NOT_CONFIGURED');
+  const response = await fetch(config.mailerWebhookUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(config.mailerWebhookBearerToken ? { authorization: `Bearer ${config.mailerWebhookBearerToken}` } : {})
+    },
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(8_000)
+  });
+  if (!response.ok) throw new Error(`MAILER_REJECTED_${response.status}`);
 }
 
 function parseOrReply(schema, input, reply) {
@@ -673,6 +702,9 @@ export function buildApp(options = {}) {
   app.post('/v1/privacy/deletion-requests', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
     const body = parseOrReply(publicRequestInput, request.body, reply);
     if (!body) return;
+    if (config.production && (!config.publicBaseUrl || (!config.mailer && !config.mailerWebhookUrl))) {
+      return reply.code(503).send({ error: 'DELETION_EMAIL_UNAVAILABLE', message: 'Сервис подтверждения удаления временно недоступен. Обратись в поддержку.' });
+    }
     const token = randomBytes(32).toString('base64url');
     const verificationExpiresAt = new Date(Date.now() + config.deletionVerificationTtlMs).toISOString();
     const item = await store.createPublicRequest({
@@ -685,6 +717,16 @@ export function buildApp(options = {}) {
       verificationExpiresAt
     });
     await audit(request, 'privacy.deletion_request.create', 'public_request', item.id, null, { type: item.type, status: item.status, verificationExpiresAt });
+    if (config.production) {
+      try {
+        await sendDeletionVerification(config, item, token);
+      } catch (error) {
+        await store.updatePublicRequest(item.id, { status: 'rejected', resolutionNote: 'Не удалось отправить письмо подтверждения. Создай новый запрос позже.', resolvedAt: now() });
+        await audit(request, 'privacy.deletion_request.delivery_failed', 'public_request', item.id, { type: item.type, status: item.status }, { type: item.type, status: 'rejected', reason: error.message });
+        request.log.error({ err: error, requestId: item.id }, 'Deletion verification email delivery failed');
+        return reply.code(503).send({ error: 'DELETION_EMAIL_UNAVAILABLE', message: 'Не удалось отправить письмо подтверждения. Попробуй ещё раз позже.' });
+      }
+    }
     const response = { requestId: item.id, status: item.status, verificationRequired: true };
     // No mail provider is connected yet. The token is exposed only in an explicitly
     // development-only preview so it cannot leak in Railway/production responses.
