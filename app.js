@@ -66,7 +66,9 @@ const shortIcons = {
   more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>',
   heart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.8a5.4 5.4 0 0 0-7.6 0L12 6l-1.2-1.2a5.4 5.4 0 0 0-7.6 7.6L12 21l8.8-8.6a5.4 5.4 0 0 0 0-7.6Z"/></svg>',
   comment: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 9 9 0 0 1-3.8-.9L4 19l1.3-3.4A7 7 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"/></svg>',
+  repost: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h9.5L14 4.5"/><path d="M17 17H7.5L10 19.5"/><path d="M16.5 7A5 5 0 0 1 19 11.3v.7M7.5 17A5 5 0 0 1 5 12.7V12"/></svg>',
   share: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5h6v6"/><path d="m19 5-9.5 9.5"/><path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"/></svg>',
+  send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 3-7.2 18-3.7-7.3L3 10.1 21 3Z"/><path d="m10.1 13.7 4.1-4.1"/></svg>',
   save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5h12v16l-6-3.6-6 3.6Z"/></svg>'
 };
 
@@ -625,7 +627,7 @@ function renderShort() {
   stage.style.background = short.tone;
   layout.style.setProperty('--short-backdrop', `url("${encodeURI(short.poster).replaceAll('"', '%22')}")`);
   const video = short.mp4 ? `<video class="short-video" src="${escapeHTML(short.mp4)}" poster="${escapeHTML(short.poster)}" autoplay muted loop playsinline preload="auto"></video>` : '';
-  stage.innerHTML = `${video}<div class="short-topbar"><button data-short-action="exit" type="button" aria-label="Выйти из раздела Для вас">${shortIcons.back}</button><span>Для вас</span></div><div class="short-top-actions"><button data-short-action="sound" type="button" aria-label="Включить звук">${shortIcons.soundOff}</button><button data-short-action="more" type="button" aria-label="Дополнительно">${shortIcons.more}</button></div><div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится"><b>${shortIcons.heart}</b><small>${escapeHTML(short.likes)}</small></button><button data-short-action="comments" type="button" aria-label="Комментарии"><b>${shortIcons.comment}</b><small>${escapeHTML(short.comments)}</small></button><button data-short-action="share" type="button" aria-label="Поделиться"><b>${shortIcons.share}</b><small>Поделиться</small></button><button data-short-action="save" type="button" aria-label="Сохранить"><b>${shortIcons.save}</b><small>Сохранить</small></button></div><div class="short-content"><span class="short-category">${escapeHTML(short.category)}</span><h2>${escapeHTML(short.title)}</h2><p>${escapeHTML(short.text)}</p><span class="short-hint">Нажми — пауза · свайпни вверх</span></div>`;
+  stage.innerHTML = `${video}<div class="short-topbar"><button data-short-action="exit" type="button" aria-label="Выйти из раздела Для вас">${shortIcons.back}</button><span>Для вас</span></div><div class="short-top-actions"><button data-short-action="sound" type="button" aria-label="Включить звук">${shortIcons.soundOff}</button></div><div class="short-actions"><button data-short-action="like" type="button" aria-label="Нравится"><b>${shortIcons.heart}</b><small>${escapeHTML(short.likes)}</small></button><button data-short-action="comments" type="button" aria-label="Комментарии"><b>${shortIcons.comment}</b><small>${escapeHTML(short.comments)}</small></button><button data-short-action="repost" type="button" aria-label="Сделать репост"><b>${shortIcons.repost}</b><small>Репост</small></button><button data-short-action="share" type="button" aria-label="Отправить"><b>${shortIcons.send}</b><small>Отправить</small></button><button data-short-action="more" type="button" aria-label="Дополнительно"><b>${shortIcons.more}</b><small>Ещё</small></button><button class="short-author" data-short-action="author" type="button" aria-label="Открыть автора"><img src="${escapeHTML(short.poster)}" alt="" /></button></div><div class="short-content"><span class="short-category">${escapeHTML(short.category)}</span><h2>${escapeHTML(short.title)}</h2><p>${escapeHTML(short.text)}</p><span class="short-hint">Нажми — пауза · свайпни вверх</span></div>`;
   document.querySelector('#shorts-counter').textContent = `${String(currentShort + 1).padStart(2, '0')} / ${String(shorts.length).padStart(2, '0')}`;
   const next = shorts[(currentShort + 1) % shorts.length];
   const preloader = document.querySelector('#short-preload');
@@ -1200,6 +1202,11 @@ async function handleShortAction(action, button) {
     showToast(isActive ? 'Сохранено на потом' : 'Убрано из сохранённого');
   }
   if (action === 'comments') await openShortComments(short);
+  if (action === 'repost') {
+    button.classList.toggle('is-active');
+    showToast(button.classList.contains('is-active') ? 'Репост добавлен в ваш профиль' : 'Репост убран из профиля');
+  }
+  if (action === 'author') openAction('Blender Open Movies', 'Официальный автор открытого фильма. Лицензия и источник указаны в карточке видео.', 'АВТОР');
   if (action === 'more') openAction('Настроить рекомендации', 'Можно скрыть ролик, пожаловаться или убрать похожие материалы из ленты.', 'ДЛЯ ВАС');
   if (action === 'sound') {
     const video = document.querySelector('#shorts-stage .short-video');
