@@ -28,7 +28,7 @@ class PlaybackRepository(private val baseUrl: String = BuildConfig.CATALOG_BASE_
         PlaybackSessionResult.Ready(PlaybackSession(sessionId, manifestUrl))
     }
 
-    suspend fun reportEvent(contentId: String, sessionId: String, event: String, positionMs: Long? = null, errorCode: String? = null) =
+    suspend fun reportEvent(contentId: String, sessionId: String, event: String, positionMs: Long? = null, errorCode: String? = null): Unit =
         withContext(Dispatchers.IO) {
             val body = JSONObject().apply {
                 put("contentId", contentId)
@@ -38,20 +38,20 @@ class PlaybackRepository(private val baseUrl: String = BuildConfig.CATALOG_BASE_
                 errorCode?.takeIf { it.isNotBlank() }?.let { put("errorCode", it.take(80)) }
             }
             // Analytics must never break playback or surface an error to the viewer.
-            runCatching { request("/v1/events/playback", "POST", body) }
+            runCatching { request("/v1/events/playback", "POST", body) }.getOrNull()
         }
 
     private fun RequestResponse.toFailure(): PlaybackSessionResult {
         val payload = json
         return when (payload?.optString("error")) {
         "ENTITLEMENT_REQUIRED" -> PlaybackSessionResult.Paywall(
-            payload?.optString("message").orEmpty().ifBlank { "Для просмотра нужен тариф или покупка." }
+            payload.optString("message").ifBlank { "Для просмотра нужен тариф или покупка." }
         )
         "PLAYBACK_NOT_READY" -> PlaybackSessionResult.Processing(
-            payload?.optString("message").orEmpty().ifBlank { "Видео ещё обрабатывается." }
+            payload.optString("message").ifBlank { "Видео ещё обрабатывается." }
         )
         "NOT_FOUND" -> PlaybackSessionResult.Unavailable(
-            payload?.optString("message").orEmpty().ifBlank { "Этот материал сейчас недоступен." }
+            payload.optString("message").ifBlank { "Этот материал сейчас недоступен." }
         )
         else -> PlaybackSessionResult.Unavailable(
             json?.optString("message")?.takeIf { it.isNotBlank() }

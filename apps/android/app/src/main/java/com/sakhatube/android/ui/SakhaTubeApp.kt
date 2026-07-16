@@ -29,8 +29,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AccountCircle
-import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Refresh
@@ -165,7 +165,7 @@ private fun AppTopBar(title: String, onBack: (() -> Unit)? = null) {
     TopAppBar(
         navigationIcon = {
             if (onBack != null) IconButton(onClick = onBack) {
-                Icon(Icons.Outlined.ArrowBack, contentDescription = "Назад")
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Назад")
             }
         },
         title = {
@@ -685,12 +685,13 @@ private fun ProfileScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
+            val signedInViewer = (authState as? AuthUiState.SignedIn)?.viewer
             when (authState) {
                 is AuthUiState.SignedIn -> SignedInProfileCard(
-                    viewerName = authState.viewer.displayName,
-                    username = authState.viewer.username,
-                    publicId = authState.viewer.id,
-                    email = authState.viewer.email,
+                    viewerName = requireNotNull(signedInViewer).displayName,
+                    username = signedInViewer.username,
+                    publicId = signedInViewer.id,
+                    email = signedInViewer.email,
                     onSignOut = authViewModel::signOut,
                     onRequestDeletion = {
                         authViewModel.clearDeletionState()

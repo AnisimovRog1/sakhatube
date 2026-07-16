@@ -53,11 +53,11 @@ interface ViewerSessionStore {
  */
 class EncryptedViewerSessionStore(context: Context) : ViewerSessionStore {
     private val preferences = EncryptedSharedPreferences.create(
+        context.applicationContext,
         SESSION_FILE,
         MasterKey.Builder(context.applicationContext)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build(),
-        context.applicationContext,
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )

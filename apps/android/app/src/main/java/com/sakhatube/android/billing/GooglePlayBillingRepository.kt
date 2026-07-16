@@ -29,7 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class GooglePlayBillingRepository(context: Context) : PurchasesUpdatedListener {
     private val verificationTransport = BillingVerificationTransport(context.applicationContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val _state = MutableStateFlow(BillingUiState.Disabled)
+    private val _state = MutableStateFlow<BillingUiState>(BillingUiState.Disabled)
     val state: StateFlow<BillingUiState> = _state.asStateFlow()
 
     private var productDetails: ProductDetails? = null
