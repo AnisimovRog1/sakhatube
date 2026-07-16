@@ -106,6 +106,19 @@ final class ViewerSessionStore: ObservableObject {
         FirebaseProfileDrafts.remove(uid: user.uid)
     }
 
+    /// Apple supplies the system credential; Firebase turns it into a verified
+    /// identity token, and SakhaTube exchanges only that short-lived token.
+    func loginWithApple(identityToken: String, nonce: String, displayName: String?) async throws {
+        isWorking = true
+        defer { isWorking = false }
+        try requireFirebaseConfiguration()
+        let credential = OAuthProvider.appleCredential(withIDToken: identityToken, rawNonce: nonce, fullName: nil)
+        let result = try await Auth.auth().signIn(with: credential)
+        let token = try await result.user.getIDToken(forcingRefresh: true)
+        let session = try await api.exchangeFirebaseIDToken(token, username: nil, displayName: displayName)
+        accept(session)
+    }
+
     /// Rotates the stored refresh token on every restoration. If the server
     /// rejects it, the unusable credential is removed and the app stays guest.
     func restoreSession() async {

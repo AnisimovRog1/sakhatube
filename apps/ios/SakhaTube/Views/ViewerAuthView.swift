@@ -1,3 +1,5 @@
+import AuthenticationServices
+import CryptoKit
 import SwiftUI
 
 struct ViewerAuthView: View {
@@ -11,6 +13,7 @@ struct ViewerAuthView: View {
     @State private var displayName = ""
     @State private var message: String?
     @State private var errorMessage: String?
+    @State private var appleNonce: String?
 
     private enum Mode: String, CaseIterable, Identifiable {
         case signIn = "Войти"
@@ -32,6 +35,7 @@ struct ViewerAuthView: View {
                 case .signIn:
                     signInFields
                     submitButton("Войти") { await signIn() }
+                    appleSignInButton
                 case .signUp:
                     signUpFields
                     submitButton("Отправить письмо") { await signUp() }
@@ -66,6 +70,16 @@ struct ViewerAuthView: View {
                 .textContentType(.username)
             SecureField("Пароль", text: $password)
                 .textContentType(.password)
+        }
+    }
+
+    private var appleSignInButton: some View {
+        Section {
+            SignInWithAppleButton(.signIn, onRequest: configureAppleRequest, onCompletion: handleAppleCompletion)
+                .signInWithAppleButtonStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .disabled(viewerSession.isWorking)
+                .accessibilityLabel("Продолжить с Apple")
         }
     }
 
@@ -116,9 +130,59 @@ struct ViewerAuthView: View {
         } catch { errorMessage = error.userFacingAuthMessage }
     }
 
+    private func configureAppleRequest(_ request: ASAuthorizationAppleIDRequest) {
+        let nonce = AppleSignInNonce.make()
+        appleNonce = nonce
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = AppleSignInNonce.sha256(nonce)
+    }
+
+    private func handleAppleCompletion(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .failure(let error):
+            // Cancelling the system sheet is not an application failure.
+            if (error as? ASAuthorizationError)?.code != .canceled {
+                errorMessage = "Не удалось войти через Apple. Попробуйте ещё раз."
+            }
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                  let nonce = appleNonce,
+                  let tokenData = credential.identityToken,
+                  let identityToken = String(data: tokenData, encoding: .utf8) else {
+                errorMessage = "Apple не передал данные для входа. Попробуйте ещё раз."
+                return
+            }
+            let name = [credential.fullName?.givenName, credential.fullName?.familyName]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank }
+                .joined(separator: " ")
+                .nilIfBlank
+            Task {
+                resetFeedback()
+                do {
+                    try await viewerSession.loginWithApple(identityToken: identityToken, nonce: nonce, displayName: name)
+                    dismiss()
+                } catch {
+                    errorMessage = error.userFacingAuthMessage
+                }
+            }
+        }
+    }
+
     private func resetFeedback() {
         message = nil
         errorMessage = nil
+    }
+}
+
+private enum AppleSignInNonce {
+    static func make() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        precondition(SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess)
+        return Data(bytes).base64EncodedString()
+    }
+
+    static func sha256(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
