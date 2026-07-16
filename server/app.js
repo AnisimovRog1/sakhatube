@@ -124,6 +124,7 @@ export function createMemoryStore(seed = defaultSeed) {
     viewerAccounts: seed.viewerAccounts ?? [],
     viewerSessions: seed.viewerSessions ?? [],
     commentReports: seed.commentReports ?? [],
+    viewerBlocks: seed.viewerBlocks ?? [],
     content: seed.content.map((item) => ({
       scheduledAt: null,
       publishedAt: null,
@@ -216,9 +217,9 @@ export function createMemoryStore(seed = defaultSeed) {
     replaceBanners(items) { state.banners = items.map((item) => ({ ...item, updatedAt: now() })); return this.listBanners(); },
     listComments(status) { return state.comments.filter((item) => !status || item.status === status).map(clone); },
     getComment(id) { const item = state.comments.find((comment) => comment.id === id); return item && clone(item); },
-    listPublicComments(contentId, { limit = 50 } = {}) {
+    listPublicComments(contentId, { limit = 50, viewerId = null } = {}) {
       return state.comments
-        .filter((item) => item.contentId === contentId && item.status === 'approved')
+        .filter((item) => item.contentId === contentId && item.status === 'approved' && !state.viewerBlocks.some((block) => block.blockerId === viewerId && block.blockedId === item.authorId))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .slice(0, limit)
         .map(clone);
@@ -254,6 +255,29 @@ export function createMemoryStore(seed = defaultSeed) {
       if (!comment) return null;
       Object.assign(comment, { status, moderationNote, updatedAt: now() });
       return clone(comment);
+    },
+    createViewerBlock({ blockerId, blockedId }) {
+      if (blockerId === blockedId) {
+        const error = new Error('CANNOT_BLOCK_SELF');
+        error.code = 'CANNOT_BLOCK_SELF';
+        throw error;
+      }
+      if (state.viewerBlocks.some((item) => item.blockerId === blockerId && item.blockedId === blockedId)) {
+        const error = new Error('VIEWER_ALREADY_BLOCKED');
+        error.code = 'VIEWER_ALREADY_BLOCKED';
+        throw error;
+      }
+      const record = { id: randomUUID(), blockerId, blockedId, createdAt: now() };
+      state.viewerBlocks.unshift(record);
+      return clone(record);
+    },
+    listViewerBlocks(blockerId) {
+      return state.viewerBlocks.filter((item) => item.blockerId === blockerId).map(clone);
+    },
+    deleteViewerBlock(id, blockerId) {
+      const index = state.viewerBlocks.findIndex((item) => item.id === id && item.blockerId === blockerId);
+      if (index < 0) return null;
+      return clone(state.viewerBlocks.splice(index, 1)[0]);
     },
     addPlayback(event) { state.playback.push({ id: randomUUID(), receivedAt: now(), ...event }); },
     createPublicRequest(data) {
@@ -340,6 +364,7 @@ export function createMemoryStore(seed = defaultSeed) {
         deletedComments += 1;
       }
       state.commentReports = state.commentReports.filter((report) => report.reporterId !== id);
+      state.viewerBlocks = state.viewerBlocks.filter((block) => block.blockerId !== id && block.blockedId !== id);
       for (const event of state.playback) if (event.viewerId === id) event.viewerId = null;
       Object.assign(account, {
         publicId: `DELETED-${deletedAlias}`,
@@ -529,6 +554,7 @@ const commentCreateInput = z.object({
 const commentReportInput = z.object({ reason: z.enum(commentReportReasons), note: z.string().trim().max(500).optional() }).strict();
 const publicCommentsQuery = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).strict();
 const commentReportQuery = z.object({ status: z.enum(['open', 'resolved']).optional() }).strict();
+const viewerBlockParams = z.object({ id: z.string().uuid() });
 const contentParams = z.object({ id: z.string().min(1).max(80) });
 const submitReviewInput = z.object({ note: z.string().trim().max(500).optional() }).default({});
 const publishInput = z.object({ scheduledAt: z.string().datetime({ offset: true }).optional() }).default({});
@@ -814,6 +840,18 @@ function viewerComment(comment) {
   return { ...publicComment(comment), status: comment.status };
 }
 
+function viewerBlockPublic(block, account) {
+  return {
+    id: block.id,
+    createdAt: block.createdAt,
+    viewer: account ? {
+      id: account.publicId,
+      username: account.username,
+      displayName: account.displayName
+    } : block.account ?? null
+  };
+}
+
 function publicRequestForStaff(item) {
   if (!item) return item;
   const { verificationTokenHash, ...safe } = item;
@@ -957,7 +995,7 @@ export function buildApp(options = {}) {
     },
     crossOriginResourcePolicy: { policy: 'same-site' }
   });
-  app.register(cors, { origin: (origin, callback) => callback(null, !origin || config.allowedOrigins.includes(origin)), credentials: true, methods: ['GET', 'POST', 'PATCH'] });
+  app.register(cors, { origin: (origin, callback) => callback(null, !origin || config.allowedOrigins.includes(origin)), credentials: true, methods: ['GET', 'POST', 'PATCH', 'DELETE'] });
   app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute', keyGenerator: (request) => request.ip });
   app.register(jwt, { secret: config.jwtSecret, sign: { expiresIn: '15m' }, verify: { algorithms: ['HS256'] } });
   app.register(multipart, { limits: { files: 1, fileSize: 15 * 1024 * 1024 } });
@@ -972,6 +1010,11 @@ export function buildApp(options = {}) {
     if (!session || session.accountId !== request.user.sub || session.revokedAt || new Date(session.expiresAt).getTime() <= Date.now()) {
       return reply.code(401).send({ error: 'SESSION_REVOKED', message: 'Сессия завершена. Войди снова.' });
     }
+  });
+  app.decorate('optionalViewerId', async (request, reply) => {
+    if (!request.headers.authorization) return null;
+    await app.requireViewer(request, reply);
+    return reply.sent ? undefined : request.user.sub;
   });
   app.decorate('allowRoles', (allowed) => async (request, reply) => {
     await request.jwtVerify();
@@ -1563,9 +1606,11 @@ export function buildApp(options = {}) {
     const params = parseOrReply(contentParams, request.params, reply);
     const query = parseOrReply(publicCommentsQuery, request.query, reply);
     if (!params || !query) return;
+    const viewerId = await app.optionalViewerId(request, reply);
+    if (reply.sent) return;
     const content = await store.getContent(params.id);
     if (!isPubliclyAvailable(content, now(), publicationGate)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
-    const items = await store.listPublicComments(content.id, query);
+    const items = await store.listPublicComments(content.id, { ...query, viewerId });
     return { items: items.map(publicComment) };
   });
   app.post('/v1/content/:id/comments', { preHandler: app.requireViewer, config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -1607,6 +1652,43 @@ export function buildApp(options = {}) {
     const item = await store.updateComment(comment.id, 'deleted', 'Удалён автором');
     await store.resolveCommentReports?.(comment.id);
     await audit(request, 'comment.delete_self', 'comment', item.id, { status: comment.status }, { status: item.status }, { id: request.user.sub, roles: ['viewer'] });
+    return reply.code(204).send();
+  });
+  app.post('/v1/comments/:id/block', { preHandler: app.requireViewer, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const params = parseOrReply(viewerBlockParams, request.params, reply);
+    if (!params) return;
+    const [comment, account] = await Promise.all([store.getComment(params.id), store.getViewerAccount(request.user.sub)]);
+    if (!comment || comment.status !== 'approved') return reply.code(404).send({ error: 'NOT_FOUND', message: 'Комментарий не найден' });
+    const content = await store.getContent(comment.contentId);
+    if (!isPubliclyAvailable(content, now(), publicationGate)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Комментарий не найден' });
+    if (!account || account.status !== 'active' || !account.emailVerifiedAt) return reply.code(403).send({ error: 'VERIFIED_VIEWER_REQUIRED', message: 'Подтверди e-mail, чтобы управлять блокировками.' });
+    if (comment.authorId === account.id) return reply.code(409).send({ error: 'CANNOT_BLOCK_SELF', message: 'Нельзя заблокировать себя.' });
+    const blockedAccount = await store.getViewerAccount(comment.authorId);
+    if (!blockedAccount || blockedAccount.status !== 'active') return reply.code(404).send({ error: 'NOT_FOUND', message: 'Пользователь недоступен' });
+    try {
+      const item = await store.createViewerBlock({ blockerId: account.id, blockedId: blockedAccount.id });
+      await audit(request, 'viewer.block', 'viewer_account', blockedAccount.id, null, { sourceCommentId: comment.id }, { id: account.id, roles: ['viewer'] });
+      return reply.code(201).send({ item: viewerBlockPublic(item, blockedAccount) });
+    } catch (error) {
+      if (error.code === 'VIEWER_ALREADY_BLOCKED' || error.code === '23505') return reply.code(409).send({ error: 'VIEWER_ALREADY_BLOCKED', message: 'Этот пользователь уже заблокирован.' });
+      if (error.code === 'CANNOT_BLOCK_SELF' || error.code === '23514') return reply.code(409).send({ error: 'CANNOT_BLOCK_SELF', message: 'Нельзя заблокировать себя.' });
+      throw error;
+    }
+  });
+  app.get('/v1/viewer/blocks', { preHandler: app.requireViewer }, async (request) => {
+    const blocks = await store.listViewerBlocks(request.user.sub);
+    const items = await Promise.all(blocks.map(async (block) => {
+      if (block.account) return viewerBlockPublic(block, null);
+      return viewerBlockPublic(block, await store.getViewerAccount(block.blockedId));
+    }));
+    return { items };
+  });
+  app.delete('/v1/viewer/blocks/:id', { preHandler: app.requireViewer, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const params = parseOrReply(viewerBlockParams, request.params, reply);
+    if (!params) return;
+    const item = await store.deleteViewerBlock(params.id, request.user.sub);
+    if (!item) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Блокировка не найдена' });
+    await audit(request, 'viewer.unblock', 'viewer_block', item.id, { blockedId: item.blockedId }, null, { id: request.user.sub, roles: ['viewer'] });
     return reply.code(204).send();
   });
   app.get('/v1/home', async (request) => catalogHome(request));

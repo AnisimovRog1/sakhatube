@@ -21,6 +21,11 @@ val privacyPolicyUrl = providers.gradleProperty("SAKHATUBE_PRIVACY_URL").orElse(
 val termsUrl = providers.gradleProperty("SAKHATUBE_TERMS_URL").orElse("https://sakhatube-production.up.railway.app/terms")
 val accountDeletionUrl = providers.gradleProperty("SAKHATUBE_ACCOUNT_DELETION_URL").orElse("https://sakhatube-production.up.railway.app/delete-account")
 val authBaseUrl = providers.gradleProperty("SAKHATUBE_AUTH_BASE_URL").orElse(catalogBaseUrl)
+// Billing is deliberately disabled by default. A release may enable it only
+// after the backend verifies Play purchase tokens and grants access itself.
+val playSubscriptionProductId = providers.gradleProperty("SAKHATUBE_PLAY_SUBSCRIPTION_PRODUCT_ID").orElse("")
+val playBillingEnabled = providers.gradleProperty("SAKHATUBE_PLAY_BILLING_ENABLED").orElse("false")
+val playBillingServerVerificationEnabled = providers.gradleProperty("SAKHATUBE_PLAY_BILLING_SERVER_VERIFICATION_ENABLED").orElse("false")
 
 android {
     namespace = "com.sakhatube.android"
@@ -39,6 +44,9 @@ android {
         buildConfigField("String", "TERMS_URL", termsUrl.get().asBuildConfigString())
         buildConfigField("String", "ACCOUNT_DELETION_URL", accountDeletionUrl.get().asBuildConfigString())
         buildConfigField("String", "AUTH_BASE_URL", authBaseUrl.get().asBuildConfigString())
+        buildConfigField("String", "PLAY_SUBSCRIPTION_PRODUCT_ID", playSubscriptionProductId.get().asBuildConfigString())
+        buildConfigField("boolean", "PLAY_BILLING_ENABLED", playBillingEnabled.get())
+        buildConfigField("boolean", "PLAY_BILLING_SERVER_VERIFICATION_ENABLED", playBillingServerVerificationEnabled.get())
     }
 
     buildTypes {
@@ -95,6 +103,10 @@ dependencies {
     // owns the viewer profile, public ST-ID and its own API session.
     implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
     implementation("com.google.firebase:firebase-auth")
+
+    // Used only as a fail-closed purchase/restore client. It never grants an
+    // entitlement locally: the SakhaTube backend must verify every token.
+    implementation("com.android.billingclient:billing-ktx:8.1.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

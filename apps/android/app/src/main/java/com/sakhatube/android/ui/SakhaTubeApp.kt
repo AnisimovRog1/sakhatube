@@ -88,6 +88,8 @@ import com.sakhatube.android.data.CatalogUiState
 import com.sakhatube.android.data.AuthUiState
 import com.sakhatube.android.data.DeletionUiState
 import com.sakhatube.android.data.ViewerComment
+import com.sakhatube.android.billing.BillingUiState
+import com.sakhatube.android.billing.BillingViewModel
 
 private enum class Destination(val title: String) {
     Home("Главная"),
@@ -582,10 +584,15 @@ private fun CatalogError(message: String, onRetry: () -> Unit, modifier: Modifie
 }
 
 @Composable
-private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Modifier) {
+private fun ProfileScreen(
+    authViewModel: AuthViewModel,
+    billingViewModel: BillingViewModel = viewModel(),
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     val authState by authViewModel.state.collectAsStateWithLifecycle()
     val deletionState by authViewModel.deletionState.collectAsStateWithLifecycle()
+    val billingState by billingViewModel.state.collectAsStateWithLifecycle()
     var isShowingDeletion by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
@@ -639,6 +646,16 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
                 )
             }
         }
+        item {
+            BillingCard(
+                state = billingState,
+                onLoad = billingViewModel::load,
+                onRestore = billingViewModel::restore,
+                onPurchase = {
+                    (context as? android.app.Activity)?.let(billingViewModel::purchase)
+                }
+            )
+        }
         item { Text("Документы", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         items(legalLinks, key = { it.first }) { (title, url) ->
             val validUrl = url.takeIf { it.startsWith("https://") }
@@ -678,6 +695,43 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
             },
             onSubmit = { email, message -> authViewModel.startDeletion(email, authState.viewer.email, message) }
         )
+    }
+}
+
+@Composable
+private fun BillingCard(
+    state: BillingUiState,
+    onLoad: () -> Unit,
+    onRestore: () -> Unit,
+    onPurchase: () -> Unit
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Подписка", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            when (state) {
+                BillingUiState.Disabled -> Text(
+                    "Оплата пока не подключена. Доступ не выдаётся до серверной проверки покупок.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                BillingUiState.Loading -> CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                is BillingUiState.Ready -> {
+                    Text(state.productName, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onPurchase) { Text("Оформить в Google Play") }
+                        TextButton(onClick = onRestore) { Text("Восстановить") }
+                    }
+                }
+                BillingUiState.AwaitingServerVerification -> Text(
+                    "Покупка получена. Проверяем её на сервере — доступ появится только после подтверждения.",
+                    color = MaterialTheme.colorScheme.primary
+                )
+                is BillingUiState.Error -> {
+                    Text(state.message, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = onLoad) { Text("Повторить") }
+                }
+            }
+            if (state is BillingUiState.Disabled) TextButton(onClick = onLoad) { Text("Проверить доступность") }
+        }
     }
 }
 

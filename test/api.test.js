@@ -563,6 +563,43 @@ test('verified viewers can submit, report, and delete comments without exposing 
   assert.equal(JSON.parse(after.body).items.some((item) => item.id === pending.id), false);
 });
 
+test('viewer blocks hide approved comment authors only for the blocker and can be removed', async (t) => {
+  const app = await createTestApp();
+  t.after(() => app.close());
+  const author = await verifiedViewer(app, { email: 'block-author@example.com', displayName: 'Автор для блока' });
+  const viewer = await verifiedViewer(app, { email: 'block-viewer@example.com', displayName: 'Зритель для блока' });
+  const created = await app.inject({
+    method: 'POST', url: '/v1/content/signal/comments',
+    headers: { authorization: `Bearer ${author.accessToken}` }, payload: { text: 'Комментарий, который можно скрыть.' }
+  });
+  assert.equal(created.statusCode, 201);
+  const comment = JSON.parse(created.body).item;
+  const moderator = await tokenFor(app, ['moderator']);
+  assert.equal((await app.inject({ method: 'PATCH', url: `/v1/admin/comments/${comment.id}`, headers: { authorization: `Bearer ${moderator}` }, payload: { status: 'approved' } })).statusCode, 200);
+
+  const publicBefore = await app.inject({ method: 'GET', url: '/v1/content/signal/comments' });
+  assert.equal(JSON.parse(publicBefore.body).items.some((item) => item.id === comment.id), true);
+  const selfBlock = await app.inject({ method: 'POST', url: `/v1/comments/${comment.id}/block`, headers: { authorization: `Bearer ${author.accessToken}` } });
+  assert.equal(selfBlock.statusCode, 409);
+
+  const blocked = await app.inject({ method: 'POST', url: `/v1/comments/${comment.id}/block`, headers: { authorization: `Bearer ${viewer.accessToken}` } });
+  assert.equal(blocked.statusCode, 201);
+  const block = JSON.parse(blocked.body).item;
+  assert.equal(block.viewer.displayName, 'Автор для блока');
+  assert.equal('blockedId' in block, false);
+
+  const viewerFeed = await app.inject({ method: 'GET', url: '/v1/content/signal/comments', headers: { authorization: `Bearer ${viewer.accessToken}` } });
+  assert.equal(JSON.parse(viewerFeed.body).items.some((item) => item.id === comment.id), false);
+  const otherFeed = await app.inject({ method: 'GET', url: '/v1/content/signal/comments' });
+  assert.equal(JSON.parse(otherFeed.body).items.some((item) => item.id === comment.id), true);
+  const listed = await app.inject({ method: 'GET', url: '/v1/viewer/blocks', headers: { authorization: `Bearer ${viewer.accessToken}` } });
+  assert.equal(JSON.parse(listed.body).items[0].id, block.id);
+  const unblocked = await app.inject({ method: 'DELETE', url: `/v1/viewer/blocks/${block.id}`, headers: { authorization: `Bearer ${viewer.accessToken}` } });
+  assert.equal(unblocked.statusCode, 204);
+  const viewerFeedAfter = await app.inject({ method: 'GET', url: '/v1/content/signal/comments', headers: { authorization: `Bearer ${viewer.accessToken}` } });
+  assert.equal(JSON.parse(viewerFeedAfter.body).items.some((item) => item.id === comment.id), true);
+});
+
 test('playback event is validated and accepted without exposing admin access', async (t) => {
   const app = await createTestApp();
   t.after(() => app.close());

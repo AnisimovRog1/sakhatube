@@ -308,6 +308,14 @@ async function migrate(pool) {
       last_used_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS viewer_blocks (
+      id UUID PRIMARY KEY,
+      blocker_id UUID NOT NULL REFERENCES viewer_accounts(id) ON DELETE CASCADE,
+      blocked_id UUID NOT NULL REFERENCES viewer_accounts(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL,
+      CONSTRAINT viewer_blocks_not_self CHECK (blocker_id <> blocked_id),
+      CONSTRAINT viewer_blocks_one_per_pair UNIQUE (blocker_id, blocked_id)
+    );
     CREATE TABLE IF NOT EXISTS media_transcode_jobs (
       id UUID PRIMARY KEY,
       source_asset_id UUID NOT NULL UNIQUE REFERENCES media_assets(id) ON DELETE CASCADE,
@@ -344,6 +352,7 @@ async function migrate(pool) {
     );
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS comment_reports_status_idx ON comment_reports(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS viewer_blocks_blocker_idx ON viewer_blocks(blocker_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
     CREATE INDEX IF NOT EXISTS media_assets_content_idx ON media_assets(content_id, created_at DESC);
@@ -553,10 +562,16 @@ export async function createPostgresStore(connectionString, seedData) {
       const { rows } = await pool.query('SELECT * FROM comments WHERE id = $1', [id]);
       return mapComment(rows[0]);
     },
-    async listPublicComments(contentId, { limit = 50 } = {}) {
+    async listPublicComments(contentId, { limit = 50, viewerId = null } = {}) {
       const { rows } = await pool.query(
-        "SELECT * FROM comments WHERE content_id = $1 AND status = 'approved' ORDER BY created_at DESC LIMIT $2",
-        [contentId, Math.max(1, Math.min(100, Number(limit) || 50))]
+        `SELECT c.* FROM comments c
+         WHERE c.content_id = $1 AND c.status = 'approved'
+           AND NOT EXISTS (
+             SELECT 1 FROM viewer_blocks b
+             WHERE b.blocker_id = $2::uuid AND b.blocked_id::text = c.author_id
+           )
+         ORDER BY c.created_at DESC LIMIT $3`,
+        [contentId, viewerId, Math.max(1, Math.min(100, Number(limit) || 50))]
       );
       return rows.map(mapComment);
     },
@@ -595,6 +610,31 @@ export async function createPostgresStore(connectionString, seedData) {
     async updateComment(id, status, moderationNote) {
       const { rows } = await pool.query('UPDATE comments SET status = $1, moderation_note = $2, updated_at = $3 WHERE id = $4 RETURNING *', [status, moderationNote ?? null, now(), id]);
       return mapComment(rows[0]);
+    },
+    async createViewerBlock({ blockerId, blockedId }) {
+      const record = { id: randomUUID(), blockerId, blockedId, createdAt: now() };
+      const { rows } = await pool.query(
+        'INSERT INTO viewer_blocks (id, blocker_id, blocked_id, created_at) VALUES ($1, $2, $3, $4) RETURNING *',
+        [record.id, record.blockerId, record.blockedId, record.createdAt]
+      );
+      return { id: rows[0].id, blockerId: rows[0].blocker_id, blockedId: rows[0].blocked_id, createdAt: rows[0].created_at.toISOString() };
+    },
+    async listViewerBlocks(blockerId) {
+      const { rows } = await pool.query(
+        `SELECT b.id, b.blocked_id, b.created_at, a.public_id, a.username, a.display_name
+         FROM viewer_blocks b JOIN viewer_accounts a ON a.id = b.blocked_id
+         WHERE b.blocker_id = $1 ORDER BY b.created_at DESC`,
+        [blockerId]
+      );
+      return rows.map((row) => ({
+        id: row.id, blockedId: row.blocked_id, createdAt: row.created_at.toISOString(),
+        account: { id: row.public_id, username: row.username, displayName: row.display_name }
+      }));
+    },
+    async deleteViewerBlock(id, blockerId) {
+      const { rows } = await pool.query('DELETE FROM viewer_blocks WHERE id = $1 AND blocker_id = $2 RETURNING *', [id, blockerId]);
+      if (!rows[0]) return null;
+      return { id: rows[0].id, blockerId: rows[0].blocker_id, blockedId: rows[0].blocked_id, createdAt: rows[0].created_at.toISOString() };
     },
     async addPlayback(event) {
       await pool.query(
