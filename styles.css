@@ -221,11 +221,12 @@ em { color: #dce9ff; font-style: normal; }
 .mobile-nav { display: none; }
 .player-dialog { width: min(840px, 92vw); padding: 0; overflow: hidden; border: 1px solid #343742; border-radius: 18px; background: var(--surface); color: var(--text); }
 .player-dialog::backdrop { background: rgba(0,0,0,.76); backdrop-filter: blur(6px); }
-.player-stage { position: relative; aspect-ratio: 16 / 9; overflow: hidden; background: #07090c; }
+.player-stage { position: relative; aspect-ratio: 16 / 9; overflow: hidden; background: #07090c; isolation: isolate; }
+.player-stage::before { position: absolute; z-index: 0; inset: -36px; content: ""; background: var(--player-backdrop, radial-gradient(circle at 64% 25%, rgba(118,173,255,.32), transparent 22%)) center/cover no-repeat; filter: blur(28px) saturate(1.1); opacity: .42; transform: scale(1.08); }
 .player-video,.player-poster { position: absolute; inset: 0; width: 100%; height: 100%; }
-.player-video { display: block; background: #050608; object-fit: contain; }
+.player-video { z-index: 1; display: block; background: transparent; object-fit: contain; }
 .player-video[hidden] { display: none; }
-.player-poster { display: grid; place-content: center; gap: 13px; background: radial-gradient(circle at 64% 25%, rgba(118,173,255,.32), transparent 20%), linear-gradient(145deg, #202a39, #0c0e13 67%); color: var(--muted); text-align: center; }
+.player-poster { z-index: 2; display: grid; place-content: center; gap: 13px; background: radial-gradient(circle at 64% 25%, rgba(118,173,255,.22), transparent 26%), linear-gradient(145deg, rgba(32,42,57,.62), rgba(12,14,19,.72) 67%); color: var(--muted); text-align: center; }
 .player-poster[hidden] { display: none!important; }
 .player-play { display: grid; width: 62px; height: 62px; place-items: center; margin: auto; border-radius: 50%; background: var(--primary); color: var(--primary-ink); box-shadow: 0 12px 30px rgba(84,145,255,.3); }
 .player-play svg { width: 25px; height: 25px; margin-left: 2px; fill: currentColor; stroke: none; }

@@ -614,6 +614,7 @@ function openPlayer(title, source = {}) {
     // Keep the real poster above the video until the first playing event so
     // the viewer never sees an empty black rectangle while media starts.
     const posterUrl = safeMediaUrl(source.poster);
+    playerStage.style.setProperty('--player-backdrop', posterUrl ? `url("${encodeURI(posterUrl).replaceAll('"', '%22')}")` : '');
     playerPoster.style.backgroundImage = posterUrl
       ? `linear-gradient(180deg,rgba(4,6,10,.12),rgba(4,6,10,.68)),url("${encodeURI(posterUrl).replaceAll('"', '%22')}")`
       : '';
