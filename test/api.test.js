@@ -13,6 +13,19 @@ async function tokenFor(app, roles) {
   return app.jwt.sign({ sub: 'editor-1', roles });
 }
 
+async function verifiedViewer(app, { email, displayName }) {
+  const registration = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/register',
+    payload: { email, password: 'correct-horse-battery-staple', displayName }
+  });
+  assert.equal(registration.statusCode, 202);
+  const pending = JSON.parse(registration.body).developmentVerification;
+  const verified = await app.inject({ method: 'POST', url: '/v1/auth/verify-email', payload: { accountId: pending.accountId, token: pending.token } });
+  assert.equal(verified.statusCode, 200);
+  return JSON.parse(verified.body);
+}
+
 function publishableCompliance(overrides = {}) {
   return {
     ageRating: '16+',
@@ -207,6 +220,40 @@ test('public catalog and home expose only published content', async (t) => {
   assert.equal(payload.hero.id, 'midnight');
   assert.deepEqual(payload.shelves, [{ id: 'featured', title: 'Популярное', items: payload.items }]);
   assert.deepEqual(payload.items.map((item) => item.id), ['midnight', 'signal']);
+  assert.deepEqual(payload.banners.map((item) => item.id), ['banner-midnight', 'banner-signal']);
+});
+
+test('Studio manages home banners while public home exposes only active published links', async (t) => {
+  const app = await createTestApp();
+  t.after(() => app.close());
+  const editor = await tokenFor(app, ['content_editor']);
+  const created = await app.inject({
+    method: 'POST', url: '/v1/admin/banners', headers: { authorization: `Bearer ${editor}` },
+    payload: { contentId: 'signal', eyebrow: 'ВЫБОР', title: 'Тестовый баннер', description: 'Проверка витрины.', cta: 'Открыть', tone: 'poster-three', active: false }
+  });
+  assert.equal(created.statusCode, 201);
+  const item = JSON.parse(created.body).item;
+  assert.equal(item.media, null);
+
+  const activate = await app.inject({
+    method: 'PATCH', url: `/v1/admin/banners/${item.id}`, headers: { authorization: `Bearer ${editor}` }, payload: { active: true }
+  });
+  assert.equal(activate.statusCode, 200);
+
+  const publicHome = await app.inject({ method: 'GET', url: '/v1/home' });
+  assert.deepEqual(JSON.parse(publicHome.body).banners.map((banner) => banner.id), ['banner-midnight', 'banner-signal', item.id]);
+
+  const reorder = await app.inject({
+    method: 'PUT', url: '/v1/admin/banners/order', headers: { authorization: `Bearer ${editor}` },
+    payload: { ids: [item.id, 'banner-midnight', 'banner-signal'] }
+  });
+  assert.equal(reorder.statusCode, 200);
+  assert.deepEqual(JSON.parse(reorder.body).items.map((banner) => banner.id), [item.id, 'banner-midnight', 'banner-signal']);
+
+  const unpublish = await app.inject({ method: 'PATCH', url: '/v1/admin/banners/banner-signal', headers: { authorization: `Bearer ${editor}` }, payload: { active: false } });
+  assert.equal(unpublish.statusCode, 200);
+  const hidden = await app.inject({ method: 'GET', url: '/v1/catalog/home' });
+  assert.equal(JSON.parse(hidden.body).banners.some((banner) => banner.id === 'banner-signal'), false);
 });
 
 test('content lifecycle enforces review, publication roles, reasons, and audit', async (t) => {
@@ -367,6 +414,50 @@ test('moderator can hide a comment but cannot create a series', async (t) => {
     payload: { title: 'Нельзя', kind: 'clip', genre: 'Драма' }
   });
   assert.equal(create.statusCode, 403);
+});
+
+test('verified viewers can submit, report, and delete comments without exposing account identifiers publicly', async (t) => {
+  const app = await createTestApp();
+  t.after(() => app.close());
+  const author = await verifiedViewer(app, { email: 'author@example.com', displayName: 'Автор' });
+  const reporter = await verifiedViewer(app, { email: 'reporter@example.com', displayName: 'Репортёр' });
+  const create = await app.inject({
+    method: 'POST', url: '/v1/content/signal/comments',
+    headers: { authorization: `Bearer ${author.accessToken}` },
+    payload: { text: 'Новый комментарий для модерации.' }
+  });
+  assert.equal(create.statusCode, 201);
+  const pending = JSON.parse(create.body).item;
+  assert.equal(pending.status, 'pending');
+  assert.equal('authorId' in pending, false);
+
+  const before = await app.inject({ method: 'GET', url: '/v1/content/signal/comments' });
+  assert.equal(JSON.parse(before.body).items.some((item) => item.id === pending.id), false);
+
+  const moderator = await tokenFor(app, ['moderator']);
+  const approve = await app.inject({ method: 'PATCH', url: `/v1/admin/comments/${pending.id}`, headers: { authorization: `Bearer ${moderator}` }, payload: { status: 'approved' } });
+  assert.equal(approve.statusCode, 200);
+  const visible = await app.inject({ method: 'GET', url: '/v1/content/signal/comments?limit=10' });
+  const visibleItem = JSON.parse(visible.body).items.find((item) => item.id === pending.id);
+  assert.equal(visibleItem.authorName, 'Автор');
+  assert.equal('authorId' in visibleItem, false);
+  assert.equal('status' in visibleItem, false);
+
+  const ownReport = await app.inject({ method: 'POST', url: `/v1/comments/${pending.id}/report`, headers: { authorization: `Bearer ${author.accessToken}` }, payload: { reason: 'spam' } });
+  assert.equal(ownReport.statusCode, 409);
+  const report = await app.inject({ method: 'POST', url: `/v1/comments/${pending.id}/report`, headers: { authorization: `Bearer ${reporter.accessToken}` }, payload: { reason: 'abuse', note: 'Проверить вручную' } });
+  assert.equal(report.statusCode, 202);
+  const duplicate = await app.inject({ method: 'POST', url: `/v1/comments/${pending.id}/report`, headers: { authorization: `Bearer ${reporter.accessToken}` }, payload: { reason: 'abuse' } });
+  assert.equal(duplicate.statusCode, 409);
+  const reports = await app.inject({ method: 'GET', url: '/v1/admin/comment-reports', headers: { authorization: `Bearer ${moderator}` } });
+  const staffReport = JSON.parse(reports.body).items.find((item) => item.commentId === pending.id);
+  assert.equal(staffReport.reason, 'abuse');
+  assert.equal('reporterId' in staffReport, false);
+
+  const selfDelete = await app.inject({ method: 'POST', url: `/v1/comments/${pending.id}/delete`, headers: { authorization: `Bearer ${author.accessToken}` } });
+  assert.equal(selfDelete.statusCode, 204);
+  const after = await app.inject({ method: 'GET', url: '/v1/content/signal/comments' });
+  assert.equal(JSON.parse(after.body).items.some((item) => item.id === pending.id), false);
 });
 
 test('playback event is validated and accepted without exposing admin access', async (t) => {

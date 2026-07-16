@@ -218,6 +218,10 @@ function normalizeApiComment(item) {
   };
 }
 
+function normalizeApiBanner(item) {
+  return { ...item, media: item.media || null };
+}
+
 function uploadFromRemoteAsset(asset) {
   const state = String(asset.status || '').toLowerCase();
   const processing = String(asset.processingState || '').toLowerCase();
@@ -375,10 +379,11 @@ async function apiRequest(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set('accept', 'application/json');
   headers.set('authorization', `Bearer ${token}`);
-  if (options.body !== undefined) headers.set('content-type', 'application/json');
+  const isForm = options.body instanceof FormData;
+  if (options.body !== undefined && !isForm) headers.set('content-type', 'application/json');
   let response;
   try {
-    response = await fetch(path, { ...options, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
+    response = await fetch(path, { ...options, headers, body: options.body === undefined ? undefined : (isForm ? options.body : JSON.stringify(options.body)) });
   } catch {
     throw apiError('Нет связи с Studio API. Проверь интернет или адрес SakhaTube.', 0);
   }
@@ -668,8 +673,8 @@ function renderConnectionState() {
   });
   uploadContentSelect.disabled = Boolean(activeUpload) || abortingUpload || !remote;
   document.querySelectorAll('[data-action="new-banner"]').forEach((button) => {
-    button.disabled = remote;
-    button.title = remote ? 'Публикация баннеров будет подключена следующим серверным этапом.' : '';
+    button.disabled = apiState.loading;
+    button.title = '';
   });
 }
 
@@ -683,18 +688,20 @@ async function loadRemoteStudio({ silent = false } = {}) {
   if (!isApiMode() || apiState.loading) return false;
   apiState = { state: 'loading', message: 'Studio API · синхронизация…', loading: true };
   renderConnectionState();
-  const [overviewResult, contentResult, homeResult, commentsResult, mediaResult] = await Promise.allSettled([
+  const [overviewResult, contentResult, homeResult, commentsResult, mediaResult, bannersResult] = await Promise.allSettled([
     apiRequest('/v1/admin/overview'),
     apiRequest('/v1/admin/content'),
     apiRequest('/v1/admin/home/slots'),
     apiRequest('/v1/admin/comments'),
-    apiRequest('/v1/admin/assets?limit=100')
+    apiRequest('/v1/admin/assets?limit=100'),
+    apiRequest('/v1/admin/banners')
   ]);
   const allResults = [overviewResult, contentResult, homeResult, commentsResult, mediaResult];
   const rejected = allResults.filter((result) => result.status === 'rejected');
   const accessError = rejected.find((result) => result.reason?.status === 401);
   if (contentResult.status === 'fulfilled') studio.content = contentResult.value.items.map(normalizeApiContent);
   if (homeResult.status === 'fulfilled') studio.homeOrder = homeResult.value.items.map((item) => item.id);
+  if (bannersResult.status === 'fulfilled') studio.banners = bannersResult.value.items.map(normalizeApiBanner);
   if (commentsResult.status === 'fulfilled') studio.comments = commentsResult.value.items.map(normalizeApiComment);
   if (mediaResult.status === 'fulfilled') {
     remoteMedia = Array.isArray(mediaResult.value.items) ? mediaResult.value.items : [];
@@ -797,11 +804,11 @@ function renderHomePreview() {
 }
 
 function renderBanners() {
-  const phaseNotice = isApiMode() ? '<p class="phase-notice">Баннеры и их изображения пока работают только в локальном предпросмотре. Их публикация будет подключена после серверной модели витрины и медиазагрузки.</p>' : '';
+  const phaseNotice = '';
   const banners = studio.banners;
   bannerList.innerHTML = phaseNotice + (banners.map((banner, index) => {
     const linked = contentById(banner.contentId);
-    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}" data-banner-art="${escapeHTML(banner.id)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${escapeHTML(banner.id)}" type="button" ${isApiMode() ? 'disabled' : ''}>Изменить</button><button data-action="toggle-banner" data-id="${escapeHTML(banner.id)}" type="button" ${isApiMode() ? 'disabled' : ''}>${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="up" type="button" ${index === 0 || isApiMode() ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="down" type="button" ${index === banners.length - 1 || isApiMode() ? 'disabled' : ''} aria-label="Опустить баннер">↓</button></div></div></article>`;
+    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}" data-banner-art="${escapeHTML(banner.id)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${escapeHTML(banner.id)}" type="button">Изменить</button><button data-action="toggle-banner" data-id="${escapeHTML(banner.id)}" type="button">${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="down" type="button" ${index === banners.length - 1 ? 'disabled' : ''} aria-label="Опустить баннер">↓</button></div></div></article>`;
   }).join('') || '<p class="empty-copy">Добавь первый баннер, чтобы собрать верхний экран.</p>');
   studio.banners.forEach((banner) => applyBannerMedia(bannerList.querySelector(`[data-banner-art="${banner.id}"]`), banner.media));
 }
@@ -962,12 +969,17 @@ async function saveHomeSlots({ silent = false } = {}) {
   }
 }
 
-function moveBanner(id, direction) {
+async function moveBanner(id, direction) {
   const index = studio.banners.findIndex((item) => item.id === id);
   const nextIndex = direction === 'up' ? index - 1 : index + 1;
   if (index < 0 || nextIndex < 0 || nextIndex >= studio.banners.length) return;
   [studio.banners[index], studio.banners[nextIndex]] = [studio.banners[nextIndex], studio.banners[index]];
-  saveStudio();
+  if (isApiMode()) {
+    try {
+      const result = await apiRequest('/v1/admin/banners/order', { method: 'PUT', body: { ids: studio.banners.map((item) => item.id) } });
+      studio.banners = result.items.map(normalizeApiBanner);
+    } catch (error) { await loadRemoteStudio({ silent: true }); showToast(error.message || 'Не удалось изменить порядок баннеров'); return; }
+  } else saveStudio();
   renderHomePreview();
   renderBanners();
   showToast('Порядок баннеров обновлён');
@@ -1244,12 +1256,18 @@ async function handleAction(name, action) {
   if (name === 'submit-review' || name === 'verify-rights' || name === 'publish-content' || name === 'unpublish-content') await updateContentLifecycle(id, name);
   if (name === 'delete-content') askDelete(id);
   if (name === 'move-home') moveHome(id, action.dataset.direction);
-  if (name === 'move-banner') moveBanner(id, action.dataset.direction);
+  if (name === 'move-banner') await moveBanner(id, action.dataset.direction);
   if (name === 'edit-banner') openBannerDialog(bannerById(id));
   if (name === 'toggle-banner') {
-    if (isApiMode()) { showToast('Публикация баннеров будет доступна после следующего серверного этапа.'); return; }
     const banner = bannerById(id);
-    if (banner) { banner.active = !banner.active; saveStudio(); renderHomePreview(); renderBanners(); showToast(banner.active ? 'Баннер показан в предпросмотре' : 'Баннер скрыт в предпросмотре'); }
+    if (banner) {
+      const active = !banner.active;
+      if (isApiMode()) {
+        try { Object.assign(banner, normalizeApiBanner((await apiRequest(`/v1/admin/banners/${encodeURIComponent(id)}`, { method: 'PATCH', body: { active } })).item)); }
+        catch (error) { showToast(error.message || 'Не удалось изменить баннер'); return; }
+      } else { banner.active = active; saveStudio(); }
+      renderHomePreview(); renderBanners(); showToast(active ? 'Баннер показан зрителям' : 'Баннер скрыт');
+    }
   }
   if (name === 'save-home') await saveHomeSlots();
   if (name === 'approve-comment') await updateComment(id, 'approved');
@@ -1282,7 +1300,7 @@ connectionForm.addEventListener('submit', (event) => { event.preventDefault(); v
 
 bannerForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  if (isApiMode()) { showToast('Баннеры пока не публикуются через Studio API.'); return; }
+  void (async () => {
   const id = document.querySelector('#banner-id').value;
   const data = {
     contentId: document.querySelector('#banner-content').value,
@@ -1292,27 +1310,41 @@ bannerForm.addEventListener('submit', (event) => {
     cta: document.querySelector('#banner-cta').value.trim(),
     tone: document.querySelector('#banner-tone').value,
     active: document.querySelector('#banner-active').checked,
-    media: bannerMediaDraft
+    media: bannerMediaDraft,
+    mediaId: bannerMediaDraft?.id || null
   };
-  if (id) Object.assign(bannerById(id), data);
-  else studio.banners.push({ id: `banner-${Date.now()}`, ...data });
-  saveStudio();
+  if (isApiMode()) {
+    try {
+      const result = await apiRequest(id ? `/v1/admin/banners/${encodeURIComponent(id)}` : '/v1/admin/banners', { method: id ? 'PATCH' : 'POST', body: data });
+      if (id) Object.assign(bannerById(id), normalizeApiBanner(result.item));
+      else studio.banners.push(normalizeApiBanner(result.item));
+    } catch (error) { showToast(error.message || 'Не удалось сохранить баннер'); return; }
+  } else {
+    if (id) Object.assign(bannerById(id), data);
+    else studio.banners.push({ id: `banner-${Date.now()}`, ...data });
+    saveStudio();
+  }
   closeDialog(bannerDialog);
   renderHomePreview();
   renderBanners();
-  showToast(id ? 'Баннер обновлён в предпросмотре' : 'Баннер добавлен в предпросмотр');
+  showToast(id ? 'Баннер сохранён' : 'Баннер добавлен');
+  })();
 });
 
 document.querySelector('#content-search').addEventListener('input', renderContent);
 document.querySelector('#banner-media').addEventListener('change', async (event) => {
-  if (isApiMode()) { event.target.value = ''; showToast('Загрузка изображений будет доступна после серверного медиамодуля.'); return; }
   const [file] = event.target.files;
   if (!file) return;
   const button = document.querySelector('[data-action="select-banner-media"]');
   button.disabled = true;
   button.textContent = 'Готовим…';
   try {
-    bannerMediaDraft = await optimizeBannerImage(file);
+    if (isApiMode()) {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      const result = await apiRequest('/v1/admin/media/banner', { method: 'POST', body: form });
+      bannerMediaDraft = { id: result.item.id, src: result.item.url, name: result.item.fileName, size: result.item.size };
+    } else bannerMediaDraft = await optimizeBannerImage(file);
     renderBannerMediaState();
     showToast('Изображение подготовлено для предпросмотра');
   } catch (error) {

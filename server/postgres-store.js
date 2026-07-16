@@ -35,6 +35,17 @@ const mapComment = (row) => row && ({
   updatedAt: row.updated_at.toISOString()
 });
 
+const mapCommentReport = (row) => row && ({
+  id: row.id,
+  commentId: row.comment_id,
+  reporterId: row.reporter_id,
+  reason: row.reason,
+  note: row.note,
+  status: row.status,
+  createdAt: row.created_at.toISOString(),
+  resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null
+});
+
 const mapMedia = (row) => row && ({
   id: row.id,
   kind: row.kind,
@@ -111,6 +122,12 @@ const mapMediaJob = (row) => row && ({
   lastErrorCode: row.last_error_code, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString()
 });
 
+const mapBanner = (row) => row && ({
+  id: row.id, contentId: row.content_id, eyebrow: row.eyebrow, title: row.title,
+  description: row.description, cta: row.cta, tone: row.tone, active: row.active,
+  mediaId: row.media_id, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString()
+});
+
 async function migrate(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_items (
@@ -149,6 +166,17 @@ async function migrate(pool) {
       moderation_note TEXT,
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS comment_reports (
+      id UUID PRIMARY KEY,
+      comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+      reporter_id UUID NOT NULL,
+      reason TEXT NOT NULL CHECK (reason IN ('spam', 'abuse', 'hate', 'sexual', 'copyright', 'other')),
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+      created_at TIMESTAMPTZ NOT NULL,
+      resolved_at TIMESTAMPTZ,
+      CONSTRAINT comment_reports_one_per_viewer UNIQUE (comment_id, reporter_id)
     );
     CREATE TABLE IF NOT EXISTS playback_events (
       id UUID PRIMARY KEY,
@@ -279,7 +307,22 @@ async function migrate(pool) {
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS home_banners (
+      id TEXT PRIMARY KEY,
+      banner_index INTEGER NOT NULL UNIQUE,
+      content_id TEXT NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+      eyebrow TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      cta TEXT NOT NULL,
+      tone TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT FALSE,
+      media_id UUID REFERENCES media_assets(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS comment_reports_status_idx ON comment_reports(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
     CREATE INDEX IF NOT EXISTS media_assets_content_idx ON media_assets(content_id, created_at DESC);
@@ -288,6 +331,7 @@ async function migrate(pool) {
     CREATE INDEX IF NOT EXISTS viewer_accounts_status_idx ON viewer_accounts(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS viewer_sessions_account_idx ON viewer_sessions(account_id, revoked_at, expires_at DESC);
     CREATE INDEX IF NOT EXISTS media_transcode_jobs_claim_idx ON media_transcode_jobs(status, available_at, created_at);
+    CREATE INDEX IF NOT EXISTS home_banners_public_idx ON home_banners(active, banner_index) WHERE active = TRUE;
   `);
 }
 
@@ -306,6 +350,13 @@ async function seed(pool, seed) {
     }
     for (const [slotIndex, contentId] of seed.homeSlots.entries()) {
       await client.query('INSERT INTO home_slots (slot_index, content_id) VALUES ($1, $2) ON CONFLICT (slot_index) DO NOTHING', [slotIndex, contentId]);
+    }
+    for (const [bannerIndex, banner] of (seed.banners ?? []).entries()) {
+      await client.query(
+        `INSERT INTO home_banners (id, banner_index, content_id, eyebrow, title, description, cta, tone, active, media_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (id) DO NOTHING`,
+        [banner.id, bannerIndex, banner.contentId, banner.eyebrow, banner.title, banner.description, banner.cta, banner.tone, banner.active, banner.mediaId ?? null, banner.createdAt ?? now(), banner.updatedAt ?? now()]
+      );
     }
     for (const comment of seed.comments) {
       await client.query(
@@ -419,9 +470,106 @@ export async function createPostgresStore(connectionString, seedData) {
       }
       return this.listHomeSlots();
     },
+    async listBanners() {
+      const { rows } = await pool.query('SELECT * FROM home_banners ORDER BY banner_index ASC');
+      return rows.map(mapBanner);
+    },
+    async listPublishedBanners() {
+      const { rows } = await pool.query('SELECT * FROM home_banners WHERE active = TRUE ORDER BY banner_index ASC');
+      return rows.map(mapBanner);
+    },
+    async getBanner(id) {
+      const { rows } = await pool.query('SELECT * FROM home_banners WHERE id = $1', [id]);
+      return mapBanner(rows[0]);
+    },
+    async createBanner(data) {
+      const { rows: positionRows } = await pool.query('SELECT COALESCE(MAX(banner_index), -1) + 1 AS next FROM home_banners');
+      const item = { id: randomUUID(), createdAt: now(), updatedAt: now(), ...data };
+      const { rows } = await pool.query(
+        `INSERT INTO home_banners (id, banner_index, content_id, eyebrow, title, description, cta, tone, active, media_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+        [item.id, Number(positionRows[0].next), item.contentId, item.eyebrow, item.title, item.description, item.cta, item.tone, item.active, item.mediaId, item.createdAt, item.updatedAt]
+      );
+      return mapBanner(rows[0]);
+    },
+    async updateBanner(id, patch) {
+      const fields = { contentId: 'content_id', eyebrow: 'eyebrow', title: 'title', description: 'description', cta: 'cta', tone: 'tone', active: 'active', mediaId: 'media_id' };
+      const entries = Object.entries(patch).filter(([key]) => fields[key]);
+      if (!entries.length) return this.getBanner(id);
+      const values = entries.map(([, value]) => value);
+      const sets = entries.map(([key], index) => `${fields[key]} = $${index + 1}`);
+      values.push(now(), id);
+      const { rows } = await pool.query(`UPDATE home_banners SET ${sets.join(', ')}, updated_at = $${values.length - 1} WHERE id = $${values.length} RETURNING *`, values);
+      return mapBanner(rows[0]);
+    },
+    async deleteBanner(id) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query('DELETE FROM home_banners WHERE id = $1 RETURNING *', [id]);
+        if (!rows[0]) { await client.query('COMMIT'); return null; }
+        await client.query('WITH ordered AS (SELECT id, ROW_NUMBER() OVER (ORDER BY banner_index) - 1 AS next_index FROM home_banners) UPDATE home_banners b SET banner_index = ordered.next_index FROM ordered WHERE b.id = ordered.id');
+        await client.query('COMMIT');
+        return mapBanner(rows[0]);
+      } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    },
+    async replaceBanners(items) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // Offset avoids a transient unique-index collision while positions swap.
+        await client.query('UPDATE home_banners SET banner_index = banner_index + 10000');
+        for (const [index, item] of items.entries()) await client.query('UPDATE home_banners SET banner_index = $1, updated_at = $2 WHERE id = $3', [index, now(), item.id]);
+        await client.query('COMMIT');
+      } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+      return this.listBanners();
+    },
     async listComments(status) {
       const { rows } = await pool.query(`SELECT * FROM comments ${status ? 'WHERE status = $1' : ''} ORDER BY updated_at DESC`, status ? [status] : []);
       return rows.map(mapComment);
+    },
+    async getComment(id) {
+      const { rows } = await pool.query('SELECT * FROM comments WHERE id = $1', [id]);
+      return mapComment(rows[0]);
+    },
+    async listPublicComments(contentId, { limit = 50 } = {}) {
+      const { rows } = await pool.query(
+        "SELECT * FROM comments WHERE content_id = $1 AND status = 'approved' ORDER BY created_at DESC LIMIT $2",
+        [contentId, Math.max(1, Math.min(100, Number(limit) || 50))]
+      );
+      return rows.map(mapComment);
+    },
+    async createComment(data) {
+      const record = { id: randomUUID(), status: 'pending', moderationNote: null, createdAt: now(), updatedAt: now(), ...data };
+      const { rows } = await pool.query(
+        `INSERT INTO comments (id, content_id, author_id, author_name, body, status, moderation_note, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [record.id, record.contentId, record.authorId, record.authorName, record.text, record.status, record.moderationNote, record.createdAt, record.updatedAt]
+      );
+      return mapComment(rows[0]);
+    },
+    async createCommentReport(data) {
+      const record = { id: randomUUID(), status: 'open', createdAt: now(), ...data };
+      const { rows } = await pool.query(
+        `INSERT INTO comment_reports (id, comment_id, reporter_id, reason, note, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [record.id, record.commentId, record.reporterId, record.reason, record.note ?? null, record.status, record.createdAt]
+      );
+      return mapCommentReport(rows[0]);
+    },
+    async listCommentReports({ status } = {}) {
+      const { rows } = await pool.query(
+        `SELECT * FROM comment_reports ${status ? 'WHERE status = $1' : ''} ORDER BY created_at DESC`,
+        status ? [status] : []
+      );
+      return rows.map(mapCommentReport);
+    },
+    async resolveCommentReports(commentId) {
+      const { rowCount } = await pool.query(
+        "UPDATE comment_reports SET status = 'resolved', resolved_at = $1 WHERE comment_id = $2 AND status = 'open'",
+        [now(), commentId]
+      );
+      return rowCount;
     },
     async updateComment(id, status, moderationNote) {
       const { rows } = await pool.query('UPDATE comments SET status = $1, moderation_note = $2, updated_at = $3 WHERE id = $4 RETURNING *', [status, moderationNote ?? null, now(), id]);

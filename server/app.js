@@ -19,6 +19,7 @@ const accessKinds = ['free', 'subscription', 'purchase'];
 const ageRatings = ['0+', '6+', '12+', '16+', '18+'];
 const rightsBases = ['original', 'contract', 'license', 'demo'];
 const commentStatuses = ['pending', 'approved', 'hidden', 'deleted'];
+const commentReportReasons = ['spam', 'abuse', 'hate', 'sexual', 'copyright', 'other'];
 const publicRequestStatuses = ['received', 'awaiting_verification', 'in_progress', 'completed', 'rejected'];
 const playbackEvents = ['intent', 'first_frame', 'pause', 'buffer_start', 'buffer_end', 'error', 'complete'];
 const bannerMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -80,6 +81,10 @@ export const defaultSeed = {
     { id: 'floor', title: 'Пятый этаж', kind: 'series', genre: 'Триллер', synopsis: 'Черновик нового сериала.', status: 'draft', access: 'subscription', episodes: 6, views: 0, likes: 0, compliance: demoCompliance, createdAt: '2026-07-14T10:00:00.000Z', updatedAt: '2026-07-14T10:00:00.000Z' }
   ],
   homeSlots: ['midnight', 'signal'],
+  banners: [
+    { id: 'banner-midnight', contentId: 'midnight', eyebrow: 'ПРЕМЬЕРА', title: 'После полуночи', description: 'Первая серия уже доступна. Продолжение выходит по пятницам.', cta: 'Смотреть сериал', tone: 'poster-one', active: true, mediaId: null },
+    { id: 'banner-signal', contentId: 'signal', eyebrow: 'НОВАЯ ИСТОРИЯ', title: 'Тихий сигнал', description: 'Десять серий, в которых каждая находка меняет картину.', cta: 'Открыть сериал', tone: 'poster-two', active: true, mediaId: null }
+  ],
   comments: [
     { id: 'comment-1', contentId: 'midnight', authorId: 'viewer-1', authorName: 'Мария К.', text: 'Очень жду продолжение. Концовка серии не отпускает.', status: 'pending', createdAt: '2026-07-14T08:30:00.000Z', updatedAt: '2026-07-14T08:30:00.000Z' },
     { id: 'comment-2', contentId: 'signal', authorId: 'viewer-2', authorName: 'Илья Р.', text: 'Когда выйдет следующая серия?', status: 'pending', createdAt: '2026-07-14T08:10:00.000Z', updatedAt: '2026-07-14T08:10:00.000Z' }
@@ -91,11 +96,13 @@ export const defaultSeed = {
 export function createMemoryStore(seed = defaultSeed) {
   const state = clone({
     ...seed,
+    banners: seed.banners ?? [],
     media: seed.media ?? [],
     mediaJobs: seed.mediaJobs ?? [],
     publicRequests: seed.publicRequests ?? [],
     viewerAccounts: seed.viewerAccounts ?? [],
     viewerSessions: seed.viewerSessions ?? [],
+    commentReports: seed.commentReports ?? [],
     content: seed.content.map((item) => ({
       scheduledAt: null,
       publishedAt: null,
@@ -111,6 +118,8 @@ export function createMemoryStore(seed = defaultSeed) {
   function findMedia(id) {
     return state.media.find((item) => item.id === id);
   }
+
+  function findBanner(id) { return state.banners.find((item) => item.id === id); }
 
   function findMediaJob(id) { return state.mediaJobs.find((item) => item.id === id); }
 
@@ -169,7 +178,48 @@ export function createMemoryStore(seed = defaultSeed) {
       return published;
     },
     replaceHomeSlots(ids) { state.homeSlots = [...ids]; return this.listHomeSlots(); },
+    listBanners() { return state.banners.map(clone); },
+    listPublishedBanners() { return state.banners.filter((item) => item.active && findContent(item.contentId)?.status === 'published').map(clone); },
+    getBanner(id) { const item = findBanner(id); return item && clone(item); },
+    createBanner(data) { const item = { id: randomUUID(), createdAt: now(), updatedAt: now(), ...data }; state.banners.push(item); return clone(item); },
+    updateBanner(id, patch) { const item = findBanner(id); if (!item) return null; Object.assign(item, patch, { updatedAt: now() }); return clone(item); },
+    deleteBanner(id) { const index = state.banners.findIndex((item) => item.id === id); if (index < 0) return null; return clone(state.banners.splice(index, 1)[0]); },
+    replaceBanners(items) { state.banners = items.map((item) => ({ ...item, updatedAt: now() })); return this.listBanners(); },
     listComments(status) { return state.comments.filter((item) => !status || item.status === status).map(clone); },
+    getComment(id) { const item = state.comments.find((comment) => comment.id === id); return item && clone(item); },
+    listPublicComments(contentId, { limit = 50 } = {}) {
+      return state.comments
+        .filter((item) => item.contentId === contentId && item.status === 'approved')
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, limit)
+        .map(clone);
+    },
+    createComment(data) {
+      const record = { id: randomUUID(), status: 'pending', moderationNote: null, createdAt: now(), updatedAt: now(), ...data };
+      state.comments.unshift(record);
+      return clone(record);
+    },
+    createCommentReport(data) {
+      if (state.commentReports.some((item) => item.commentId === data.commentId && item.reporterId === data.reporterId)) {
+        const error = new Error('COMMENT_ALREADY_REPORTED');
+        error.code = 'COMMENT_ALREADY_REPORTED';
+        throw error;
+      }
+      const record = { id: randomUUID(), status: 'open', createdAt: now(), ...data };
+      state.commentReports.unshift(record);
+      return clone(record);
+    },
+    listCommentReports({ status = 'open' } = {}) { return state.commentReports.filter((item) => !status || item.status === status).map(clone); },
+    resolveCommentReports(commentId) {
+      const resolvedAt = now();
+      let count = 0;
+      for (const report of state.commentReports) {
+        if (report.commentId !== commentId || report.status !== 'open') continue;
+        Object.assign(report, { status: 'resolved', resolvedAt });
+        count += 1;
+      }
+      return count;
+    },
     updateComment(id, status, moderationNote) {
       const comment = state.comments.find((item) => item.id === id);
       if (!comment) return null;
@@ -388,7 +438,27 @@ const contentInput = z.object({
 
 const contentPatch = contentInput.partial().strict();
 const homeSlotsInput = z.object({ contentIds: z.array(z.string().uuid().or(z.string().min(1).max(80))).min(0).max(30).refine((ids) => new Set(ids).size === ids.length, 'Повторять карточки в витрине нельзя') });
+const bannerTone = z.enum(['poster-one', 'poster-two', 'poster-three', 'poster-four', 'poster-five']);
+const bannerInput = z.object({
+  contentId: z.string().min(1).max(80),
+  eyebrow: z.string().trim().min(1).max(60),
+  title: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(360).default(''),
+  cta: z.string().trim().min(1).max(60),
+  tone: bannerTone.default('poster-one'),
+  active: z.boolean().default(false),
+  mediaId: z.string().uuid().nullable().optional()
+}).strict();
+const bannerPatch = bannerInput.partial().strict();
+const bannerOrderInput = z.object({ ids: z.array(z.string().uuid().or(z.string().min(1).max(80))).max(20).refine((ids) => new Set(ids).size === ids.length, 'Повторять баннеры нельзя') }).strict();
+const bannerParams = z.object({ id: z.string().uuid().or(z.string().min(1).max(80)) });
 const commentActionInput = z.object({ status: z.enum(['approved', 'hidden', 'deleted']), note: z.string().trim().max(500).optional() });
+const commentCreateInput = z.object({
+  text: z.string().trim().min(1).max(1_000).refine((value) => !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(value), 'Комментарий содержит недопустимые символы')
+}).strict();
+const commentReportInput = z.object({ reason: z.enum(commentReportReasons), note: z.string().trim().max(500).optional() }).strict();
+const publicCommentsQuery = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).strict();
+const commentReportQuery = z.object({ status: z.enum(['open', 'resolved']).optional() }).strict();
 const contentParams = z.object({ id: z.string().min(1).max(80) });
 const submitReviewInput = z.object({ note: z.string().trim().max(500).optional() }).default({});
 const publishInput = z.object({ scheduledAt: z.string().datetime({ offset: true }).optional() }).default({});
@@ -595,6 +665,23 @@ function viewerAccountPublic(account) {
     status: account.status,
     createdAt: account.createdAt
   };
+}
+
+function publicComment(comment) {
+  if (!comment) return null;
+  return {
+    id: comment.id,
+    contentId: comment.contentId,
+    authorName: comment.authorName,
+    text: comment.text,
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt
+  };
+}
+
+function viewerComment(comment) {
+  if (!comment) return null;
+  return { ...publicComment(comment), status: comment.status };
 }
 
 function publicRequestForStaff(item) {
@@ -886,8 +973,24 @@ export function buildApp(options = {}) {
     const items = (await store.listPublishedHomeSlots())
       .filter((item) => isPubliclyAvailable(item, now(), publicationGate))
       .map(publicContent);
+    const banners = await Promise.all((await store.listPublishedBanners()).map(async (banner) => {
+      const content = await store.getContent(banner.contentId);
+      if (!isPubliclyAvailable(content, now(), publicationGate)) return null;
+      const media = banner.mediaId ? await store.getMedia(banner.mediaId) : null;
+      return {
+        id: banner.id,
+        contentId: banner.contentId,
+        eyebrow: banner.eyebrow,
+        title: banner.title,
+        description: banner.description,
+        cta: banner.cta,
+        tone: banner.tone,
+        media: media?.kind === 'banner' ? { id: media.id, url: `/v1/media/${media.id}`, alt: banner.title } : null
+      };
+    }));
     return {
       hero: items[0] ?? null,
+      banners: banners.filter(Boolean),
       shelves: [{ id: 'featured', title: 'Популярное', items }],
       items
     };
@@ -1184,6 +1287,59 @@ export function buildApp(options = {}) {
     if (!isPubliclyAvailable(item, now(), publicationGate)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
     return { item: publicContent(item) };
   });
+  // Public comments are deliberately limited to moderated, published content.
+  // Author account IDs, report metadata and moderation notes never leave staff APIs.
+  app.get('/v1/content/:id/comments', async (request, reply) => {
+    await promoteDueScheduledContent(request);
+    const params = parseOrReply(contentParams, request.params, reply);
+    const query = parseOrReply(publicCommentsQuery, request.query, reply);
+    if (!params || !query) return;
+    const content = await store.getContent(params.id);
+    if (!isPubliclyAvailable(content, now(), publicationGate)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    const items = await store.listPublicComments(content.id, query);
+    return { items: items.map(publicComment) };
+  });
+  app.post('/v1/content/:id/comments', { preHandler: app.requireViewer, config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const params = parseOrReply(contentParams, request.params, reply);
+    const body = parseOrReply(commentCreateInput, request.body, reply);
+    if (!params || !body) return;
+    const [content, account] = await Promise.all([store.getContent(params.id), store.getViewerAccount(request.user.sub)]);
+    if (!isPubliclyAvailable(content, now(), publicationGate)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    if (!account || account.status !== 'active' || !account.emailVerifiedAt) return reply.code(403).send({ error: 'VERIFIED_VIEWER_REQUIRED', message: 'Подтверди e-mail, чтобы писать комментарии.' });
+    const item = await store.createComment({ contentId: content.id, authorId: account.id, authorName: account.displayName, text: body.text });
+    await audit(request, 'comment.create', 'comment', item.id, null, { status: item.status, contentId: item.contentId }, { id: account.id, roles: ['viewer'] });
+    return reply.code(201).send({ item: viewerComment(item), message: 'Комментарий отправлен на модерацию.' });
+  });
+  app.post('/v1/comments/:id/report', { preHandler: app.requireViewer, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const params = parseOrReply(z.object({ id: z.string().uuid() }), request.params, reply);
+    const body = parseOrReply(commentReportInput, request.body, reply);
+    if (!params || !body) return;
+    const [comment, account] = await Promise.all([store.getComment(params.id), store.getViewerAccount(request.user.sub)]);
+    if (!comment || comment.status !== 'approved') return reply.code(404).send({ error: 'NOT_FOUND', message: 'Комментарий не найден' });
+    const content = await store.getContent(comment.contentId);
+    if (!isPubliclyAvailable(content, now(), publicationGate)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Комментарий не найден' });
+    if (!account || account.status !== 'active' || !account.emailVerifiedAt) return reply.code(403).send({ error: 'VERIFIED_VIEWER_REQUIRED', message: 'Подтверди e-mail, чтобы отправлять жалобы.' });
+    if (comment.authorId === account.id) return reply.code(409).send({ error: 'CANNOT_REPORT_OWN_COMMENT', message: 'Нельзя пожаловаться на свой комментарий.' });
+    try {
+      const report = await store.createCommentReport({ commentId: comment.id, reporterId: account.id, reason: body.reason, note: body.note ?? null });
+      await audit(request, 'comment.report', 'comment', comment.id, null, { reportId: report.id, reason: report.reason }, { id: account.id, roles: ['viewer'] });
+      return reply.code(202).send({ accepted: true });
+    } catch (error) {
+      if (error.code === 'COMMENT_ALREADY_REPORTED' || error.code === '23505') return reply.code(409).send({ error: 'COMMENT_ALREADY_REPORTED', message: 'Ты уже отправлял жалобу на этот комментарий.' });
+      throw error;
+    }
+  });
+  app.post('/v1/comments/:id/delete', { preHandler: app.requireViewer, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const params = parseOrReply(z.object({ id: z.string().uuid() }), request.params, reply);
+    if (!params) return;
+    const comment = await store.getComment(params.id);
+    if (!comment) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Комментарий не найден' });
+    if (comment.authorId !== request.user.sub) return reply.code(403).send({ error: 'FORBIDDEN', message: 'Можно удалить только свой комментарий.' });
+    const item = await store.updateComment(comment.id, 'deleted', 'Удалён автором');
+    await store.resolveCommentReports?.(comment.id);
+    await audit(request, 'comment.delete_self', 'comment', item.id, { status: comment.status }, { status: item.status }, { id: request.user.sub, roles: ['viewer'] });
+    return reply.code(204).send();
+  });
   app.get('/v1/home', async (request) => catalogHome(request));
 
   app.post('/v1/privacy/deletion-requests', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
@@ -1292,10 +1448,83 @@ export function buildApp(options = {}) {
     return { items };
   });
 
+  const bannerForStudio = async (banner) => {
+    const media = banner.mediaId ? await store.getMedia(banner.mediaId) : null;
+    return {
+      ...banner,
+      media: media?.kind === 'banner' ? { id: media.id, src: `/v1/media/${media.id}`, name: media.fileName, size: media.size } : null
+    };
+  };
+
+  const validateBannerLinks = async (banner, reply) => {
+    const content = await store.getContent(banner.contentId);
+    if (!content) {
+      reply.code(400).send({ error: 'INVALID_CONTENT', message: 'Привязанный контент не найден' });
+      return false;
+    }
+    if (banner.mediaId) {
+      const media = await store.getMedia(banner.mediaId);
+      if (!media || media.kind !== 'banner') {
+        reply.code(400).send({ error: 'INVALID_BANNER_MEDIA', message: 'Изображение баннера не найдено' });
+        return false;
+      }
+    }
+    return true;
+  };
+
+  app.get('/v1/admin/banners', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({
+    items: await Promise.all((await store.listBanners()).map(bannerForStudio))
+  }));
+  app.post('/v1/admin/banners', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    const body = parseOrReply(bannerInput, request.body, reply);
+    if (!body || !(await validateBannerLinks(body, reply))) return;
+    const item = await store.createBanner({ ...body, mediaId: body.mediaId ?? null });
+    await audit(request, 'banner.create', 'banner', item.id, null, item);
+    return reply.code(201).send({ item: await bannerForStudio(item) });
+  });
+  app.patch('/v1/admin/banners/:id', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    const params = parseOrReply(bannerParams, request.params, reply);
+    const body = parseOrReply(bannerPatch, request.body, reply);
+    if (!params || !body) return;
+    const before = await store.getBanner(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Баннер не найден' });
+    const next = { ...before, ...body };
+    if (!(await validateBannerLinks(next, reply))) return;
+    const item = await store.updateBanner(params.id, body);
+    await audit(request, 'banner.update', 'banner', item.id, before, item);
+    return { item: await bannerForStudio(item) };
+  });
+  app.delete('/v1/admin/banners/:id', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    const params = parseOrReply(bannerParams, request.params, reply);
+    if (!params) return;
+    const item = await store.deleteBanner(params.id);
+    if (!item) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Баннер не найден' });
+    await audit(request, 'banner.delete', 'banner', item.id, item, null);
+    return reply.code(204).send();
+  });
+  app.put('/v1/admin/banners/order', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    const body = parseOrReply(bannerOrderInput, request.body, reply);
+    if (!body) return;
+    const previous = await store.listBanners();
+    if (previous.length !== body.ids.length || previous.some((item) => !body.ids.includes(item.id))) {
+      return reply.code(400).send({ error: 'INVALID_BANNER_ORDER', message: 'Передай полный список существующих баннеров без повторов' });
+    }
+    const byId = new Map(previous.map((item) => [item.id, item]));
+    const items = await store.replaceBanners(body.ids.map((id) => byId.get(id)));
+    await audit(request, 'banner.reorder', 'banner', 'home', previous.map((item) => item.id), items.map((item) => item.id));
+    return { items: await Promise.all(items.map(bannerForStudio)) };
+  });
+
   app.get('/v1/admin/comments', { preHandler: app.allowRoles(['superadmin', 'moderator', 'analyst']) }, async (request, reply) => {
     const query = parseOrReply(z.object({ status: z.enum(commentStatuses).optional() }), request.query, reply);
     if (!query) return;
     return { items: await store.listComments(query.status) };
+  });
+  app.get('/v1/admin/comment-reports', { preHandler: app.allowRoles(['superadmin', 'moderator', 'analyst']) }, async (request, reply) => {
+    const query = parseOrReply(commentReportQuery, request.query, reply);
+    if (!query) return;
+    const reports = await store.listCommentReports(query);
+    return { items: reports.map(({ reporterId, ...safe }) => safe) };
   });
   app.patch('/v1/admin/comments/:id', { preHandler: app.allowRoles(['superadmin', 'moderator']) }, async (request, reply) => {
     const params = parseOrReply(z.object({ id: z.string().min(1).max(80) }), request.params, reply);
@@ -1304,6 +1533,7 @@ export function buildApp(options = {}) {
     const before = (await store.listComments()).find((item) => item.id === params.id);
     const item = await store.updateComment(params.id, body.status, body.note);
     if (!item) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Комментарий не найден' });
+    await store.resolveCommentReports?.(item.id);
     audit(request, 'comment.moderate', 'comment', item.id, before, item);
     return { item };
   });
