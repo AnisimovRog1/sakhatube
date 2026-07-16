@@ -60,6 +60,12 @@
 Keychain (`AfterFirstUnlockThisDeviceOnly`). Access token и пароль никогда туда
 не записываются.
 
+Firebase Email/Password подключается только после добавления официального
+`GoogleService-Info.plist` в target. Пошаговый порядок, включая защищённую
+настройку сервера Railway, находится в
+[FIREBASE_NATIVE_SETUP.md](../../FIREBASE_NATIVE_SETUP.md). Без файла вход
+показывает явное безопасное сообщение и не создаёт ложную сессию.
+
 ## Текущие ограничения
 
 - нет синхронизации истории и избранного;

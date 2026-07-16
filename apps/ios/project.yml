@@ -28,6 +28,18 @@ targets:
     platform: iOS
     sources:
       - path: SakhaTube
+    preBuildScripts:
+      - name: Verify and embed Firebase configuration
+        basedOnDependencyAnalysis: false
+        script: |
+          FIREBASE_CONFIG="${SRCROOT}/SakhaTube/GoogleService-Info.plist"
+          if [ "${CONFIGURATION}" = "Release" ] && [ ! -f "${FIREBASE_CONFIG}" ]; then
+            echo "error: Missing SakhaTube/GoogleService-Info.plist. Download the iOS config for com.sakhatube.app from Firebase before archiving a release."
+            exit 1
+          fi
+          if [ -f "${FIREBASE_CONFIG}" ]; then
+            cp "${FIREBASE_CONFIG}" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist"
+          fi
     dependencies:
       - package: Firebase
         product: FirebaseCore

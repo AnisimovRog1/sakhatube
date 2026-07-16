@@ -13,6 +13,18 @@ if (file("google-services.json").isFile) {
     apply(plugin = "com.google.gms.google-services")
 }
 
+// Debug builds deliberately remain usable for catalogue/UI work without a
+// Firebase project. A release build must never ship an auth screen that cannot
+// initialise, so fail before producing an AAB when its official client config
+// has not been supplied by the release owner.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    doFirst {
+        check(file("google-services.json").isFile) {
+            "Missing app/google-services.json. Download the Android config for com.sakhatube.app from Firebase before building a release."
+        }
+    }
+}
+
 fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 val catalogBaseUrl = providers.gradleProperty("SAKHATUBE_CATALOG_BASE_URL")

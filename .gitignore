@@ -6,3 +6,9 @@ node_modules/
 !.env.example
 media/source/
 media/hls/
+
+# Firebase client configuration identifies a specific production app. It is
+# downloaded from the Firebase console by the release owner and must not be
+# shared through Git forks, demo builds, or issue attachments.
+apps/android/app/google-services.json
+apps/ios/SakhaTube/GoogleService-Info.plist

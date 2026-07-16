@@ -151,6 +151,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8FDA1422ED7F1B813E2EE5BD /* Build configuration list for PBXNativeTarget "SakhaTube" */;
 			buildPhases = (
+				A5B1C3D4E5F60718293A4C40 /* Verify and embed Firebase configuration */,
 				D6BD65FE7136D2B655011B11 /* Sources */,
 				0A11F1C90000000000000005 /* Resources */,
 				A5B1C3D4E5F60718293A4C07 /* Frameworks */,
@@ -216,6 +217,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A5B1C3D4E5F60718293A4C40 /* Verify and embed Firebase configuration */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Verify and embed Firebase configuration";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "FIREBASE_CONFIG=\"${SRCROOT}/SakhaTube/GoogleService-Info.plist\"\nif [ \"${CONFIGURATION}\" = \"Release\" ] && [ ! -f \"${FIREBASE_CONFIG}\" ]; then\n  echo \"error: Missing SakhaTube/GoogleService-Info.plist. Download the iOS config for com.sakhatube.app from Firebase before archiving a release.\"\n  exit 1\nfi\nif [ -f \"${FIREBASE_CONFIG}\" ]; then\n  cp \"${FIREBASE_CONFIG}\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		0A11F1C90000000000000005 /* Resources */ = {

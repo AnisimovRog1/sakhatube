@@ -783,6 +783,9 @@ function configFrom(overrides = {}) {
   const firebaseAuthDomain = overrides.firebaseAuthDomain ?? process.env.FIREBASE_AUTH_DOMAIN ?? '';
   const firebaseWebAppId = overrides.firebaseWebAppId ?? process.env.FIREBASE_WEB_APP_ID ?? '';
   const firebaseVerifier = overrides.firebaseVerifier ?? null;
+  // Test-only seam for the Firebase Admin deletion call. In production this is
+  // always created from FIREBASE_SERVICE_ACCOUNT_JSON below.
+  const firebaseUserDeleter = overrides.firebaseUserDeleter ?? null;
   const media = overrides.media ?? {
     endpoint: process.env.S3_ENDPOINT,
     accessKeyId: process.env.S3_ACCESS_KEY_ID,
@@ -800,15 +803,14 @@ function configFrom(overrides = {}) {
   if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
   if (production && mediaWorkerEnabled && mediaWorkerToken.length < 32) throw new Error('MEDIA_WORKER_TOKEN должен содержать не менее 32 символов в production');
   if ((firebaseProjectId && !firebaseServiceAccountJson) || (!firebaseProjectId && firebaseServiceAccountJson)) throw new Error('Для Firebase укажи и FIREBASE_PROJECT_ID, и FIREBASE_SERVICE_ACCOUNT_JSON');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, billingProducts, appleAppBundleId, googlePlayPackageName, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseWebApiKey, firebaseAuthDomain, firebaseWebAppId, firebaseVerifier };
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, billingProducts, appleAppBundleId, googlePlayPackageName, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseWebApiKey, firebaseAuthDomain, firebaseWebAppId, firebaseVerifier, firebaseUserDeleter };
 }
 
-function firebaseVerifierFrom(config) {
-  if (config.firebaseVerifier) return config.firebaseVerifier;
+function firebaseAdminAuthFrom(config) {
   if (!config.firebaseProjectId) return null;
-  let verifier;
-  return async (idToken) => {
-    if (!verifier) {
+  let auth;
+  return async () => {
+    if (!auth) {
       let serviceAccount;
       try {
         serviceAccount = JSON.parse(config.firebaseServiceAccountJson);
@@ -824,9 +826,33 @@ function firebaseVerifierFrom(config) {
       ]);
       const app = getApps().find((item) => item.options.projectId === config.firebaseProjectId)
         ?? initializeApp({ credential: cert(serviceAccount), projectId: config.firebaseProjectId }, `sakhatube-${config.firebaseProjectId}`);
-      verifier = (token) => getAuth(app).verifyIdToken(token, true);
+      auth = getAuth(app);
     }
-    return verifier(idToken);
+    return auth;
+  };
+}
+
+function firebaseVerifierFrom(config) {
+  if (config.firebaseVerifier) return config.firebaseVerifier;
+  const getFirebaseAuth = firebaseAdminAuthFrom(config);
+  if (!getFirebaseAuth) return null;
+  return async (idToken) => (await getFirebaseAuth()).verifyIdToken(idToken, true);
+}
+
+function firebaseUserDeleterFrom(config) {
+  if (config.firebaseUserDeleter) return config.firebaseUserDeleter;
+  const getFirebaseAuth = firebaseAdminAuthFrom(config);
+  if (!getFirebaseAuth) return null;
+  return async (firebaseUid) => {
+    try {
+      await (await getFirebaseAuth()).deleteUser(firebaseUid);
+      return { deleted: true, alreadyAbsent: false };
+    } catch (error) {
+      // Retrying a deletion after Firebase has already removed the identity is
+      // safe. It must not strand an otherwise valid SakhaTube deletion request.
+      if (error?.code === 'auth/user-not-found') return { deleted: false, alreadyAbsent: true };
+      throw error;
+    }
   };
 }
 
@@ -1051,6 +1077,7 @@ function publicContent(item) {
 export function buildApp(options = {}) {
   const config = configFrom(options);
   const verifyFirebaseIdToken = firebaseVerifierFrom(config);
+  const deleteFirebaseUser = firebaseUserDeleterFrom(config);
   const publicationGate = {
     allowDemoRights: !config.production,
     allowPaidAccess: !config.production || config.billing.canGrantEntitlements
@@ -1936,6 +1963,23 @@ export function buildApp(options = {}) {
       });
       await audit(request, 'privacy.deletion_request.complete_no_account', 'public_request', updated.id, { type: item.type, status: item.status }, { type: updated.type, status: updated.status, verifiedAt });
       return { requestId: updated.id, status: updated.status, verified: true, deleted: true };
+    }
+    // Delete the upstream Firebase identity before we anonymize its local UID.
+    // If Firebase is temporarily unavailable, leave the verified request usable
+    // so the owner can retry. Completing the local deletion first would discard
+    // the only mapping needed to guarantee removal from Firebase as well.
+    if (account.firebaseUid) {
+      if (!deleteFirebaseUser) {
+        await audit(request, 'privacy.deletion_request.firebase_unavailable', 'viewer_account', account.id, { status: account.status }, { status: account.status, reason: 'firebase_admin_unconfigured' }, { id: account.id, roles: ['viewer'] });
+        return reply.code(503).send({ error: 'FIREBASE_DELETION_UNAVAILABLE', message: 'Удаление учётной записи временно недоступно. Повтори попытку позже.' });
+      }
+      try {
+        await deleteFirebaseUser(account.firebaseUid);
+      } catch (error) {
+        await audit(request, 'privacy.deletion_request.firebase_failed', 'viewer_account', account.id, { status: account.status }, { status: account.status, reason: error?.code ?? 'firebase_delete_failed' }, { id: account.id, roles: ['viewer'] });
+        request.log.error({ err: error, accountId: account.id }, 'Firebase account deletion failed');
+        return reply.code(503).send({ error: 'FIREBASE_DELETION_UNAVAILABLE', message: 'Удаление учётной записи временно недоступно. Повтори попытку позже.' });
+      }
     }
     const deletion = await store.deleteViewerAccountData(account.id);
     const updated = await store.updatePublicRequest(params.id, {

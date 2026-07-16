@@ -14,12 +14,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class AuthRepository(
-    context: Context,
+    private val appContext: Context,
     private val baseUrl: String = BuildConfig.AUTH_BASE_URL,
-    private val sessionStore: ViewerSessionStore = EncryptedViewerSessionStore(context)
+    private val sessionStore: ViewerSessionStore = EncryptedViewerSessionStore(appContext)
 ) {
     suspend fun register(email: String, username: String, password: CharArray, displayName: String?): String = withContext(Dispatchers.IO) {
-        val result = Tasks.await(FirebaseAuth.getInstance().createUserWithEmailAndPassword(email.trim(), password.concatToString()))
+        val auth = firebaseAuth()
+        val result = Tasks.await(auth.createUserWithEmailAndPassword(email.trim(), password.concatToString()))
         val user = result.user ?: throw IOException("Firebase не вернул аккаунт.")
         Tasks.await(user.updateProfile(UserProfileChangeRequest.Builder().setDisplayName(displayName?.trim().takeUnless { it.isNullOrEmpty() } ?: username.trim()).build()))
         val idToken = Tasks.await(user.getIdToken(true)).token ?: throw IOException("Firebase не выдал ID-токен.")
@@ -30,12 +31,12 @@ class AuthRepository(
         })
         profileDrafts().edit().putString("username.${user.uid}", username.trim()).putString("displayName.${user.uid}", displayName?.trim()).apply()
         Tasks.await(user.sendEmailVerification())
-        FirebaseAuth.getInstance().signOut()
+        auth.signOut()
         "Мы отправили письмо для подтверждения e-mail. Подтверди адрес и затем войди."
     }
 
     suspend fun login(email: String, password: CharArray): ViewerSession = withContext(Dispatchers.IO) {
-        val result = Tasks.await(FirebaseAuth.getInstance().signInWithEmailAndPassword(email.trim(), password.concatToString()))
+        val result = Tasks.await(firebaseAuth().signInWithEmailAndPassword(email.trim(), password.concatToString()))
         exchangeVerifiedFirebaseUser(result.user ?: throw IOException("Firebase не вернул аккаунт."))
     }
 
@@ -75,12 +76,13 @@ class AuthRepository(
 
     fun signOut() {
         sessionStore.clear()
-        FirebaseAuth.getInstance().signOut()
+        FirebaseApp.initializeApp(appContext)?.let { FirebaseAuth.getInstance(it).signOut() }
     }
 
     private fun exchangeVerifiedFirebaseUser(user: com.google.firebase.auth.FirebaseUser): ViewerSession {
         Tasks.await(user.reload())
-        val refreshed = FirebaseAuth.getInstance().currentUser ?: throw IOException("Не удалось обновить аккаунт Firebase.")
+        val auth = firebaseAuth()
+        val refreshed = auth.currentUser ?: throw IOException("Не удалось обновить аккаунт Firebase.")
         if (!refreshed.isEmailVerified) {
             Tasks.await(refreshed.sendEmailVerification())
             throw IOException("Подтверди e-mail по ссылке из письма, затем войди снова.")
@@ -100,8 +102,16 @@ class AuthRepository(
         }
     }
 
-    private fun profileDrafts() = FirebaseApp.getInstance().applicationContext
-        .getSharedPreferences("sakhatube.firebase.profile-drafts", android.content.Context.MODE_PRIVATE)
+    private fun profileDrafts() = appContext.getSharedPreferences(
+        "sakhatube.firebase.profile-drafts",
+        android.content.Context.MODE_PRIVATE
+    )
+
+    private fun firebaseAuth(): FirebaseAuth {
+        val firebaseApp = FirebaseApp.initializeApp(appContext)
+            ?: throw IOException("Вход временно недоступен: Firebase ещё не настроен.")
+        return FirebaseAuth.getInstance(firebaseApp)
+    }
 
     private fun request(
         path: String,

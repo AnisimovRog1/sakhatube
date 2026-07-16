@@ -704,6 +704,51 @@ test('verified account deletion revokes every session and anonymizes comments an
   assert.equal(store.listAudit().some((entry) => entry.action === 'privacy.deletion_request.complete' && entry.entityId === accountId), true);
 });
 
+test('verified deletion removes the linked Firebase identity before local anonymisation', async (t) => {
+  const store = createMemoryStore();
+  const deletedFirebaseUids = [];
+  const app = await createTestApp({
+    store,
+    firebaseUserDeleter: async (uid) => { deletedFirebaseUids.push(uid); }
+  });
+  t.after(() => app.close());
+  const session = await verifiedViewer(app, { email: 'firebase-delete@example.com', displayName: 'Firebase зритель' });
+  const accountId = app.jwt.decode(session.accessToken).sub;
+  await store.updateViewerAccount(accountId, { firebaseUid: 'firebase-delete-user-42' });
+  const request = await app.inject({ method: 'POST', url: '/v1/privacy/deletion-requests', payload: { email: 'firebase-delete@example.com', confirmation: true } });
+  const requestBody = JSON.parse(request.body);
+  const verified = await app.inject({ method: 'POST', url: `/v1/privacy/deletion-requests/${requestBody.requestId}/verify`, payload: { token: requestBody.developmentVerification.token } });
+  assert.equal(verified.statusCode, 200);
+  assert.deepEqual(deletedFirebaseUids, ['firebase-delete-user-42']);
+  assert.equal(store.getViewerAccount(accountId).status, 'deleted');
+});
+
+test('Firebase deletion failure keeps the account and verified request retryable', async (t) => {
+  const store = createMemoryStore();
+  let shouldFail = true;
+  const app = await createTestApp({
+    store,
+    firebaseUserDeleter: async () => {
+      if (shouldFail) throw Object.assign(new Error('Firebase unavailable'), { code: 'auth/internal-error' });
+    }
+  });
+  t.after(() => app.close());
+  const session = await verifiedViewer(app, { email: 'firebase-retry@example.com', displayName: 'Повтор' });
+  const accountId = app.jwt.decode(session.accessToken).sub;
+  await store.updateViewerAccount(accountId, { firebaseUid: 'firebase-retry-user' });
+  const request = await app.inject({ method: 'POST', url: '/v1/privacy/deletion-requests', payload: { email: 'firebase-retry@example.com', confirmation: true } });
+  const requestBody = JSON.parse(request.body);
+  const firstAttempt = await app.inject({ method: 'POST', url: `/v1/privacy/deletion-requests/${requestBody.requestId}/verify`, payload: { token: requestBody.developmentVerification.token } });
+  assert.equal(firstAttempt.statusCode, 503);
+  assert.equal(JSON.parse(firstAttempt.body).error, 'FIREBASE_DELETION_UNAVAILABLE');
+  assert.equal(store.getViewerAccount(accountId).status, 'active');
+  shouldFail = false;
+  const retry = await app.inject({ method: 'POST', url: `/v1/privacy/deletion-requests/${requestBody.requestId}/verify`, payload: { token: requestBody.developmentVerification.token } });
+  assert.equal(retry.statusCode, 200);
+  assert.equal(store.getViewerAccount(accountId).status, 'deleted');
+  assert.equal(store.listAudit().some((entry) => entry.action === 'privacy.deletion_request.firebase_failed' && entry.entityId === accountId), true);
+});
+
 test('production deletion responses never disclose a verification token', async (t) => {
   const store = createMemoryStore();
   const deliveries = [];
