@@ -51,6 +51,8 @@ const publicFiles = new Map([
   ['/', 'index.html'],
   ['/index.html', 'index.html'],
   ['/styles.css', 'styles.css'],
+  ['/runtime-config.js', 'runtime-config.js'],
+  ['/firebase-auth.js', 'firebase-auth.js'],
   ['/app.js', 'app.js'],
   ['/admin.html', 'admin.html'],
   ['/admin.css', 'admin.css'],
