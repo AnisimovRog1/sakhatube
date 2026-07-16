@@ -8,6 +8,7 @@ struct ProfileView: View {
     @State private var avatar: UIImage?
     @State private var preferredLanguage = "Русский"
     @State private var isShowingAccount = false
+    @State private var isShowingDeletion = false
 
     var body: some View {
         NavigationStack {
@@ -84,10 +85,17 @@ struct ProfileView: View {
                     Link(destination: SakhaTubeLinks.privacy) {
                         Label("Политика конфиденциальности", systemImage: "hand.raised")
                     }
-                    Link(destination: SakhaTubeLinks.deleteAccount) {
-                        Label("Удалить аккаунт", systemImage: "person.crop.circle.badge.minus")
+                    if viewerSession.viewer == nil {
+                        Label("Удаление доступно после входа", systemImage: "person.crop.circle.badge.minus")
+                            .foregroundStyle(AppTheme.secondaryText)
+                    } else {
+                        Button(role: .destructive) {
+                            isShowingDeletion = true
+                        } label: {
+                            Label("Удалить аккаунт", systemImage: "person.crop.circle.badge.minus")
+                        }
                     }
-                    Text("В гостевом режиме аккаунт не создаётся. Если вы создадите аккаунт позже, на странице удаления можно будет начать удаление аккаунта и связанных данных.")
+                    Text("Запрос не удаляет данные сразу: мы отправим одноразовую ссылку на e-mail аккаунта. Удаление начнётся только после подтверждения по почте.")
                         .font(.footnote)
                         .foregroundStyle(AppTheme.secondaryText)
                 }
@@ -105,6 +113,11 @@ struct ProfileView: View {
             .background(AppTheme.background)
             .navigationTitle("Профиль")
             .sheet(isPresented: $isShowingAccount) { ViewerAuthView() }
+            .sheet(isPresented: $isShowingDeletion) {
+                if let viewer = viewerSession.viewer {
+                    DeletionRequestView(viewer: viewer)
+                }
+            }
             .task(id: selectedPhoto) {
                 guard let selectedPhoto,
                       let data = try? await selectedPhoto.loadTransferable(type: Data.self),
@@ -115,11 +128,82 @@ struct ProfileView: View {
     }
 }
 
+private struct DeletionRequestView: View {
+    @EnvironmentObject private var viewerSession: ViewerSessionStore
+    @Environment(\.dismiss) private var dismiss
+    let viewer: ViewerDTO
+
+    @State private var email = ""
+    @State private var note = ""
+    @State private var confirmed = false
+    @State private var successMessage: String?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Перед отправкой") {
+                    Text("Это только запрос. Аккаунт и данные не будут удалены в этом окне.")
+                    TextField("E-mail аккаунта", text: $email)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.emailAddress)
+                        .autocorrectionDisabled()
+                    Text("Укажи e-mail: \(viewer.email)")
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.secondaryText)
+                    TextField("Комментарий для поддержки (необязательно)", text: $note, axis: .vertical)
+                        .lineLimit(3...5)
+                    Toggle("Я понимаю: подтверждение придёт на e-mail", isOn: $confirmed)
+                }
+
+                Section {
+                    Button("Отправить письмо для подтверждения", role: .destructive) {
+                        Task { await submit() }
+                    }
+                    .disabled(!canSubmit || viewerSession.isWorking)
+
+                    if viewerSession.isWorking {
+                        HStack { ProgressView(); Text("Отправляем запрос…") }
+                    }
+                    if let successMessage {
+                        Text(successMessage).foregroundStyle(.green)
+                    }
+                    if let errorMessage {
+                        Text(errorMessage).foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Удаление аккаунта")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } } }
+            .onAppear { email = viewer.email }
+        }
+    }
+
+    private var canSubmit: Bool {
+        confirmed && email.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare(viewer.email) == .orderedSame
+    }
+
+    private func submit() async {
+        errorMessage = nil
+        successMessage = nil
+        do {
+            let response = try await viewerSession.startDeletionRequest(confirmingEmail: email, message: note)
+            guard response.verificationRequired else {
+                errorMessage = "Сервис не запросил подтверждение. Попробуй позже."
+                return
+            }
+            successMessage = "Письмо отправлено. Перейди по одноразовой ссылке из e-mail — только тогда запрос будет передан в обработку."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
 private enum SakhaTubeLinks {
     static let privacy = URL(string: "https://sakhatube-production.up.railway.app/privacy")!
     static let terms = URL(string: "https://sakhatube-production.up.railway.app/terms")!
     static let support = URL(string: "https://sakhatube-production.up.railway.app/support")!
-    static let deleteAccount = URL(string: "https://sakhatube-production.up.railway.app/delete-account")!
 }
 
 private struct NotificationsView: View {

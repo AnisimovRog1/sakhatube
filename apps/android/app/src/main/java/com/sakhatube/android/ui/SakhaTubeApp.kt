@@ -2,6 +2,9 @@ package com.sakhatube.android.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,21 +28,25 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -62,6 +69,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sakhatube.android.BuildConfig
@@ -69,6 +81,7 @@ import com.sakhatube.android.data.CatalogHome
 import com.sakhatube.android.data.CatalogItem
 import com.sakhatube.android.data.CatalogUiState
 import com.sakhatube.android.data.AuthUiState
+import com.sakhatube.android.data.DeletionUiState
 
 private enum class Destination(val title: String) {
     Home("Главная"),
@@ -80,9 +93,16 @@ private enum class Destination(val title: String) {
 fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel(), authViewModel: AuthViewModel = viewModel()) {
     val catalogState by viewModel.state.collectAsStateWithLifecycle()
     var destination by remember { mutableStateOf(Destination.Home) }
+    var selectedContent by remember { mutableStateOf<CatalogItem?>(null) }
+    val playbackViewModel: PlaybackViewModel = viewModel()
 
     Scaffold(
-        topBar = { AppTopBar(destination.title) },
+        topBar = {
+            AppTopBar(
+                title = if (selectedContent == null) destination.title else "Просмотр",
+                onBack = selectedContent?.let { { selectedContent = null } }
+            )
+        },
         bottomBar = {
             BottomAppBar {
                 Destination.entries.forEach { entry ->
@@ -93,7 +113,7 @@ fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel(), authViewModel: AuthV
                     }
                     NavigationBarItem(
                         selected = destination == entry,
-                        onClick = { destination = entry },
+                        onClick = { selectedContent = null; destination = entry },
                         icon = { Icon(icon, contentDescription = null) },
                         label = { Text(entry.title) }
                     )
@@ -101,15 +121,25 @@ fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel(), authViewModel: AuthV
             }
         }
     ) { padding ->
-        when (destination) {
+        val selected = selectedContent
+        if (selected != null) {
+            PlaybackScreen(
+                item = selected,
+                viewModel = playbackViewModel,
+                onClose = { selectedContent = null },
+                modifier = Modifier.padding(padding)
+            )
+        } else when (destination) {
             Destination.Home -> HomeScreen(
                 state = catalogState,
                 onRetry = viewModel::refresh,
+                onOpen = { selectedContent = it },
                 modifier = Modifier.padding(padding)
             )
             Destination.Catalog -> CatalogScreen(
                 state = catalogState,
                 onRetry = viewModel::refresh,
+                onOpen = { selectedContent = it },
                 modifier = Modifier.padding(padding)
             )
             Destination.Profile -> ProfileScreen(authViewModel, modifier = Modifier.padding(padding))
@@ -119,8 +149,13 @@ fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel(), authViewModel: AuthV
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AppTopBar(title: String) {
+private fun AppTopBar(title: String, onBack: (() -> Unit)? = null) {
     TopAppBar(
+        navigationIcon = {
+            if (onBack != null) IconButton(onClick = onBack) {
+                Icon(Icons.Outlined.ArrowBack, contentDescription = "Назад")
+            }
+        },
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Sakha", fontWeight = FontWeight.Black)
@@ -141,18 +176,19 @@ private fun AppTopBar(title: String) {
 private fun HomeScreen(
     state: CatalogUiState,
     onRetry: () -> Unit,
+    onOpen: (CatalogItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    when (state) {
+    when (val currentState = state) {
         CatalogUiState.Loading -> CatalogLoading(modifier)
         CatalogUiState.Empty -> CatalogEmpty(modifier)
-        is CatalogUiState.Error -> CatalogError(state.message, onRetry, modifier)
-        is CatalogUiState.Content -> HomeContent(state.home, modifier)
+        is CatalogUiState.Error -> CatalogError(currentState.message, onRetry, modifier)
+        is CatalogUiState.Content -> HomeContent(currentState.home, onOpen, modifier)
     }
 }
 
 @Composable
-private fun HomeContent(home: CatalogHome, modifier: Modifier = Modifier) {
+private fun HomeContent(home: CatalogHome, onOpen: (CatalogItem) -> Unit, modifier: Modifier = Modifier) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 32.dp),
@@ -160,7 +196,7 @@ private fun HomeContent(home: CatalogHome, modifier: Modifier = Modifier) {
     ) {
         home.hero?.let { hero ->
             item {
-                HeroCard(hero, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                HeroCard(hero, onClick = { onOpen(hero) }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
         }
         items(home.shelves, key = { it.id }) { shelf ->
@@ -176,7 +212,7 @@ private fun HomeContent(home: CatalogHome, modifier: Modifier = Modifier) {
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(shelf.items, key = { it.id }) { item ->
-                        PosterCard(item, modifier = Modifier.width(148.dp))
+                        PosterCard(item, onClick = { onOpen(item) }, modifier = Modifier.width(148.dp))
                     }
                 }
             }
@@ -188,9 +224,10 @@ private fun HomeContent(home: CatalogHome, modifier: Modifier = Modifier) {
 private fun CatalogScreen(
     state: CatalogUiState,
     onRetry: () -> Unit,
+    onOpen: (CatalogItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    when (state) {
+    when (val currentState = state) {
         CatalogUiState.Loading -> CatalogLoading(modifier)
         CatalogUiState.Empty -> CatalogEmpty(modifier)
         is CatalogUiState.Error -> CatalogError(state.message, onRetry, modifier)
@@ -202,18 +239,147 @@ private fun CatalogScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
-                items(state.home.items, key = { it.id }) { item -> PosterCard(item) }
+                items(state.home.items, key = { it.id }) { item -> PosterCard(item, onClick = { onOpen(item) }) }
             }
         }
     }
 }
 
 @Composable
-private fun HeroCard(item: CatalogItem, modifier: Modifier = Modifier) {
+private fun PlaybackScreen(
+    item: CatalogItem,
+    viewModel: PlaybackViewModel,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    BackHandler(onBack = onClose)
+    LaunchedEffect(item.id) { viewModel.open(item.id) }
+
+    when (val currentState = state) {
+        PlaybackUiState.Idle, PlaybackUiState.Loading -> PlaybackStatus(
+            title = "Подготавливаем просмотр",
+            message = "Проверяем доступ и подбираем готовую версию видео.",
+            loading = true,
+            modifier = modifier
+        )
+        is PlaybackUiState.Ready -> SecureHlsPlayer(
+            item = item,
+            session = currentState.session,
+            onEvent = { event, positionMs, errorCode ->
+                viewModel.report(item.id, currentState.session.sessionId, event, positionMs, errorCode)
+            },
+            modifier = modifier
+        )
+        is PlaybackUiState.Paywall -> PlaybackStatus(
+            title = "Нужен доступ",
+            message = currentState.message,
+            actionLabel = "Закрыть",
+            onAction = onClose,
+            modifier = modifier
+        )
+        is PlaybackUiState.Processing -> PlaybackStatus(
+            title = "Видео обрабатывается",
+            message = currentState.message,
+            actionLabel = "Проверить снова",
+            onAction = { viewModel.retry(item.id) },
+            modifier = modifier
+        )
+        is PlaybackUiState.Unavailable -> PlaybackStatus(
+            title = "Просмотр недоступен",
+            message = currentState.message,
+            actionLabel = "Повторить",
+            onAction = { viewModel.retry(item.id) },
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+private fun SecureHlsPlayer(
+    item: CatalogItem,
+    session: com.sakhatube.android.data.PlaybackSession,
+    onEvent: (event: String, positionMs: Long?, errorCode: String?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val player = remember(session.manifestUrl) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(session.manifestUrl))
+            prepare()
+            playWhenReady = true
+        }
+    }
+    DisposableEffect(player) {
+        var firstFrameReported = false
+        val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                if (!firstFrameReported) {
+                    firstFrameReported = true
+                    onEvent("first_frame", player.currentPosition, null)
+                }
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                onEvent("error", player.currentPosition, error.errorCodeName)
+            }
+        }
+        player.addListener(listener)
+        onEvent("intent", 0, null)
+        onDispose {
+            onEvent("pause", player.currentPosition, null)
+            player.removeListener(listener)
+            player.release()
+        }
+    }
+    Column(
+        modifier = modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        AndroidView(
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(20.dp)),
+            factory = { viewContext -> PlayerView(viewContext).apply { this.player = player; useController = true } },
+            update = { it.player = player }
+        )
+        Text(item.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(item.synopsis, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Защищённое воспроизведение", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
+private fun PlaybackStatus(
+    title: String,
+    message: String,
+    loading: Boolean = false,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (loading) CircularProgressIndicator(modifier = Modifier.size(36.dp))
+        else Icon(Icons.Outlined.Movie, contentDescription = null, modifier = Modifier.size(44.dp), tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(18.dp))
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(message, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (actionLabel != null && onAction != null) {
+            Spacer(Modifier.height(22.dp))
+            Button(onClick = onAction) { Text(actionLabel) }
+        }
+    }
+}
+
+@Composable
+private fun HeroCard(item: CatalogItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Card(
         modifier = modifier
             .fillMaxWidth()
             .semantics { contentDescription = "Премьера: ${item.title}" },
+        onClick = onClick,
         shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -250,11 +416,12 @@ private fun HeroCard(item: CatalogItem, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PosterCard(item: CatalogItem, modifier: Modifier = Modifier) {
+private fun PosterCard(item: CatalogItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.semantics { contentDescription = "${item.title}, ${item.metadata}" },
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Card(onClick = onClick, shape = RoundedCornerShape(18.dp)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -272,6 +439,7 @@ private fun PosterCard(item: CatalogItem, modifier: Modifier = Modifier) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+        }
         }
         Text(item.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(item.metadata, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -340,6 +508,8 @@ private fun CatalogError(message: String, onRetry: () -> Unit, modifier: Modifie
 private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val authState by authViewModel.state.collectAsStateWithLifecycle()
+    val deletionState by authViewModel.deletionState.collectAsStateWithLifecycle()
+    var isShowingDeletion by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
@@ -361,7 +531,11 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
                 is AuthUiState.SignedIn -> SignedInProfileCard(
                     viewerName = authState.viewer.displayName,
                     email = authState.viewer.email,
-                    onSignOut = authViewModel::signOut
+                    onSignOut = authViewModel::signOut,
+                    onRequestDeletion = {
+                        authViewModel.clearDeletionState()
+                        isShowingDeletion = true
+                    }
                 )
                 else -> AuthCard(
                     mode = mode,
@@ -419,12 +593,28 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
             }
         }
     }
+    if (isShowingDeletion && authState is AuthUiState.SignedIn) {
+        DeletionRequestDialog(
+            accountEmail = authState.viewer.email,
+            state = deletionState,
+            onDismiss = {
+                authViewModel.clearDeletionState()
+                isShowingDeletion = false
+            },
+            onSubmit = { email, message -> authViewModel.startDeletion(email, authState.viewer.email, message) }
+        )
+    }
 }
 
 private enum class ProfileMode { SignIn, Register, Verify }
 
 @Composable
-private fun SignedInProfileCard(viewerName: String, email: String, onSignOut: () -> Unit) {
+private fun SignedInProfileCard(
+    viewerName: String,
+    email: String,
+    onSignOut: () -> Unit,
+    onRequestDeletion: () -> Unit
+) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Text(viewerName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -434,9 +624,71 @@ private fun SignedInProfileCard(viewerName: String, email: String, onSignOut: ()
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Button(onClick = onSignOut) { Text("Выйти") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onSignOut) { Text("Выйти") }
+                TextButton(onClick = onRequestDeletion) { Text("Удалить аккаунт") }
+            }
         }
     }
+}
+
+@Composable
+private fun DeletionRequestDialog(
+    accountEmail: String,
+    state: DeletionUiState,
+    onDismiss: () -> Unit,
+    onSubmit: (email: String, message: String) -> Unit
+) {
+    var email by remember(accountEmail) { mutableStateOf(accountEmail) }
+    var message by remember { mutableStateOf("") }
+    var confirmed by remember { mutableStateOf(false) }
+    val sending = state is DeletionUiState.Sending
+    val emailMatches = email.trim().equals(accountEmail.trim(), ignoreCase = true)
+
+    AlertDialog(
+        onDismissRequest = { if (!sending) onDismiss() },
+        title = { Text("Удаление аккаунта") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Это только запрос. Мы отправим одноразовую ссылку на e-mail, и удаление начнётся только после подтверждения по почте.")
+                AppField("E-mail аккаунта", email, { email = it }, enabled = !sending, keyboardType = KeyboardType.Email)
+                if (!emailMatches) {
+                    Text("Укажи e-mail текущего аккаунта.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                OutlinedTextField(
+                    value = message,
+                    onValueChange = { message = it },
+                    label = { Text("Комментарий для поддержки (необязательно)") },
+                    enabled = !sending,
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 4
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(checked = confirmed, onCheckedChange = { confirmed = it }, enabled = !sending)
+                    Text("Я понимаю: нужно подтвердить письмо")
+                }
+                when (state) {
+                    is DeletionUiState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
+                    is DeletionUiState.Requested -> Text(state.message, color = MaterialTheme.colorScheme.primary)
+                    else -> Unit
+                }
+            }
+        },
+        confirmButton = {
+            if (state is DeletionUiState.Requested) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                Button(onClick = { onSubmit(email, message) }, enabled = confirmed && emailMatches && !sending) {
+                    if (sending) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Text("Отправить письмо")
+                }
+            }
+        },
+        dismissButton = {
+            if (!sending) TextButton(onClick = onDismiss) { Text("Отмена") }
+        }
+    )
 }
 
 @Composable

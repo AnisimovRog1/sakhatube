@@ -58,6 +58,8 @@ android {
 }
 
 dependencies {
+    // Keep all Media3 modules on the exact same reviewed release.
+    val media3Version = "1.10.1"
     val composeBom = platform("androidx.compose:compose-bom:2025.06.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -72,6 +74,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

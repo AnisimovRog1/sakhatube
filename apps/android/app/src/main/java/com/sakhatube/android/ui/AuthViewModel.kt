@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sakhatube.android.data.AuthRepository
 import com.sakhatube.android.data.AuthUiState
+import com.sakhatube.android.data.DeletionUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +15,8 @@ class AuthViewModel(
 ) : ViewModel() {
     private val _state = MutableStateFlow<AuthUiState>(AuthUiState.Guest)
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
+    private val _deletionState = MutableStateFlow<DeletionUiState>(DeletionUiState.Idle)
+    val deletionState: StateFlow<DeletionUiState> = _deletionState.asStateFlow()
 
     fun register(email: String, password: CharArray, displayName: String) = runAuth(
         inProgress = AuthUiState.Registering,
@@ -34,6 +37,21 @@ class AuthViewModel(
 
     fun dismissError() { _state.value = AuthUiState.Guest }
     fun signOut() { repository.signOut(); _state.value = AuthUiState.Guest }
+
+    fun startDeletion(email: String, accountEmail: String, message: String) {
+        if (!email.trim().equals(accountEmail.trim(), ignoreCase = true)) {
+            _deletionState.value = DeletionUiState.Error("Укажи e-mail текущего аккаунта для подтверждения.")
+            return
+        }
+        viewModelScope.launch {
+            _deletionState.value = DeletionUiState.Sending
+            runCatching { repository.startDeletionRequest(email, accountEmail, message) }
+                .onSuccess { _deletionState.value = DeletionUiState.Requested(it) }
+                .onFailure { _deletionState.value = DeletionUiState.Error(it.message ?: "Не удалось отправить запрос.") }
+        }
+    }
+
+    fun clearDeletionState() { _deletionState.value = DeletionUiState.Idle }
 
     private fun <T> runAuth(inProgress: AuthUiState, success: (T) -> AuthUiState, block: suspend () -> T) {
         viewModelScope.launch {

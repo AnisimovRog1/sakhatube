@@ -38,12 +38,17 @@ enum AppConfiguration {
 enum APIClientError: LocalizedError, Sendable {
     case invalidResponse
     case httpStatus(Int)
+    case server(code: String?, statusCode: Int, message: String?)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "Сервис вернул некорректный ответ."
         case .httpStatus(let statusCode):
+            return "Сервис временно недоступен (код \(statusCode))."
+        case .server(let code, let statusCode, let message):
+            if let message, !message.isEmpty { return message }
+            if let code, !code.isEmpty { return "Сервис отклонил запрос: \(code)." }
             return "Сервис временно недоступен (код \(statusCode))."
         }
     }
@@ -115,6 +120,43 @@ actor APIClient {
         try await requestNoContent(url, method: "POST", bearerToken: accessToken)
     }
 
+    // MARK: - Protected playback API
+
+    /// Requests the only URL AVPlayer is allowed to receive: a short-lived
+    /// SakhaTube gateway manifest. The API never returns a bucket key or a
+    /// direct object-storage URL.
+    func createPlaybackSession(contentId: String) async throws -> PlaybackSessionResponse {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/playback/sessions")
+        return try await request(url, method: "POST", body: PlaybackSessionRequest(contentId: contentId))
+    }
+
+    /// Playback analytics are deliberately best-effort. A missed event must
+    /// never keep a viewer from watching a video.
+    func reportPlaybackEvent(_ event: PlaybackEventRequest) async {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/events/playback")
+        do {
+            _ = try await request(url, method: "POST", body: event) as PlaybackEventAcceptance
+        } catch {
+            // Intentionally ignored: telemetry is not a playback dependency.
+        }
+    }
+
+    /// Starts a deletion request only. The account is not deleted from the app;
+    /// the holder must confirm the link sent to the supplied e-mail address.
+    func startDeletionRequest(email: String, accountEmail: String, message: String?) async throws -> DeletionRequestResponse {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/privacy/deletion-requests")
+        return try await request(
+            url,
+            method: "POST",
+            body: DeletionRequestPayload(
+                email: email,
+                accountEmail: accountEmail,
+                message: message?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                confirmation: true
+            )
+        )
+    }
+
     private func request<Response: Decodable>(_ url: URL) async throws -> Response {
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
@@ -162,7 +204,12 @@ actor APIClient {
             throw APIClientError.invalidResponse
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw APIClientError.httpStatus(httpResponse.statusCode)
+            let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data)
+            throw APIClientError.server(
+                code: apiError?.error,
+                statusCode: httpResponse.statusCode,
+                message: apiError?.message
+            )
         }
         return try JSONDecoder().decode(Response.self, from: data)
     }
@@ -190,6 +237,19 @@ private struct ViewerRefreshRequest: Encodable, Sendable {
     let refreshToken: String
 }
 
+private struct DeletionRequestPayload: Encodable, Sendable {
+    let email: String
+    let accountEmail: String
+    let message: String?
+    let confirmation: Bool
+}
+
+struct DeletionRequestResponse: Decodable, Sendable {
+    let requestId: String
+    let status: String
+    let verificationRequired: Bool
+}
+
 struct ViewerRegistrationResponse: Decodable, Sendable {
     let status: String
     let message: String
@@ -213,6 +273,64 @@ struct ViewerDTO: Decodable, Sendable, Equatable {
     let email: String
     let displayName: String
     let emailVerifiedAt: String?
+}
+
+// MARK: - Protected playback transport
+
+private struct PlaybackSessionRequest: Encodable, Sendable {
+    let contentId: String
+}
+
+struct PlaybackSessionResponse: Decodable, Sendable {
+    let sessionId: String
+    let expiresIn: Int
+    let manifestUrl: String
+
+    /// The service returns a path such as `/v1/playback/<short-lived-token>/master.m3u8`.
+    /// Reject anything except a same-origin gateway path before AVPlayer sees it.
+    func resolvedManifestURL(baseURL: URL) -> URL? {
+        guard manifestUrl.hasPrefix("/v1/playback/"),
+              !manifestUrl.contains(".."),
+              let components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme,
+              let host = components.host else { return nil }
+
+        var gateway = URLComponents()
+        gateway.scheme = scheme
+        gateway.host = host
+        gateway.port = components.port
+        gateway.path = manifestUrl
+        return gateway.url
+    }
+}
+
+struct PlaybackEventRequest: Encodable, Sendable {
+    let contentId: String
+    let sessionId: String
+    let event: String
+    let positionMs: Int?
+    let errorCode: String?
+
+    init(contentId: String, sessionId: String, event: String, positionMs: Int? = nil, errorCode: String? = nil) {
+        self.contentId = contentId
+        self.sessionId = sessionId
+        self.event = event
+        self.positionMs = positionMs
+        self.errorCode = errorCode
+    }
+}
+
+private struct PlaybackEventAcceptance: Decodable, Sendable {
+    let accepted: Bool
+}
+
+private struct APIErrorResponse: Decodable, Sendable {
+    let error: String?
+    let message: String?
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 // MARK: - Public catalog transport

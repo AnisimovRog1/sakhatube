@@ -29,6 +29,13 @@ sealed interface AuthUiState {
     data class Error(val message: String) : AuthUiState
 }
 
+sealed interface DeletionUiState {
+    data object Idle : DeletionUiState
+    data object Sending : DeletionUiState
+    data class Requested(val message: String) : DeletionUiState
+    data class Error(val message: String) : DeletionUiState
+}
+
 interface ViewerSessionStore {
     fun current(): ViewerSession?
     fun save(session: ViewerSession)

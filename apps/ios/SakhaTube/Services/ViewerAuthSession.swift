@@ -11,8 +11,13 @@ protocol ViewerAuthServing: Sendable {
     func viewerMe(accessToken: String) async throws -> ViewerMeResponse
 }
 
+protocol ViewerDeletionRequesting: Sendable {
+    func startDeletionRequest(email: String, accountEmail: String, message: String?) async throws -> DeletionRequestResponse
+}
+
 extension APIClient: ViewerAuthServing {}
 extension APIClient: ViewerSessionRenewing {}
+extension APIClient: ViewerDeletionRequesting {}
 
 /// Contract reserved for the backend session phase. Do not enable persistence
 /// until all three endpoints below exist and the server rotates/revokes refresh
@@ -43,11 +48,11 @@ final class ViewerSessionStore: ObservableObject {
     @Published private(set) var state: ViewerAuthState = .guest
     @Published private(set) var isWorking = false
 
-    private let api: any ViewerAuthServing & ViewerSessionRenewing
+    private let api: any ViewerAuthServing & ViewerSessionRenewing & ViewerDeletionRequesting
     private let refreshTokens: RefreshTokenStoring
     private var accessToken: String?
 
-    init(api: any ViewerAuthServing & ViewerSessionRenewing = APIClient(), refreshTokens: RefreshTokenStoring = RefreshTokenKeychain()) {
+    init(api: any ViewerAuthServing & ViewerSessionRenewing & ViewerDeletionRequesting = APIClient(), refreshTokens: RefreshTokenStoring = RefreshTokenKeychain()) {
         self.api = api
         self.refreshTokens = refreshTokens
     }
@@ -105,6 +110,21 @@ final class ViewerSessionStore: ObservableObject {
         try? await api.logoutViewer(accessToken: token)
     }
 
+    /// This deliberately creates only a request. It never signs the viewer out
+    /// and never claims that data has been erased: the e-mail confirmation and
+    /// subsequent privacy workflow are authoritative.
+    func startDeletionRequest(confirmingEmail: String, message: String?) async throws -> DeletionRequestResponse {
+        guard let viewer else { throw ViewerDeletionError.signedOut }
+        let expected = viewer.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard confirmingEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare(expected) == .orderedSame else {
+            throw ViewerDeletionError.emailMismatch
+        }
+        isWorking = true
+        defer { isWorking = false }
+        return try await api.startDeletionRequest(email: expected, accountEmail: expected, message: message)
+    }
+
     private func accept(_ session: ViewerSessionResponse) {
         accessToken = session.accessToken
         state = .signedIn(session.viewer)
@@ -138,6 +158,18 @@ enum ViewerAuthInputError: LocalizedError {
         switch self {
         case .invalidVerificationLink:
             return "Вставь полную ссылку из письма подтверждения."
+        }
+    }
+}
+
+enum ViewerDeletionError: LocalizedError {
+    case signedOut
+    case emailMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .signedOut: return "Сначала войди в аккаунт."
+        case .emailMismatch: return "Укажи e-mail текущего аккаунта для подтверждения."
         }
     }
 }

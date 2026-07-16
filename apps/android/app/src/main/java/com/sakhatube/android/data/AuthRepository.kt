@@ -48,6 +48,23 @@ class AuthRepository(
         response.optJSONObject("viewer")?.toViewer()
     }
 
+    /**
+     * Starts a privacy request only. The server sends a one-time e-mail link;
+     * the app must never imply that the account has already been erased.
+     */
+    suspend fun startDeletionRequest(email: String, accountEmail: String, message: String?): String = withContext(Dispatchers.IO) {
+        val response = request("/v1/privacy/deletion-requests", "POST", JSONObject().apply {
+            put("email", email.trim())
+            put("accountEmail", accountEmail.trim())
+            message?.trim()?.takeIf { it.isNotEmpty() }?.let { put("message", it) }
+            put("confirmation", true)
+        }, expectedCodes = setOf(202))
+        if (!response.optBoolean("verificationRequired", false)) {
+            throw IOException("Сервис не запросил подтверждение. Попробуй позже.")
+        }
+        "Письмо отправлено. Перейди по одноразовой ссылке из e-mail — только тогда запрос будет передан в обработку."
+    }
+
     fun signOut() = sessionStore.clear()
 
     private fun request(
