@@ -684,6 +684,105 @@ test('temporary demo media is public but restricted to its own prefix', async (t
   assert.equal(traversal.statusCode, 404);
 });
 
+test('playback sessions fail closed and stream only an explicitly ready free HLS rendition', async (t) => {
+  const requestedKeys = [];
+  const mediaStore = {
+    async get(key) {
+      requestedKeys.push(key);
+      if (key === 'renditions/signal-release/master.m3u8') {
+        return { ContentType: 'application/vnd.apple.mpegurl', Body: Readable.from(['#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=600000\nvideo/playlist.m3u8\n']) };
+      }
+      if (key === 'renditions/signal-release/video/playlist.m3u8') {
+        return { ContentType: 'application/vnd.apple.mpegurl', Body: Readable.from(['#EXTM3U\n#EXTINF:4,\nsegment-001.m4s\n']) };
+      }
+      if (key === 'renditions/signal-release/video/segment-001.m4s') {
+        return { ContentType: 'video/iso.segment', Body: Readable.from(['segment']) };
+      }
+      throw new Error('object missing');
+    }
+  };
+  const store = createMemoryStore();
+  const app = await createTestApp({ store, mediaStore });
+  t.after(() => app.close());
+
+  const noRendition = await app.inject({ method: 'POST', url: '/v1/playback/sessions', payload: { contentId: 'signal' } });
+  assert.equal(noRendition.statusCode, 409);
+  assert.equal(JSON.parse(noRendition.body).error, 'PLAYBACK_NOT_READY');
+
+  const rendition = store.createMedia({
+    kind: 'hls',
+    relation: 'rendition',
+    status: 'ready',
+    contentId: 'signal',
+    storageKey: 'renditions/signal-release/master.m3u8',
+    fileName: 'master.m3u8',
+    contentType: 'application/vnd.apple.mpegurl',
+    size: 123,
+    metadata: {
+      playback: {
+        hls: {
+          state: 'ready',
+          prefix: 'renditions/signal-release/',
+          manifestKey: 'renditions/signal-release/master.m3u8',
+          generatedAt: '2026-07-16T00:00:00.000Z'
+        }
+      }
+    }
+  });
+  const paid = await app.inject({ method: 'POST', url: '/v1/playback/sessions', payload: { contentId: 'midnight' } });
+  assert.equal(paid.statusCode, 403);
+  assert.equal(JSON.parse(paid.body).error, 'ENTITLEMENT_REQUIRED');
+
+  const granted = await app.inject({ method: 'POST', url: '/v1/playback/sessions', payload: { contentId: 'signal' } });
+  assert.equal(granted.statusCode, 201);
+  const session = JSON.parse(granted.body);
+  assert.equal(typeof session.sessionId, 'string');
+  assert.equal(session.expiresIn, 300);
+  assert.match(session.manifestUrl, /^\/v1\/playback\/.+\/master\.m3u8$/);
+  assert.equal(JSON.stringify(session).includes('renditions/'), false);
+  assert.equal(JSON.stringify(session).includes('storageKey'), false);
+
+  const rawAsset = await app.inject({ method: 'GET', url: `/v1/media/${rendition.id}` });
+  assert.equal(rawAsset.statusCode, 404);
+  const master = await app.inject({ method: 'GET', url: session.manifestUrl });
+  assert.equal(master.statusCode, 200);
+  assert.equal(master.headers['content-type'], 'application/vnd.apple.mpegurl');
+  assert.equal(master.headers['cache-control'], 'no-store');
+  const token = session.manifestUrl.split('/')[3];
+  const childPlaylist = await app.inject({ method: 'GET', url: `/v1/playback/${token}/video/playlist.m3u8` });
+  assert.equal(childPlaylist.statusCode, 200);
+  const segment = await app.inject({ method: 'GET', url: `/v1/playback/${token}/video/segment-001.m4s` });
+  assert.equal(segment.statusCode, 200);
+  assert.deepEqual(requestedKeys, [
+    'renditions/signal-release/master.m3u8',
+    'renditions/signal-release/video/playlist.m3u8',
+    'renditions/signal-release/video/segment-001.m4s'
+  ]);
+
+  const traversal = await app.inject({ method: 'GET', url: `/v1/playback/${token}/..%2Fsecret.m3u8` });
+  assert.equal(traversal.statusCode, 401);
+});
+
+test('playback gateway rejects a ready-looking rendition with external HLS references', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({
+    store,
+    mediaStore: {
+      async get() { return { ContentType: 'application/vnd.apple.mpegurl', Body: Readable.from(['#EXTM3U\nhttps://bucket.example/segment.m4s\n']) }; }
+    }
+  });
+  t.after(() => app.close());
+  store.createMedia({
+    kind: 'hls', relation: 'rendition', status: 'ready', contentId: 'signal',
+    storageKey: 'renditions/signal-release/master.m3u8', fileName: 'master.m3u8', contentType: 'application/vnd.apple.mpegurl', size: 1,
+    metadata: { playback: { hls: { state: 'ready', prefix: 'renditions/signal-release/', manifestKey: 'renditions/signal-release/master.m3u8' } } }
+  });
+  const granted = await app.inject({ method: 'POST', url: '/v1/playback/sessions', payload: { contentId: 'signal' } });
+  const manifest = await app.inject({ method: 'GET', url: JSON.parse(granted.body).manifestUrl });
+  assert.equal(manifest.statusCode, 502);
+  assert.equal(JSON.parse(manifest.body).error, 'PLAYBACK_RENDITION_INVALID');
+});
+
 test('production refuses a memory store unless preview mode is explicitly enabled', () => {
   assert.throws(() => buildApp({ nodeEnv: 'production', jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters' }), /DATABASE_URL/);
   assert.doesNotThrow(() => buildApp({ nodeEnv: 'production', allowDemoStore: true, jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters' }));

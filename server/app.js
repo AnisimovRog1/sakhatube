@@ -278,6 +278,9 @@ export function createMemoryStore(seed = defaultSeed) {
       state.media.unshift(record);
       return clone(record);
     },
+    listMediaForContent(contentId) {
+      return state.media.filter((item) => item.contentId === contentId).map(clone);
+    },
     getMedia(id) { const item = findMedia(id); return item && clone(item); },
     updateMedia(id, patch) {
       const item = findMedia(id);
@@ -383,6 +386,9 @@ const playbackInput = z.object({
   positionMs: z.number().int().min(0).max(86_400_000).optional(),
   errorCode: z.string().trim().max(80).optional()
 });
+const playbackSessionInput = z.object({
+  contentId: z.string().min(1).max(80)
+}).strict();
 const uploadInitInput = z.object({
   fileName: z.string().trim().min(1).max(180),
   contentType: z.string().trim().toLowerCase().max(100),
@@ -631,7 +637,12 @@ export function buildApp(options = {}) {
   };
   let store = options.store ?? null;
   const mediaStore = options.mediaStore ?? createMediaStore(config.media);
-  const app = Fastify({ logger: options.logger ?? false, requestIdHeader: 'x-request-id', genReqId: () => randomUUID() });
+  // Playback gateway URLs carry a short-lived signed token. Fastify's default
+  // 100-character route parameter limit would reject a valid token before the
+  // gateway can verify it.
+  // Playback JWTs are opaque and longer than Fastify's small routing default.
+  // Keep a finite cap, but allow a signed session to travel in the path.
+  const app = Fastify({ logger: options.logger ?? false, requestIdHeader: 'x-request-id', genReqId: () => randomUUID(), routerOptions: { maxParamLength: 4096 } });
 
   app.register(helmet, {
     contentSecurityPolicy: {
@@ -733,6 +744,41 @@ export function buildApp(options = {}) {
     'completeMultipartUpload',
     'abortMultipartUpload'
   ].every((method) => typeof mediaStore[method] === 'function');
+
+  // A rendition is deliberately recognised only through this explicit worker
+  // contract. Uploaded source assets, a generic video file, or a guessed S3
+  // key can never become playable merely by changing a content record.
+  const readyHlsRenditionFor = async (contentId) => {
+    const assets = await store.listMediaForContent?.(contentId) ?? [];
+    return assets.find((asset) => {
+      const hls = asset.metadata?.playback?.hls;
+      return asset.relation === 'rendition'
+        && asset.status === 'ready'
+        && asset.kind === 'hls'
+        && asset.contentType === 'application/vnd.apple.mpegurl'
+        && hls?.state === 'ready'
+        && typeof hls.manifestKey === 'string'
+        && typeof hls.prefix === 'string'
+        && hls.manifestKey.startsWith(hls.prefix)
+        && hls.manifestKey.endsWith('.m3u8')
+        && hls.prefix.startsWith('renditions/');
+    }) ?? null;
+  };
+
+  const safeHlsPath = (value) => typeof value === 'string'
+    && value.length > 0
+    && value.length <= 1_024
+    && !value.startsWith('/')
+    && !value.includes('\\')
+    && value.split('/').every((part) => part && part !== '.' && part !== '..');
+
+  const hlsManifestIsGatewaySafe = (body) => {
+    const text = body.toString('utf8');
+    if (!text.startsWith('#EXTM3U')) return false;
+    // Absolute or root-relative media URIs would bypass this entitlement
+    // gateway. The transcode worker must emit only relative HLS references.
+    return !/(?:https?:\/\/|URI=["']\/|^\/)/mi.test(text);
+  };
 
   const buildUploadPartPage = async (asset, from = 1, limit = multipartPartPageSize) => {
     const first = Math.min(from, asset.partCount + 1);
@@ -1188,6 +1234,92 @@ export function buildApp(options = {}) {
     return reply.code(202).send({ accepted: true });
   });
 
+  // This is the only viewer-facing entry point for video. It does not return
+  // object-storage keys, presigned bucket URLs, or a made-up playback URL.
+  // The returned path is an API gateway that checks the short-lived session on
+  // every manifest/segment request.
+  app.post('/v1/playback/sessions', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const body = parseOrReply(playbackSessionInput, request.body, reply);
+    if (!body) return;
+    await promoteDueScheduledContent(request);
+    const content = await store.getContent(body.contentId);
+    if (!content || !isPubliclyAvailable(content, now(), publicationGate)) {
+      return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент недоступен' });
+    }
+    if (content.access !== 'free') {
+      return reply.code(403).send({
+        error: 'ENTITLEMENT_REQUIRED',
+        message: 'Для этого контента требуется подтверждённое право просмотра. Покупки и подписки ещё не подключены.',
+        access: content.access
+      });
+    }
+    if (!mediaStore || typeof mediaStore.get !== 'function') {
+      return reply.code(503).send({ error: 'PLAYBACK_UNAVAILABLE', message: 'Видеохранилище ещё не подключено' });
+    }
+    const rendition = await readyHlsRenditionFor(content.id);
+    if (!rendition) {
+      return reply.code(409).send({ error: 'PLAYBACK_NOT_READY', message: 'Обработанная версия HLS для просмотра ещё не готова' });
+    }
+    const sessionId = randomUUID();
+    const token = app.jwt.sign({ kind: 'playback', cid: content.id, rid: rendition.id, sid: sessionId }, { expiresIn: 300 });
+    await audit(request, 'playback.session.grant', 'content', content.id, null, { access: 'free', renditionId: rendition.id, sessionId });
+    return reply.code(201).send({
+      sessionId,
+      expiresIn: 300,
+      manifestUrl: `/v1/playback/${token}/master.m3u8`
+    });
+  });
+
+  app.get('/v1/playback/:token/*', { config: { rateLimit: { max: 600, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const params = request.params;
+    let session;
+    try {
+      session = app.jwt.verify(params.token);
+    } catch {
+      return reply.code(401).send({ error: 'PLAYBACK_SESSION_INVALID', message: 'Сессия просмотра недействительна или истекла' });
+    }
+    const requestedPath = params['*'];
+    if (session?.kind !== 'playback' || !session.cid || !session.rid || !safeHlsPath(requestedPath)) {
+      return reply.code(401).send({ error: 'PLAYBACK_SESSION_INVALID', message: 'Сессия просмотра недействительна' });
+    }
+    const content = await store.getContent(session.cid);
+    if (!content || !isPubliclyAvailable(content, now(), publicationGate) || content.access !== 'free') {
+      return reply.code(403).send({ error: 'PLAYBACK_ACCESS_REVOKED', message: 'Доступ к просмотру больше недоступен' });
+    }
+    const rendition = await readyHlsRenditionFor(content.id);
+    if (!rendition || rendition.id !== session.rid) {
+      return reply.code(403).send({ error: 'PLAYBACK_ACCESS_REVOKED', message: 'Версия для просмотра больше недоступна' });
+    }
+    const hls = rendition.metadata.playback.hls;
+    if (hls.manifestKey !== `${hls.prefix}master.m3u8`) {
+      request.log.error({ renditionId: rendition.id }, 'Invalid HLS rendition contract');
+      return reply.code(502).send({ error: 'PLAYBACK_RENDITION_INVALID', message: 'Версия видео требует повторной обработки' });
+    }
+    const storageKey = requestedPath === 'master.m3u8' ? hls.manifestKey : `${hls.prefix}${requestedPath}`;
+    try {
+      const object = await mediaStore.get(storageKey);
+      if (requestedPath.endsWith('.m3u8')) {
+        const chunks = [];
+        for await (const chunk of object.Body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        const manifest = Buffer.concat(chunks);
+        if (!hlsManifestIsGatewaySafe(manifest)) {
+          request.log.error({ renditionId: rendition.id }, 'Unsafe HLS manifest rejected');
+          return reply.code(502).send({ error: 'PLAYBACK_RENDITION_INVALID', message: 'Версия видео требует повторной обработки' });
+        }
+        reply.header('content-type', 'application/vnd.apple.mpegurl');
+        reply.header('cache-control', 'no-store');
+        return reply.send(manifest);
+      }
+      reply.header('content-type', object.ContentType || 'application/octet-stream');
+      reply.header('cache-control', 'private, no-store');
+      reply.header('accept-ranges', 'bytes');
+      return reply.send(object.Body);
+    } catch (error) {
+      request.log.error(error);
+      return reply.code(404).send({ error: 'NOT_FOUND' });
+    }
+  });
+
   // The browser uploads directly to private object storage. The API never
   // proxies a multi-gigabyte source file through Railway or exposes it via a
   // public media route.
@@ -1363,7 +1495,9 @@ export function buildApp(options = {}) {
     if (!item) return reply.code(404).send({ error: 'NOT_FOUND' });
     // Raw source files are private upload inputs, never viewer media. A later
     // entitlement-aware playback path will expose processed renditions only.
-    if (item.relation === 'source' || item.storageKey.startsWith('incoming/')) {
+    // Viewer HLS files are always fetched through /v1/playback with a scoped
+    // session. This route is intentionally limited to public images.
+    if (item.kind !== 'banner' || item.relation === 'source' || item.storageKey.startsWith('incoming/')) {
       return reply.code(404).send({ error: 'NOT_FOUND' });
     }
     try {

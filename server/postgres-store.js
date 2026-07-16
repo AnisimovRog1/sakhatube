@@ -595,6 +595,13 @@ export async function createPostgresStore(connectionString, seedData) {
       );
       return mapMedia(rows[0]);
     },
+    async listMediaForContent(contentId) {
+      const { rows } = await pool.query(
+        'SELECT * FROM media_assets WHERE content_id = $1 ORDER BY created_at DESC',
+        [contentId]
+      );
+      return rows.map(mapMedia);
+    },
     async getMedia(id) {
       const { rows } = await pool.query('SELECT * FROM media_assets WHERE id = $1', [id]);
       return mapMedia(rows[0]);
