@@ -432,6 +432,7 @@ function playbackData(show) {
   if (show.contentId) attributes.push(`data-content-id="${escapeHTML(show.contentId)}"`);
   if (show.mp4) attributes.push(`data-mp4="${escapeHTML(show.mp4)}"`);
   if (show.hls) attributes.push(`data-hls="${escapeHTML(show.hls)}"`);
+  if (show.posterUrl) attributes.push(`data-poster="${escapeHTML(show.posterUrl)}"`);
   if (show.playerMeta) attributes.push(`data-player-meta="${escapeHTML(show.playerMeta)}"`);
   return attributes.length ? ` ${attributes.join(' ')}` : '';
 }
@@ -592,9 +593,20 @@ function openPlayer(title, source = {}) {
   const playbackUrl = source.mp4 || source.hls;
   playerMeta.textContent = source.playerMeta || 'ОБРАБОТКА ВИДЕО';
   if (playbackUrl) {
+    // Mobile browsers permit immediate playback only when it starts muted.
+    // Keep the real poster above the video until the first playing event so
+    // the viewer never sees an empty black rectangle while media starts.
+    const posterUrl = safeMediaUrl(source.poster);
+    playerPoster.style.backgroundImage = posterUrl
+      ? `linear-gradient(180deg,rgba(4,6,10,.12),rgba(4,6,10,.68)),url("${encodeURI(posterUrl).replaceAll('"', '%22')}")`
+      : '';
+    playerPoster.hidden = false;
+    playerEmptyCopy.textContent = 'Подготавливаем видео…';
+    playerVideo.muted = true;
+    document.querySelector('#player-mute').textContent = '⌁';
+    document.querySelector('#player-mute').setAttribute('aria-label', 'Включить звук');
     playerVideo.src = playbackUrl;
     playerVideo.hidden = false;
-    playerPoster.hidden = true;
     document.querySelector('#player-controls').hidden = false;
     openDialog(player);
     playerTrackingStop = attachPlaybackTracking(playerVideo, source.contentId);
@@ -612,6 +624,7 @@ function openPlayerFrom(element) {
   openPlayer(title, {
     hls: element.dataset.hls,
     mp4: element.dataset.mp4,
+    poster: element.dataset.poster,
     playerMeta: element.dataset.playerMeta,
     contentId: element.dataset.contentId
   });
@@ -828,6 +841,7 @@ document.querySelector('#player-fullscreen').addEventListener('click', () => {
   else stage.requestFullscreen?.();
 });
 playerVideo.addEventListener('play', () => { document.querySelector('#player-toggle').textContent = '❚❚'; document.querySelector('#player-toggle').setAttribute('aria-label', 'Пауза'); });
+playerVideo.addEventListener('playing', () => { playerPoster.hidden = true; });
 playerVideo.addEventListener('pause', () => { document.querySelector('#player-toggle').textContent = '▶'; document.querySelector('#player-toggle').setAttribute('aria-label', 'Продолжить'); });
 playerVideo.addEventListener('timeupdate', () => {
   const duration = playerVideo.duration || 0;

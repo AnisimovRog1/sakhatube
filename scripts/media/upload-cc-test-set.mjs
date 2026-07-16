@@ -35,6 +35,7 @@ await Promise.all(files.map(async (file) => {
     Key: `demo-media/cc-test-set/${path}`,
     Body: createReadStream(file),
     ContentType: mimeTypes[extension] || 'application/octet-stream',
+    // Catalog and attribution can change independently of video assets; never cache them as immutable.
     CacheControl: extension === '.json' ? 'no-cache' : 'public, max-age=31536000, immutable',
     Metadata: { demo: 'true', contentid: 'cc-test-set' }
   }));
