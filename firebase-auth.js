@@ -23,6 +23,8 @@
     if (code === 'auth/weak-password') return 'Выберите более надёжный пароль.';
     if (code === 'auth/invalid-email') return 'Введите корректный e-mail.';
     if (code === 'auth/too-many-requests') return 'Слишком много попыток. Попробуйте немного позже.';
+    if (code === 'auth/operation-not-allowed') return 'Вход через Apple ещё не подключён.';
+    if (code === 'auth/account-exists-with-different-credential') return 'Для этого e-mail уже выбран другой способ входа.';
     return 'Не удалось выполнить вход. Попробуйте ещё раз.';
   };
 
@@ -75,6 +77,24 @@
         const result = await current.auth.signInWithEmailAndPassword(current.instance, email, password);
         return identity(result.user, true);
       } catch (error) {
+        throw new Error(providerError(error));
+      }
+    },
+    async loginWithApple() {
+      const current = await load();
+      if (!current) throw new Error('Firebase не настроен.');
+      const provider = new current.auth.OAuthProvider('apple.com');
+      provider.setCustomParameters({ locale: 'ru' });
+      try {
+        const result = await current.auth.signInWithPopup(current.instance, provider);
+        return identity(result.user, true);
+      } catch (error) {
+        // Mobile Safari can reject a popup. Firebase restores the credential
+        // after the redirect; app.js then exchanges it on page start.
+        if (String(error?.code || '') === 'auth/popup-blocked') {
+          await current.auth.signInWithRedirect(current.instance, provider);
+          return null;
+        }
         throw new Error(providerError(error));
       }
     },

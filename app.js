@@ -749,6 +749,7 @@ function setAccountMode(mode) {
   document.querySelector('#account-submit').textContent = register ? 'Создать аккаунт' : 'Войти';
   document.querySelector('#account-password').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
   document.querySelector('#account-recovery').hidden = register || !firebaseEnabled;
+  document.querySelector('#account-social').hidden = register || !firebaseEnabled;
   document.querySelector('#account-hint').textContent = firebaseEnabled
     ? (register ? 'Укажите имя, логин, e-mail и пароль. Подтвердите e-mail, затем войдите — ID появится после входа.' : 'Введите e-mail и пароль.')
     : register
@@ -879,6 +880,38 @@ async function requestPasswordRecovery() {
     error.hidden = false;
   } finally {
     recovery.disabled = false;
+  }
+}
+
+async function signInWithApple() {
+  const firebaseAuth = window.SakhaTubeFirebaseAuth;
+  const error = document.querySelector('#account-error');
+  const button = document.querySelector('#apple-sign-in');
+  if (!firebaseAuth?.enabled) return;
+  error.hidden = true;
+  error.textContent = '';
+  button.disabled = true;
+  try {
+    const identity = await firebaseAuth.loginWithApple();
+    if (!identity) return;
+    const exchange = await fetch('/v1/auth/firebase/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idToken: identity.idToken, displayName: identity.displayName })
+    });
+    const payload = await exchange.json().catch(() => ({}));
+    if (!exchange.ok) throw new Error(payload.message || 'Не удалось войти через Apple.');
+    saveViewerAuth(payload);
+    profile = { ...profile, name: payload.viewer.displayName || profile.name };
+    saveProfile();
+    renderProfile();
+    closeDialog(accountDialog);
+    showToast(`Вы вошли. ${viewerDisplayId(payload.viewer.id)}`);
+  } catch (requestError) {
+    error.textContent = requestError.message || 'Не удалось войти через Apple.';
+    error.hidden = false;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -1459,6 +1492,7 @@ settingsForm.addEventListener('submit', (event) => {
 });
 accountForm.addEventListener('submit', submitAccount);
 document.querySelector('#account-recovery').addEventListener('click', requestPasswordRecovery);
+document.querySelector('#apple-sign-in').addEventListener('click', signInWithApple);
 commentForm.addEventListener('submit', submitComment);
 accountDialog.querySelectorAll('[data-account-mode]').forEach((button) => {
   button.addEventListener('click', () => setAccountMode(button.dataset.accountMode));

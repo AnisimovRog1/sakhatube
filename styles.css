@@ -320,6 +320,13 @@ em { color: #dce9ff; font-style: normal; }
 .account-error { padding: 10px 12px; border: 1px solid rgba(255,125,125,.28); border-radius: 10px; background: rgba(159,46,46,.16); color: #ffbebd; }
 .account-recovery { display: block; width: max-content; margin: 10px 20px -4px auto; padding: 0; border: 0; background: transparent; color: var(--blue); font: inherit; font-size: 12px; font-weight: 800; }
 .account-recovery:hover, .account-recovery:focus-visible { color: #a8c7ff; text-decoration: underline; }
+.account-social { display: grid; gap: 11px; padding: 16px 20px 0; }
+.account-social > span { display: flex; align-items: center; gap: 10px; color: #8991a0; font-size: 11px; font-weight: 800; text-align: center; }
+.account-social > span::before, .account-social > span::after { height: 1px; flex: 1; background: #2a2d35; content: ""; }
+.apple-sign-in { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 46px; width: 100%; border: 1px solid #454b58; border-radius: 11px; background: #f5f7fb; color: #111318; font: inherit; font-size: 13px; font-weight: 800; }
+.apple-sign-in svg { width: 18px; height: 18px; fill: currentColor; }
+.apple-sign-in:hover, .apple-sign-in:focus-visible { border-color: #a8c7ff; background: #fff; box-shadow: 0 0 0 3px var(--primary-soft); }
+.apple-sign-in:disabled { cursor: wait; opacity: .65; }
 .account-dialog[data-mode="register"] .account-login-field,
 .account-dialog[data-mode="login"] .account-register-field { display: none !important; }
 .account-dialog .dialog-actions { padding-top: 16px; }
