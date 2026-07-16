@@ -37,6 +37,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -55,6 +56,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,6 +68,7 @@ import com.sakhatube.android.BuildConfig
 import com.sakhatube.android.data.CatalogHome
 import com.sakhatube.android.data.CatalogItem
 import com.sakhatube.android.data.CatalogUiState
+import com.sakhatube.android.data.AuthUiState
 
 private enum class Destination(val title: String) {
     Home("Главная"),
@@ -71,7 +77,7 @@ private enum class Destination(val title: String) {
 }
 
 @Composable
-fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel()) {
+fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel(), authViewModel: AuthViewModel = viewModel()) {
     val catalogState by viewModel.state.collectAsStateWithLifecycle()
     var destination by remember { mutableStateOf(Destination.Home) }
 
@@ -106,7 +112,7 @@ fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel()) {
                 onRetry = viewModel::refresh,
                 modifier = Modifier.padding(padding)
             )
-            Destination.Profile -> ProfileScreen(modifier = Modifier.padding(padding))
+            Destination.Profile -> ProfileScreen(authViewModel, modifier = Modifier.padding(padding))
         }
     }
 }
@@ -331,8 +337,14 @@ private fun CatalogError(message: String, onRetry: () -> Unit, modifier: Modifie
 }
 
 @Composable
-private fun ProfileScreen(modifier: Modifier = Modifier) {
+private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val authState by authViewModel.state.collectAsStateWithLifecycle()
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var displayName by remember { mutableStateOf("") }
+    var verificationLink by remember { mutableStateOf("") }
+    var mode by remember { mutableStateOf(ProfileMode.SignIn) }
     val legalLinks = listOf(
         "Политика конфиденциальности" to BuildConfig.PRIVACY_POLICY_URL,
         "Пользовательское соглашение" to BuildConfig.TERMS_URL,
@@ -345,14 +357,37 @@ private fun ProfileScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Гостевой режим", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(
-                        "В этом каркасе нет фальшивой регистрации, подписки или оплаты. Они появятся только после подключения защищённого сервиса.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+            when (authState) {
+                is AuthUiState.SignedIn -> SignedInProfileCard(
+                    viewerName = authState.viewer.displayName,
+                    email = authState.viewer.email,
+                    onSignOut = authViewModel::signOut
+                )
+                else -> AuthCard(
+                    mode = mode,
+                    email = email,
+                    password = password,
+                    displayName = displayName,
+                    verificationLink = verificationLink,
+                    state = authState,
+                    onModeChange = { mode = it; authViewModel.dismissError() },
+                    onEmailChange = { email = it },
+                    onPasswordChange = { password = it },
+                    onDisplayNameChange = { displayName = it },
+                    onVerificationLinkChange = { verificationLink = it },
+                    onRegister = {
+                        authViewModel.register(email, password.toCharArray(), displayName)
+                        password = ""
+                    },
+                    onLogin = {
+                        authViewModel.login(email, password.toCharArray())
+                        password = ""
+                    },
+                    onVerify = {
+                        authViewModel.verifyEmail(verificationLink)
+                        verificationLink = ""
+                    }
+                )
             }
         }
         item { Text("Документы", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
@@ -384,4 +419,117 @@ private fun ProfileScreen(modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+private enum class ProfileMode { SignIn, Register, Verify }
+
+@Composable
+private fun SignedInProfileCard(viewerName: String, email: String, onSignOut: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text(viewerName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(email, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "Сессия действует только до закрытия приложения: токен не записывается в память устройства.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onSignOut) { Text("Выйти") }
+        }
+    }
+}
+
+@Composable
+private fun AuthCard(
+    mode: ProfileMode,
+    email: String,
+    password: String,
+    displayName: String,
+    verificationLink: String,
+    state: AuthUiState,
+    onModeChange: (ProfileMode) -> Unit,
+    onEmailChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onDisplayNameChange: (String) -> Unit,
+    onVerificationLinkChange: (String) -> Unit,
+    onRegister: () -> Unit,
+    onLogin: () -> Unit,
+    onVerify: () -> Unit
+) {
+    val pending = state is AuthUiState.Registering || state is AuthUiState.SigningIn || state is AuthUiState.VerifyingEmail
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                when (mode) {
+                    ProfileMode.SignIn -> "Войти в SakhaTube"
+                    ProfileMode.Register -> "Создать аккаунт"
+                    ProfileMode.Verify -> "Подтвердить e-mail"
+                },
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            when (mode) {
+                ProfileMode.SignIn, ProfileMode.Register -> {
+                    if (mode == ProfileMode.Register) {
+                        AppField("Имя", displayName, onDisplayNameChange, enabled = !pending)
+                    }
+                    AppField("E-mail", email, onEmailChange, enabled = !pending, keyboardType = KeyboardType.Email)
+                    AppField("Пароль", password, onPasswordChange, enabled = !pending, password = true)
+                    if (mode == ProfileMode.Register) {
+                        Text("Минимум 12 символов. Пароль не сохраняется на устройстве.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                ProfileMode.Verify -> {
+                    AppField("Полная ссылка из письма", verificationLink, onVerificationLinkChange, enabled = !pending, keyboardType = KeyboardType.Uri)
+                    Text("Открой письмо SakhaTube и вставь полную ссылку. Она одноразовая.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            when (state) {
+                is AuthUiState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
+                is AuthUiState.VerificationRequired -> Text(state.message, color = MaterialTheme.colorScheme.primary)
+                else -> Unit
+            }
+            Button(
+                onClick = when (mode) {
+                    ProfileMode.SignIn -> onLogin
+                    ProfileMode.Register -> onRegister
+                    ProfileMode.Verify -> onVerify
+                },
+                enabled = !pending && when (mode) {
+                    ProfileMode.SignIn -> email.isNotBlank() && password.isNotBlank()
+                    ProfileMode.Register -> email.isNotBlank() && password.length >= 12 && displayName.trim().length >= 2
+                    ProfileMode.Verify -> verificationLink.isNotBlank()
+                }
+            ) {
+                if (pending) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Text(when (mode) { ProfileMode.SignIn -> "Войти"; ProfileMode.Register -> "Отправить письмо"; ProfileMode.Verify -> "Подтвердить" })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (mode != ProfileMode.SignIn) Button(onClick = { onModeChange(ProfileMode.SignIn) }, enabled = !pending) { Text("Вход") }
+                if (mode != ProfileMode.Register) Button(onClick = { onModeChange(ProfileMode.Register) }, enabled = !pending) { Text("Регистрация") }
+                if (mode != ProfileMode.Verify) Button(onClick = { onModeChange(ProfileMode.Verify) }, enabled = !pending) { Text("Подтвердить") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean,
+    password: Boolean = false,
+    keyboardType: KeyboardType = KeyboardType.Text
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        singleLine = true,
+        enabled = enabled,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+        modifier = Modifier.fillMaxWidth()
+    )
 }

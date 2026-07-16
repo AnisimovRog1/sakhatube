@@ -112,3 +112,39 @@ if (emailVerification && emailVerifyButton && verificationRequestId && verificat
     }
   });
 }
+
+const accountVerification = document.querySelector('[data-account-email-verification]');
+const accountVerifyButton = document.querySelector('[data-account-email-verify]');
+const accountVerifyStatus = document.querySelector('[data-account-email-status]');
+const accountId = new URLSearchParams(window.location.search).get('account');
+const accountToken = new URLSearchParams(window.location.search).get('token');
+
+if (accountVerification && accountVerifyButton && accountVerifyStatus) {
+  if (!accountId || !accountToken) {
+    accountVerifyButton.disabled = true;
+    accountVerifyStatus.className = 'form-status error';
+    accountVerifyStatus.textContent = 'Ссылка подтверждения неполная или устарела. Создай аккаунт заново.';
+  } else {
+    accountVerifyButton.addEventListener('click', async () => {
+      accountVerifyButton.disabled = true;
+      accountVerifyStatus.className = 'form-status';
+      try {
+        const response = await fetch('/v1/auth/verify-email', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify({ accountId, token: accountToken })
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.message || 'Ссылка недействительна или уже использована.');
+        accountVerifyStatus.classList.add('success');
+        accountVerifyStatus.textContent = 'E-mail подтверждён. Теперь можно войти в приложение.';
+        accountVerifyButton.hidden = true;
+        window.history.replaceState({}, document.title, '/verify-email');
+      } catch (error) {
+        accountVerifyStatus.classList.add('error');
+        accountVerifyStatus.textContent = error.message || 'Не удалось подтвердить e-mail.';
+        accountVerifyButton.disabled = false;
+      }
+    });
+  }
+}

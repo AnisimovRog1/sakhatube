@@ -21,6 +21,8 @@
 		9297354AE6EBAA2D0A564A22 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A696357A5C6035E4007B7058 /* HomeView.swift */; };
 		D99575B70C043DC6FA19C10C /* CatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B09D3723C36CC1E5081116 /* CatalogView.swift */; };
 		E38E365B66EABFCD44EA2624 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C3F9DE6E286462ABA5C8D1B /* APIClient.swift */; };
+		A5B1C3D4E5F60718293A4B5C /* ViewerAuthSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B1C3D4E5F60718293A4B5D /* ViewerAuthSession.swift */; };
+		A5B1C3D4E5F60718293A4B5E /* ViewerAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B1C3D4E5F60718293A4B5F /* ViewerAuthView.swift */; };
 		F33352DB3E90CDDCBB13E3FA /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B89A87071A0B60629452B65 /* PlayerView.swift */; };
 /* End PBXBuildFile section */
 
@@ -42,6 +44,8 @@
 		D94672074CB926135DE7EF40 /* ForYouView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForYouView.swift; sourceTree = "<group>"; };
 		EAAB735C26D9DEF397195B95 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F436E9C7DA0B10C03240F8BF /* AppRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
+		A5B1C3D4E5F60718293A4B5D /* ViewerAuthSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewerAuthSession.swift; sourceTree = "<group>"; };
+		A5B1C3D4E5F60718293A4B5F /* ViewerAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewerAuthView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -74,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				F436E9C7DA0B10C03240F8BF /* AppRootView.swift */,
+				A5B1C3D4E5F60718293A4B5F /* ViewerAuthView.swift */,
 				A8B09D3723C36CC1E5081116 /* CatalogView.swift */,
 				D94672074CB926135DE7EF40 /* ForYouView.swift */,
 				A696357A5C6035E4007B7058 /* HomeView.swift */,
@@ -120,6 +125,7 @@
 			isa = PBXGroup;
 			children = (
 				3C3F9DE6E286462ABA5C8D1B /* APIClient.swift */,
+				A5B1C3D4E5F60718293A4B5D /* ViewerAuthSession.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -197,6 +203,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				E38E365B66EABFCD44EA2624 /* APIClient.swift in Sources */,
+				A5B1C3D4E5F60718293A4B5C /* ViewerAuthSession.swift in Sources */,
+				A5B1C3D4E5F60718293A4B5E /* ViewerAuthView.swift in Sources */,
 				4A8128949C2DE40E8F022E79 /* AppRootView.swift in Sources */,
 				7E936AAA50ED47ACDF8457B4 /* AppSession.swift in Sources */,
 				7ABD2ED81926D34A1E039177 /* AppTheme.swift in Sources */,

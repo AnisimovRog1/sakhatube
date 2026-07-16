@@ -31,7 +31,8 @@ const maxSourceVideoBytes = 50 * 1024 * 1024 * 1024;
 const multipartPartSize = 16 * 1024 * 1024;
 const multipartPartPageSize = 100;
 const scrypt = promisify(scryptCallback);
-const viewerTokenTtlSeconds = 60 * 60 * 24 * 14;
+const viewerAccessTokenTtlSeconds = 15 * 60;
+const viewerRefreshTokenTtlMsDefault = 14 * 24 * 60 * 60 * 1000;
 const emailVerificationTtlMsDefault = 24 * 60 * 60 * 1000;
 const passwordScrypt = { N: 16_384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
 // This hash is used only when a login email is absent.  Performing the same
@@ -90,6 +91,7 @@ export function createMemoryStore(seed = defaultSeed) {
     media: seed.media ?? [],
     publicRequests: seed.publicRequests ?? [],
     viewerAccounts: seed.viewerAccounts ?? [],
+    viewerSessions: seed.viewerSessions ?? [],
     content: seed.content.map((item) => ({
       scheduledAt: null,
       publishedAt: null,
@@ -116,6 +118,10 @@ export function createMemoryStore(seed = defaultSeed) {
 
   function findViewerAccountByEmail(email) {
     return state.viewerAccounts.find((item) => item.email === email);
+  }
+
+  function findViewerSessionByTokenHash(tokenHash) {
+    return state.viewerSessions.find((item) => item.refreshTokenHash === tokenHash);
   }
 
   return {
@@ -219,6 +225,37 @@ export function createMemoryStore(seed = defaultSeed) {
       if (!item) return null;
       Object.assign(item, patch, { updatedAt: now() });
       return clone(item);
+    },
+    createViewerSession(data) {
+      const record = { id: randomUUID(), revokedAt: null, revocationReason: null, rotatedAt: null, createdAt: now(), lastUsedAt: now(), ...data };
+      state.viewerSessions.unshift(record);
+      return clone(record);
+    },
+    getViewerSession(id) { const item = state.viewerSessions.find((session) => session.id === id); return item && clone(item); },
+    consumeViewerSession(tokenHash, replacement) {
+      const current = findViewerSessionByTokenHash(tokenHash);
+      if (!current) return { status: 'invalid' };
+      if (current.revokedAt || new Date(current.expiresAt).getTime() <= Date.now()) return { status: 'reused', accountId: current.accountId };
+      Object.assign(current, { revokedAt: now(), revocationReason: 'rotated', rotatedAt: now(), lastUsedAt: now() });
+      const next = { id: randomUUID(), revokedAt: null, revocationReason: null, rotatedAt: null, createdAt: now(), lastUsedAt: now(), ...replacement, accountId: current.accountId };
+      state.viewerSessions.unshift(next);
+      return { status: 'rotated', previous: clone(current), session: clone(next) };
+    },
+    revokeViewerSession(id, reason = 'logout') {
+      const item = state.viewerSessions.find((session) => session.id === id);
+      if (!item || item.revokedAt) return null;
+      Object.assign(item, { revokedAt: now(), revocationReason: reason, lastUsedAt: now() });
+      return clone(item);
+    },
+    revokeViewerSessionsForAccount(accountId, reason = 'logout_all') {
+      let count = 0;
+      for (const item of state.viewerSessions) {
+        if (item.accountId === accountId && !item.revokedAt) {
+          Object.assign(item, { revokedAt: now(), revocationReason: reason, lastUsedAt: now() });
+          count += 1;
+        }
+      }
+      return count;
     },
     createMedia(data) {
       const record = {
@@ -336,6 +373,9 @@ const viewerEmailVerificationInput = z.object({
   accountId: z.string().uuid(),
   token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный код подтверждения')
 }).strict();
+const viewerRefreshInput = z.object({
+  refreshToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный токен обновления')
+}).strict();
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
   sessionId: z.string().min(16).max(128),
@@ -386,7 +426,9 @@ function configFrom(overrides = {}) {
   const deletionVerificationSecret = overrides.deletionVerificationSecret ?? process.env.DELETION_VERIFICATION_SECRET ?? jwtSecret;
   const deletionVerificationTtlMs = overrides.deletionVerificationTtlMs ?? Number(process.env.DELETION_VERIFICATION_TTL_MS || 24 * 60 * 60 * 1000);
   const emailVerificationSecret = overrides.emailVerificationSecret ?? process.env.EMAIL_VERIFICATION_SECRET ?? jwtSecret;
+  const viewerRefreshTokenSecret = overrides.viewerRefreshTokenSecret ?? process.env.VIEWER_REFRESH_TOKEN_SECRET ?? jwtSecret;
   const emailVerificationTtlMs = overrides.emailVerificationTtlMs ?? Number(process.env.EMAIL_VERIFICATION_TTL_MS || emailVerificationTtlMsDefault);
+  const viewerRefreshTokenTtlMs = overrides.viewerRefreshTokenTtlMs ?? Number(process.env.VIEWER_REFRESH_TOKEN_TTL_MS || viewerRefreshTokenTtlMsDefault);
   const publicBaseUrl = (overrides.publicBaseUrl ?? process.env.PUBLIC_APP_URL ?? (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')).replace(/\/$/, '');
   const mailerWebhookUrl = overrides.mailerWebhookUrl ?? process.env.MAILER_WEBHOOK_URL ?? '';
   const mailerWebhookBearerToken = overrides.mailerWebhookBearerToken ?? process.env.MAILER_WEBHOOK_BEARER_TOKEN ?? '';
@@ -402,9 +444,11 @@ function configFrom(overrides = {}) {
   if (production && !databaseUrl && !allowDemoStore) throw new Error('DATABASE_URL обязателен в production: in-memory store нельзя публиковать');
   if (!Number.isInteger(deletionVerificationTtlMs) || deletionVerificationTtlMs < 60_000 || deletionVerificationTtlMs > 7 * 24 * 60 * 60 * 1000) throw new Error('DELETION_VERIFICATION_TTL_MS должен быть от 1 минуты до 7 дней');
   if (!Number.isInteger(emailVerificationTtlMs) || emailVerificationTtlMs < 60_000 || emailVerificationTtlMs > 7 * 24 * 60 * 60 * 1000) throw new Error('EMAIL_VERIFICATION_TTL_MS должен быть от 1 минуты до 7 дней');
+  if (!Number.isInteger(viewerRefreshTokenTtlMs) || viewerRefreshTokenTtlMs < 60 * 60 * 1000 || viewerRefreshTokenTtlMs > 90 * 24 * 60 * 60 * 1000) throw new Error('VIEWER_REFRESH_TOKEN_TTL_MS должен быть от 1 часа до 90 дней');
   if (production && deletionVerificationSecret.length < 32) throw new Error('DELETION_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
   if (production && emailVerificationSecret.length < 32) throw new Error('EMAIL_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer };
+  if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer };
 }
 
 function deletionTokenHash(token, secret) {
@@ -413,6 +457,17 @@ function deletionTokenHash(token, secret) {
 
 function emailVerificationTokenHash(token, secret) {
   return createHash('sha256').update(`email-verification:${secret}:${token}`).digest('hex');
+}
+
+function viewerRefreshTokenHash(token, secret) {
+  return createHash('sha256').update(`viewer-refresh:${secret}:${token}`).digest('hex');
+}
+
+function deviceNameFrom(request) {
+  const raw = request.headers['x-device-name'];
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  return value && value.length <= 80 ? value : null;
 }
 
 function safeEqualText(a, b) {
@@ -607,8 +662,12 @@ export function buildApp(options = {}) {
   app.decorate('authenticate', async (request) => request.jwtVerify());
   app.decorate('requireViewer', async (request, reply) => {
     await request.jwtVerify();
-    if (request.user?.kind !== 'viewer' || !request.user?.sub) {
+    if (request.user?.kind !== 'viewer' || !request.user?.sub || !request.user?.sid) {
       return reply.code(403).send({ error: 'VIEWER_SESSION_REQUIRED', message: 'Требуется сессия зрителя' });
+    }
+    const session = await store.getViewerSession(request.user.sid);
+    if (!session || session.accountId !== request.user.sub || session.revokedAt || new Date(session.expiresAt).getTime() <= Date.now()) {
+      return reply.code(401).send({ error: 'SESSION_REVOKED', message: 'Сессия завершена. Войди снова.' });
     }
   });
   app.decorate('allowRoles', (allowed) => async (request, reply) => {
@@ -716,12 +775,23 @@ export function buildApp(options = {}) {
     return { accessToken: app.jwt.sign({ sub: body.subject, roles: body.roles }), expiresIn: 900 };
   });
 
-  const viewerSession = (account) => ({
-    accessToken: app.jwt.sign({ sub: account.id, kind: 'viewer' }, { expiresIn: viewerTokenTtlSeconds }),
-    tokenType: 'Bearer',
-    expiresIn: viewerTokenTtlSeconds,
-    viewer: viewerAccountPublic(account)
-  });
+  const viewerSession = async (account, request) => {
+    const refreshToken = randomBytes(32).toString('base64url');
+    const session = await store.createViewerSession({
+      accountId: account.id,
+      refreshTokenHash: viewerRefreshTokenHash(refreshToken, config.viewerRefreshTokenSecret),
+      expiresAt: new Date(Date.now() + config.viewerRefreshTokenTtlMs).toISOString(),
+      deviceName: deviceNameFrom(request)
+    });
+    return {
+      accessToken: app.jwt.sign({ sub: account.id, kind: 'viewer', sid: session.id }, { expiresIn: viewerAccessTokenTtlSeconds }),
+      refreshToken,
+      tokenType: 'Bearer',
+      expiresIn: viewerAccessTokenTtlSeconds,
+      refreshExpiresIn: Math.floor(config.viewerRefreshTokenTtlMs / 1000),
+      viewer: viewerAccountPublic(account)
+    };
+  };
 
   app.post('/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
     const body = parseOrReply(viewerRegistrationInput, request.body, reply);
@@ -799,7 +869,7 @@ export function buildApp(options = {}) {
       verificationExpiresAt: null
     });
     await audit(request, 'viewer.email_verification.complete', 'viewer_account', account.id, { status: account.status }, { status: verified.status, emailVerifiedAt: verifiedAt }, { id: account.id, roles: ['viewer'] });
-    return reply.code(200).send(viewerSession(verified));
+    return reply.code(200).send(await viewerSession(verified, request));
   });
 
   app.post('/v1/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -812,7 +882,51 @@ export function buildApp(options = {}) {
     }
     const updated = await store.updateViewerAccount(account.id, { lastLoginAt: now() });
     await audit(request, 'viewer.login', 'viewer_account', account.id, null, { status: 'success' }, { id: account.id, roles: ['viewer'] });
-    return viewerSession(updated ?? account);
+    return viewerSession(updated ?? account, request);
+  });
+
+  app.post('/v1/auth/refresh', { config: { rateLimit: { max: 20, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const body = parseOrReply(viewerRefreshInput, request.body, reply);
+    if (!body) return;
+    const refreshTokenHash = viewerRefreshTokenHash(body.refreshToken, config.viewerRefreshTokenSecret);
+    const nextRefreshToken = randomBytes(32).toString('base64url');
+    const result = await store.consumeViewerSession(refreshTokenHash, {
+      refreshTokenHash: viewerRefreshTokenHash(nextRefreshToken, config.viewerRefreshTokenSecret),
+      expiresAt: new Date(Date.now() + config.viewerRefreshTokenTtlMs).toISOString(),
+      deviceName: deviceNameFrom(request)
+    });
+    if (result.status === 'reused') {
+      await store.revokeViewerSessionsForAccount(result.accountId, 'refresh_token_reuse');
+      await audit(request, 'viewer.session.refresh_reuse', 'viewer_account', result.accountId, null, { status: 'all_sessions_revoked' }, { id: result.accountId, roles: ['viewer'] });
+      return reply.code(401).send({ error: 'REFRESH_TOKEN_REUSED', message: 'Сессия завершена в целях безопасности. Войди снова.' });
+    }
+    if (result.status !== 'rotated') return reply.code(401).send({ error: 'INVALID_REFRESH_TOKEN', message: 'Сессия недействительна. Войди снова.' });
+    const account = await store.getViewerAccount(result.session.accountId);
+    if (!account || account.status !== 'active') {
+      await store.revokeViewerSession(result.session.id, 'account_inactive');
+      return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Сессия недействительна. Войди снова.' });
+    }
+    await audit(request, 'viewer.session.refresh', 'viewer_session', result.session.id, null, { status: 'rotated' }, { id: account.id, roles: ['viewer'] });
+    return {
+      accessToken: app.jwt.sign({ sub: account.id, kind: 'viewer', sid: result.session.id }, { expiresIn: viewerAccessTokenTtlSeconds }),
+      refreshToken: nextRefreshToken,
+      tokenType: 'Bearer',
+      expiresIn: viewerAccessTokenTtlSeconds,
+      refreshExpiresIn: Math.floor(config.viewerRefreshTokenTtlMs / 1000),
+      viewer: viewerAccountPublic(account)
+    };
+  });
+
+  app.post('/v1/auth/logout', { preHandler: app.requireViewer }, async (request, reply) => {
+    await store.revokeViewerSession(request.user.sid, 'logout');
+    await audit(request, 'viewer.session.logout', 'viewer_session', request.user.sid, null, { status: 'revoked' }, { id: request.user.sub, roles: ['viewer'] });
+    return reply.code(204).send();
+  });
+
+  app.post('/v1/auth/logout-all', { preHandler: app.requireViewer }, async (request, reply) => {
+    const revoked = await store.revokeViewerSessionsForAccount(request.user.sub, 'logout_all');
+    await audit(request, 'viewer.session.logout_all', 'viewer_account', request.user.sub, null, { revokedSessions: revoked }, { id: request.user.sub, roles: ['viewer'] });
+    return reply.code(204).send();
   });
 
   app.get('/v1/auth/me', { preHandler: app.requireViewer }, async (request, reply) => {
@@ -1299,7 +1413,8 @@ export function buildApp(options = {}) {
       ['/terms', 'legal/terms.html'],
       ['/community-rules', 'legal/community-rules.html'],
       ['/support', 'legal/support.html'],
-      ['/delete-account', 'legal/delete-account.html']
+      ['/delete-account', 'legal/delete-account.html'],
+      ['/verify-email', 'legal/verify-email.html']
     ]);
     for (const [route, file] of legalPages) {
       app.get(route, async (request, reply) => reply.type('text/html; charset=utf-8').sendFile(file));

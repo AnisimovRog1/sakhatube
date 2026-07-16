@@ -87,6 +87,19 @@ const mapViewerAccount = (row) => row && ({
   updatedAt: row.updated_at.toISOString()
 });
 
+const mapViewerSession = (row) => row && ({
+  id: row.id,
+  accountId: row.account_id,
+  refreshTokenHash: row.refresh_token_hash,
+  deviceName: row.device_name,
+  expiresAt: row.expires_at.toISOString(),
+  revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
+  revocationReason: row.revocation_reason,
+  rotatedAt: row.rotated_at ? row.rotated_at.toISOString() : null,
+  lastUsedAt: row.last_used_at.toISOString(),
+  createdAt: row.created_at.toISOString()
+});
+
 async function migrate(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_items (
@@ -223,6 +236,18 @@ async function migrate(pool) {
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS verification_token_hash TEXT;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMPTZ;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS viewer_sessions (
+      id UUID PRIMARY KEY,
+      account_id UUID NOT NULL REFERENCES viewer_accounts(id) ON DELETE CASCADE,
+      refresh_token_hash TEXT NOT NULL UNIQUE,
+      device_name TEXT,
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ,
+      revocation_reason TEXT,
+      rotated_at TIMESTAMPTZ,
+      last_used_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
@@ -230,6 +255,7 @@ async function migrate(pool) {
     CREATE INDEX IF NOT EXISTS media_assets_status_idx ON media_assets(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS public_requests_queue_idx ON public_requests(type, status, created_at ASC);
     CREATE INDEX IF NOT EXISTS viewer_accounts_status_idx ON viewer_accounts(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS viewer_sessions_account_idx ON viewer_sessions(account_id, revoked_at, expires_at DESC);
   `);
 }
 
@@ -466,6 +492,67 @@ export async function createPostgresStore(connectionString, seedData) {
       values.push(now(), id);
       const { rows } = await pool.query(`UPDATE viewer_accounts SET ${sets.join(', ')}, updated_at = $${values.length - 1} WHERE id = $${values.length} RETURNING *`, values);
       return mapViewerAccount(rows[0]);
+    },
+    async createViewerSession(data) {
+      const record = {
+        id: randomUUID(),
+        deviceName: null,
+        revokedAt: null,
+        revocationReason: null,
+        rotatedAt: null,
+        createdAt: now(),
+        lastUsedAt: now(),
+        ...data
+      };
+      const { rows } = await pool.query(
+        `INSERT INTO viewer_sessions (id, account_id, refresh_token_hash, device_name, expires_at, revoked_at, revocation_reason, rotated_at, last_used_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+        [record.id, record.accountId, record.refreshTokenHash, record.deviceName, record.expiresAt, record.revokedAt, record.revocationReason, record.rotatedAt, record.lastUsedAt, record.createdAt]
+      );
+      return mapViewerSession(rows[0]);
+    },
+    async getViewerSession(id) {
+      const { rows } = await pool.query('SELECT * FROM viewer_sessions WHERE id = $1', [id]);
+      return mapViewerSession(rows[0]);
+    },
+    async consumeViewerSession(tokenHash, replacement) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query('SELECT * FROM viewer_sessions WHERE refresh_token_hash = $1 FOR UPDATE', [tokenHash]);
+        const current = mapViewerSession(rows[0]);
+        if (!current) { await client.query('COMMIT'); return { status: 'invalid' }; }
+        if (current.revokedAt || new Date(current.expiresAt).getTime() <= Date.now()) { await client.query('COMMIT'); return { status: 'reused', accountId: current.accountId }; }
+        const timestamp = now();
+        await client.query('UPDATE viewer_sessions SET revoked_at = $1, revocation_reason = $2, rotated_at = $1, last_used_at = $1 WHERE id = $3', [timestamp, 'rotated', current.id]);
+        const record = { id: randomUUID(), accountId: current.accountId, deviceName: null, createdAt: timestamp, lastUsedAt: timestamp, ...replacement };
+        const inserted = await client.query(
+          `INSERT INTO viewer_sessions (id, account_id, refresh_token_hash, device_name, expires_at, last_used_at, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+          [record.id, record.accountId, record.refreshTokenHash, record.deviceName, record.expiresAt, record.lastUsedAt, record.createdAt]
+        );
+        await client.query('COMMIT');
+        return { status: 'rotated', session: mapViewerSession(inserted.rows[0]) };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async revokeViewerSession(id, reason = 'logout') {
+      const { rows } = await pool.query(
+        'UPDATE viewer_sessions SET revoked_at = $1, revocation_reason = $2, last_used_at = $1 WHERE id = $3 AND revoked_at IS NULL RETURNING *',
+        [now(), reason, id]
+      );
+      return mapViewerSession(rows[0]);
+    },
+    async revokeViewerSessionsForAccount(accountId, reason = 'logout_all') {
+      const { rowCount } = await pool.query(
+        'UPDATE viewer_sessions SET revoked_at = $1, revocation_reason = $2, last_used_at = $1 WHERE account_id = $3 AND revoked_at IS NULL',
+        [now(), reason, accountId]
+      );
+      return rowCount;
     },
     async overview() {
       const [summary, quality, top] = await Promise.all([

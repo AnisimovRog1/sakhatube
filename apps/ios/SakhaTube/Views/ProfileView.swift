@@ -3,9 +3,11 @@ import SwiftUI
 import UIKit
 
 struct ProfileView: View {
+    @EnvironmentObject private var viewerSession: ViewerSessionStore
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var avatar: UIImage?
     @State private var preferredLanguage = "Русский"
+    @State private var isShowingAccount = false
 
     var body: some View {
         NavigationStack {
@@ -37,9 +39,9 @@ struct ProfileView: View {
                             }
                         }
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("Гостевой режим")
+                            Text(viewerSession.viewer?.displayName ?? "Гостевой режим")
                                 .font(.title3.weight(.bold))
-                            Text("Аватар остаётся только в текущем сеансе и не отправляется на сервер.")
+                            Text(viewerSession.viewer?.email ?? "Аватар остаётся только в текущем сеансе и не отправляется на сервер.")
                                 .font(.subheadline)
                                 .foregroundStyle(AppTheme.secondaryText)
                         }
@@ -50,7 +52,15 @@ struct ProfileView: View {
                 .listRowBackground(AppTheme.surface)
 
                 Section("Доступ") {
-                    LabeledContent("Режим", value: "Гость")
+                    if viewerSession.viewer == nil {
+                        LabeledContent("Режим", value: "Гость")
+                        Button("Войти или создать аккаунт") { isShowingAccount = true }
+                    } else {
+                        LabeledContent("Статус", value: "Email подтверждён")
+                        Button("Выйти", role: .destructive) {
+                            Task { await viewerSession.signOutEverywhereForThisDevice() }
+                        }
+                    }
                     Text("Подписки и покупки появятся только после подключения безопасной оплаты через App Store.")
                         .font(.footnote)
                         .foregroundStyle(AppTheme.secondaryText)
@@ -94,6 +104,7 @@ struct ProfileView: View {
             .scrollContentBackground(.hidden)
             .background(AppTheme.background)
             .navigationTitle("Профиль")
+            .sheet(isPresented: $isShowingAccount) { ViewerAuthView() }
             .task(id: selectedPhoto) {
                 guard let selectedPhoto,
                       let data = try? await selectedPhoto.loadTransferable(type: Data.self),

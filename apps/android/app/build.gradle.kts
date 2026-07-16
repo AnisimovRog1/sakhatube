@@ -11,6 +11,7 @@ val catalogBaseUrl = providers.gradleProperty("SAKHATUBE_CATALOG_BASE_URL")
 val privacyPolicyUrl = providers.gradleProperty("SAKHATUBE_PRIVACY_URL").orElse("https://sakhatube-production.up.railway.app/privacy")
 val termsUrl = providers.gradleProperty("SAKHATUBE_TERMS_URL").orElse("https://sakhatube-production.up.railway.app/terms")
 val accountDeletionUrl = providers.gradleProperty("SAKHATUBE_ACCOUNT_DELETION_URL").orElse("https://sakhatube-production.up.railway.app/delete-account")
+val authBaseUrl = providers.gradleProperty("SAKHATUBE_AUTH_BASE_URL").orElse(catalogBaseUrl)
 
 android {
     namespace = "com.sakhatube.android"
@@ -28,6 +29,7 @@ android {
         buildConfigField("String", "PRIVACY_POLICY_URL", privacyPolicyUrl.get().asBuildConfigString())
         buildConfigField("String", "TERMS_URL", termsUrl.get().asBuildConfigString())
         buildConfigField("String", "ACCOUNT_DELETION_URL", accountDeletionUrl.get().asBuildConfigString())
+        buildConfigField("String", "AUTH_BASE_URL", authBaseUrl.get().asBuildConfigString())
     }
 
     buildTypes {

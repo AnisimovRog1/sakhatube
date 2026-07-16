@@ -44,6 +44,9 @@ test('health is public and content is protected', async (t) => {
   const privacy = await app.inject({ method: 'GET', url: '/privacy' });
   assert.equal(privacy.statusCode, 200);
   assert.match(privacy.body, /Политика конфиденциальности/);
+  const verifyEmail = await app.inject({ method: 'GET', url: '/verify-email' });
+  assert.equal(verifyEmail.statusCode, 200);
+  assert.match(verifyEmail.body, /Подтверди e-mail/);
 });
 
 test('viewer accounts require one-time email verification before issuing a scoped session', async (t) => {
@@ -79,6 +82,7 @@ test('viewer accounts require one-time email verification before issuing a scope
   assert.equal(session.viewer.email, 'viewer@example.com');
   assert.equal('passwordHash' in session.viewer, false);
   assert.equal(app.jwt.decode(session.accessToken).kind, 'viewer');
+  assert.equal(typeof app.jwt.decode(session.accessToken).sid, 'string');
   assert.equal(app.jwt.decode(session.accessToken).roles, undefined);
 
   const profile = await app.inject({ method: 'GET', url: '/v1/auth/me', headers: { authorization: `Bearer ${session.accessToken}` } });
@@ -94,6 +98,50 @@ test('viewer accounts require one-time email verification before issuing a scope
   const login = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'VIEWER@example.com', password: 'correct-horse-battery-staple' } });
   assert.equal(login.statusCode, 200);
   assert.equal(JSON.parse(login.body).viewer.email, 'viewer@example.com');
+});
+
+test('viewer refresh tokens rotate once and logout revokes the linked access session', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({ store });
+  t.after(() => app.close());
+  const registration = await app.inject({
+    method: 'POST', url: '/v1/auth/register', headers: { 'x-device-name': 'iPhone test' },
+    payload: { email: 'sessions@example.com', password: 'correct-horse-battery-staple', displayName: 'Сессии' }
+  });
+  const pending = JSON.parse(registration.body);
+  const verified = await app.inject({ method: 'POST', url: '/v1/auth/verify-email', payload: { accountId: pending.developmentVerification.accountId, token: pending.developmentVerification.token } });
+  assert.equal(verified.statusCode, 200);
+  const initial = JSON.parse(verified.body);
+  assert.equal(initial.expiresIn, 900);
+  assert.equal(initial.refreshExpiresIn, 14 * 24 * 60 * 60);
+  assert.match(initial.refreshToken, /^[A-Za-z0-9_-]{43}$/);
+
+  const refreshed = await app.inject({
+    method: 'POST', url: '/v1/auth/refresh', headers: { 'x-device-name': 'iPhone test' }, payload: { refreshToken: initial.refreshToken }
+  });
+  assert.equal(refreshed.statusCode, 200);
+  const next = JSON.parse(refreshed.body);
+  assert.notEqual(next.refreshToken, initial.refreshToken);
+  assert.equal(app.jwt.decode(next.accessToken).kind, 'viewer');
+
+  const oldAccess = await app.inject({ method: 'GET', url: '/v1/auth/me', headers: { authorization: `Bearer ${initial.accessToken}` } });
+  assert.equal(oldAccess.statusCode, 401);
+  const currentAccess = await app.inject({ method: 'GET', url: '/v1/auth/me', headers: { authorization: `Bearer ${next.accessToken}` } });
+  assert.equal(currentAccess.statusCode, 200);
+
+  const replay = await app.inject({ method: 'POST', url: '/v1/auth/refresh', payload: { refreshToken: initial.refreshToken } });
+  assert.equal(replay.statusCode, 401);
+  const invalidated = await app.inject({ method: 'GET', url: '/v1/auth/me', headers: { authorization: `Bearer ${next.accessToken}` } });
+  assert.equal(invalidated.statusCode, 401);
+
+  const login = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'sessions@example.com', password: 'correct-horse-battery-staple' } });
+  const relogin = JSON.parse(login.body);
+  const logout = await app.inject({ method: 'POST', url: '/v1/auth/logout', headers: { authorization: `Bearer ${relogin.accessToken}` } });
+  assert.equal(logout.statusCode, 204);
+  const afterLogout = await app.inject({ method: 'GET', url: '/v1/auth/me', headers: { authorization: `Bearer ${relogin.accessToken}` } });
+  assert.equal(afterLogout.statusCode, 401);
+  assert.equal(JSON.stringify(store.listAudit()).includes(initial.refreshToken), false);
+  assert.equal(JSON.stringify(store.listAudit()).includes('refreshTokenHash'), false);
 });
 
 test('production never leaks email verification tokens and uses a generic registration response', async (t) => {
