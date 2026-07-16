@@ -34,6 +34,7 @@ const scrypt = promisify(scryptCallback);
 const viewerAccessTokenTtlSeconds = 15 * 60;
 const viewerRefreshTokenTtlMsDefault = 14 * 24 * 60 * 60 * 1000;
 const emailVerificationTtlMsDefault = 24 * 60 * 60 * 1000;
+const billingContractVersion = '2026-07-16';
 const passwordScrypt = { N: 16_384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
 // This hash is used only when a login email is absent.  Performing the same
 // scrypt operation for both paths keeps the login endpoint from becoming an
@@ -425,9 +426,19 @@ function configFrom(overrides = {}) {
   const jwtSecret = overrides.jwtSecret ?? process.env.JWT_SECRET ?? 'local-development-secret-change-before-production';
   const allowedOrigins = overrides.allowedOrigins ?? (process.env.ALLOWED_ORIGINS || 'http://localhost:4173,http://localhost:3000').split(',').map((item) => item.trim()).filter(Boolean);
   const allowDemoStore = overrides.allowDemoStore ?? process.env.ALLOW_DEMO_STORE === 'true';
-  // A visual paywall is not a payment implementation. Keep commercial access
-  // unavailable in production until both stores and the server validator exist.
-  const paymentsEnabled = overrides.paymentsEnabled ?? process.env.PAYMENTS_ENABLED === 'true';
+  // A visual paywall is not a payment implementation. No environment variable
+  // can grant a commercial entitlement: this server has no StoreKit / Google
+  // Play receipt validator or verified store-notification handler yet.
+  const paymentsRequested = overrides.paymentsEnabled ?? process.env.PAYMENTS_ENABLED === 'true';
+  const billing = {
+    contractVersion: billingContractVersion,
+    requested: Boolean(paymentsRequested),
+    serverValidation: 'not_implemented',
+    entitlementGrants: 'blocked',
+    status: paymentsRequested ? 'blocked_not_implemented' : 'disabled',
+    canGrantEntitlements: false
+  };
+  const paymentsEnabled = !production && Boolean(paymentsRequested);
   const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
   const deletionVerificationSecret = overrides.deletionVerificationSecret ?? process.env.DELETION_VERIFICATION_SECRET ?? jwtSecret;
   const deletionVerificationTtlMs = overrides.deletionVerificationTtlMs ?? Number(process.env.DELETION_VERIFICATION_TTL_MS || 24 * 60 * 60 * 1000);
@@ -454,7 +465,7 @@ function configFrom(overrides = {}) {
   if (production && deletionVerificationSecret.length < 32) throw new Error('DELETION_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
   if (production && emailVerificationSecret.length < 32) throw new Error('EMAIL_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
   if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer };
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer };
 }
 
 function deletionTokenHash(token, secret) {
@@ -633,7 +644,7 @@ export function buildApp(options = {}) {
   const config = configFrom(options);
   const publicationGate = {
     allowDemoRights: !config.production,
-    allowPaidAccess: !config.production || config.paymentsEnabled
+    allowPaidAccess: !config.production || config.billing.canGrantEntitlements
   };
   let store = options.store ?? null;
   const mediaStore = options.mediaStore ?? createMediaStore(config.media);
@@ -811,7 +822,7 @@ export function buildApp(options = {}) {
     };
   };
 
-  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', payments: config.paymentsEnabled ? 'configured' : 'disabled', time: now() }));
+  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', payments: config.paymentsEnabled ? 'development-only' : 'disabled', billing: { contractVersion: config.billing.contractVersion, status: config.billing.status, serverValidation: config.billing.serverValidation, entitlementGrants: config.billing.entitlementGrants }, time: now() }));
 
   // Local-only bootstrap. A production Studio must delegate identity to an OIDC provider.
   app.post('/v1/dev/token', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {

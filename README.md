@@ -29,3 +29,5 @@ npm run dev:api
 Подробный порядок работ, зависимости и критерии готовности: [SAKHATUBE_DELIVERY_ROADMAP.md](SAKHATUBE_DELIVERY_ROADMAP.md). Контрольный список перед App Store и Google Play: [SAKHATUBE_STORE_READINESS.md](SAKHATUBE_STORE_READINESS.md). Контракт для настоящей Studio и backend: [SAKHATUBE_ADMIN_BACKEND_SPEC.md](SAKHATUBE_ADMIN_BACKEND_SPEC.md). Сверенный словарь интерфейса: [SAKHATUBE_LOCALIZATION.md](SAKHATUBE_LOCALIZATION.md).
 
 Настройка защищённой загрузки исходников и CORS bucket: [SAKHATUBE_MEDIA_UPLOAD_SETUP.md](SAKHATUBE_MEDIA_UPLOAD_SETUP.md).
+
+Контракт будущих покупок и серверных прав просмотра (без ложной интеграции платежей): [SAKHATUBE_BILLING_ENTITLEMENT_CONTRACT.md](SAKHATUBE_BILLING_ENTITLEMENT_CONTRACT.md).

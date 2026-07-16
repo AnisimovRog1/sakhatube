@@ -824,3 +824,31 @@ test('production hides paid content until payment validation is configured', asy
   const health = await app.inject({ method: 'GET', url: '/health' });
   assert.equal(JSON.parse(health.body).payments, 'disabled');
 });
+
+test('production fails closed when PAYMENTS_ENABLED is requested without a store validator', async (t) => {
+  const store = createMemoryStore();
+  const verifiedCompliance = publishableCompliance({
+    verifiedAt: '2026-07-16T00:00:00.000Z',
+    verifiedBy: 'legal-reviewer-1',
+    verificationReference: 'ST-LEGAL-002'
+  });
+  store.updateContent('midnight', { compliance: verifiedCompliance, access: 'subscription' });
+  store.updateContent('signal', { compliance: verifiedCompliance, access: 'free' });
+  const app = buildApp({
+    nodeEnv: 'production',
+    allowDemoStore: true,
+    paymentsEnabled: true,
+    store,
+    jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters'
+  });
+  await app.ready();
+  t.after(() => app.close());
+
+  const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
+  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['signal']);
+  const health = await app.inject({ method: 'GET', url: '/health' });
+  const body = JSON.parse(health.body);
+  assert.equal(body.payments, 'disabled');
+  assert.equal(body.billing.status, 'blocked_not_implemented');
+  assert.equal(body.billing.entitlementGrants, 'blocked');
+});

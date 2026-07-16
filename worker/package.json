@@ -1,0 +1,7 @@
+{
+  "name": "sakhatube-media-worker",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.mjs", "start": "node src/runner.mjs" },
+  "engines": { "node": ">=22" }
+}
