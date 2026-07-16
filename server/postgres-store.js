@@ -79,6 +79,9 @@ const mapViewerAccount = (row) => row && ({
   displayName: row.display_name,
   passwordHash: row.password_hash,
   status: row.status,
+  verificationTokenHash: row.verification_token_hash,
+  verificationExpiresAt: row.verification_expires_at ? row.verification_expires_at.toISOString() : null,
+  emailVerifiedAt: row.email_verified_at ? row.email_verified_at.toISOString() : null,
   lastLoginAt: row.last_login_at ? row.last_login_at.toISOString() : null,
   createdAt: row.created_at.toISOString(),
   updatedAt: row.updated_at.toISOString()
@@ -205,13 +208,21 @@ async function migrate(pool) {
       email TEXT NOT NULL,
       display_name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'deleted')),
+      status TEXT NOT NULL DEFAULT 'pending_verification' CHECK (status IN ('pending_verification', 'active', 'disabled', 'deleted')),
+      verification_token_hash TEXT,
+      verification_expires_at TIMESTAMPTZ,
+      email_verified_at TIMESTAMPTZ,
       last_login_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL,
       CONSTRAINT viewer_accounts_email_lowercase CHECK (email = lower(email)),
       CONSTRAINT viewer_accounts_email_unique UNIQUE (email)
     );
+    ALTER TABLE viewer_accounts DROP CONSTRAINT IF EXISTS viewer_accounts_status_check;
+    ALTER TABLE viewer_accounts ADD CONSTRAINT viewer_accounts_status_check CHECK (status IN ('pending_verification', 'active', 'disabled', 'deleted'));
+    ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS verification_token_hash TEXT;
+    ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMPTZ;
+    ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
@@ -424,9 +435,9 @@ export async function createPostgresStore(connectionString, seedData) {
         ...data
       };
       const { rows } = await pool.query(
-        `INSERT INTO viewer_accounts (id, email, display_name, password_hash, status, last_login_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-        [record.id, record.email, record.displayName, record.passwordHash, record.status, record.lastLoginAt, record.createdAt, record.updatedAt]
+        `INSERT INTO viewer_accounts (id, email, display_name, password_hash, status, verification_token_hash, verification_expires_at, email_verified_at, last_login_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        [record.id, record.email, record.displayName, record.passwordHash, record.status, record.verificationTokenHash, record.verificationExpiresAt, record.emailVerifiedAt, record.lastLoginAt, record.createdAt, record.updatedAt]
       );
       return mapViewerAccount(rows[0]);
     },
@@ -443,6 +454,9 @@ export async function createPostgresStore(connectionString, seedData) {
         displayName: 'display_name',
         passwordHash: 'password_hash',
         status: 'status',
+        verificationTokenHash: 'verification_token_hash',
+        verificationExpiresAt: 'verification_expires_at',
+        emailVerifiedAt: 'email_verified_at',
         lastLoginAt: 'last_login_at'
       };
       const entries = Object.entries(patch).filter(([key]) => fields[key]);

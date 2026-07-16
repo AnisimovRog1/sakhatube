@@ -32,6 +32,7 @@ const multipartPartSize = 16 * 1024 * 1024;
 const multipartPartPageSize = 100;
 const scrypt = promisify(scryptCallback);
 const viewerTokenTtlSeconds = 60 * 60 * 24 * 14;
+const emailVerificationTtlMsDefault = 24 * 60 * 60 * 1000;
 const passwordScrypt = { N: 16_384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
 // This hash is used only when a login email is absent.  Performing the same
 // scrypt operation for both paths keeps the login endpoint from becoming an
@@ -198,7 +199,16 @@ export function createMemoryStore(seed = defaultSeed) {
         error.code = 'VIEWER_EMAIL_EXISTS';
         throw error;
       }
-      const record = { id: randomUUID(), status: 'active', createdAt: now(), updatedAt: now(), ...data };
+      const record = {
+        id: randomUUID(),
+        status: 'pending_verification',
+        verificationTokenHash: null,
+        verificationExpiresAt: null,
+        emailVerifiedAt: null,
+        createdAt: now(),
+        updatedAt: now(),
+        ...data
+      };
       state.viewerAccounts.unshift(record);
       return clone(record);
     },
@@ -322,6 +332,10 @@ const viewerLoginInput = z.object({
   email: z.string().trim().email().max(254),
   password: z.string().min(1).max(128)
 }).strict();
+const viewerEmailVerificationInput = z.object({
+  accountId: z.string().uuid(),
+  token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный код подтверждения')
+}).strict();
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
   sessionId: z.string().min(16).max(128),
@@ -371,6 +385,8 @@ function configFrom(overrides = {}) {
   const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
   const deletionVerificationSecret = overrides.deletionVerificationSecret ?? process.env.DELETION_VERIFICATION_SECRET ?? jwtSecret;
   const deletionVerificationTtlMs = overrides.deletionVerificationTtlMs ?? Number(process.env.DELETION_VERIFICATION_TTL_MS || 24 * 60 * 60 * 1000);
+  const emailVerificationSecret = overrides.emailVerificationSecret ?? process.env.EMAIL_VERIFICATION_SECRET ?? jwtSecret;
+  const emailVerificationTtlMs = overrides.emailVerificationTtlMs ?? Number(process.env.EMAIL_VERIFICATION_TTL_MS || emailVerificationTtlMsDefault);
   const publicBaseUrl = (overrides.publicBaseUrl ?? process.env.PUBLIC_APP_URL ?? (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')).replace(/\/$/, '');
   const mailerWebhookUrl = overrides.mailerWebhookUrl ?? process.env.MAILER_WEBHOOK_URL ?? '';
   const mailerWebhookBearerToken = overrides.mailerWebhookBearerToken ?? process.env.MAILER_WEBHOOK_BEARER_TOKEN ?? '';
@@ -385,12 +401,18 @@ function configFrom(overrides = {}) {
   if (production && jwtSecret.length < 32) throw new Error('JWT_SECRET должен содержать не менее 32 символов в production');
   if (production && !databaseUrl && !allowDemoStore) throw new Error('DATABASE_URL обязателен в production: in-memory store нельзя публиковать');
   if (!Number.isInteger(deletionVerificationTtlMs) || deletionVerificationTtlMs < 60_000 || deletionVerificationTtlMs > 7 * 24 * 60 * 60 * 1000) throw new Error('DELETION_VERIFICATION_TTL_MS должен быть от 1 минуты до 7 дней');
+  if (!Number.isInteger(emailVerificationTtlMs) || emailVerificationTtlMs < 60_000 || emailVerificationTtlMs > 7 * 24 * 60 * 60 * 1000) throw new Error('EMAIL_VERIFICATION_TTL_MS должен быть от 1 минуты до 7 дней');
   if (production && deletionVerificationSecret.length < 32) throw new Error('DELETION_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer };
+  if (production && emailVerificationSecret.length < 32) throw new Error('EMAIL_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer };
 }
 
 function deletionTokenHash(token, secret) {
   return createHash('sha256').update(`${secret}:${token}`).digest('hex');
+}
+
+function emailVerificationTokenHash(token, secret) {
+  return createHash('sha256').update(`email-verification:${secret}:${token}`).digest('hex');
 }
 
 function safeEqualText(a, b) {
@@ -456,6 +478,31 @@ async function sendDeletionVerification(config, item, token) {
     requestId: item.id,
     verificationUrl,
     expiresAt: item.verificationExpiresAt
+  };
+  if (config.mailer) return config.mailer(message);
+  if (!config.mailerWebhookUrl) throw new Error('MAILER_NOT_CONFIGURED');
+  const response = await fetch(config.mailerWebhookUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(config.mailerWebhookBearerToken ? { authorization: `Bearer ${config.mailerWebhookBearerToken}` } : {})
+    },
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(8_000)
+  });
+  if (!response.ok) throw new Error(`MAILER_REJECTED_${response.status}`);
+}
+
+async function sendEmailVerification(config, account, token) {
+  const verificationUrl = `${config.publicBaseUrl}/verify-email?account=${encodeURIComponent(account.id)}&token=${encodeURIComponent(token)}`;
+  const message = {
+    type: 'sakhatube.email_verification',
+    to: account.email,
+    subject: 'Подтверди e-mail SakhaTube',
+    text: `Подтверди e-mail для SakhaTube: ${verificationUrl}\nСсылка действует до ${account.verificationExpiresAt}. Если это не ты — просто проигнорируй письмо.`,
+    accountId: account.id,
+    verificationUrl,
+    expiresAt: account.verificationExpiresAt
   };
   if (config.mailer) return config.mailer(message);
   if (!config.mailerWebhookUrl) throw new Error('MAILER_NOT_CONFIGURED');
@@ -681,23 +728,78 @@ export function buildApp(options = {}) {
     if (!body) return;
     const email = body.email.toLowerCase();
     const existing = await store.getViewerAccountByEmail(email);
-    if (existing) return reply.code(409).send({ error: 'ACCOUNT_EXISTS', message: 'Этот адрес уже зарегистрирован. Войди в аккаунт.' });
-    const account = {
-      email,
-      displayName: body.displayName?.trim() || email.split('@')[0],
-      passwordHash: await hashPassword(body.password),
-      lastLoginAt: now()
-    };
+    // Always derive a password hash, including for an existing address, to make
+    // this endpoint less useful as an account-enumeration timing oracle.
+    const passwordHash = await hashPassword(body.password);
+    const genericResponse = () => reply.code(202).send({
+      status: 'verification_required',
+      message: 'Если этот адрес можно использовать, мы отправили письмо для подтверждения.'
+    });
+    if (config.production && (!config.publicBaseUrl || (!config.mailer && !config.mailerWebhookUrl))) {
+      return reply.code(503).send({ error: 'EMAIL_VERIFICATION_UNAVAILABLE', message: 'Подтверждение e-mail временно недоступно. Попробуй позже.' });
+    }
+    if (existing?.status === 'active' || existing?.status === 'disabled' || existing?.status === 'deleted') return genericResponse();
+
+    const token = randomBytes(32).toString('base64url');
+    const verificationExpiresAt = new Date(Date.now() + config.emailVerificationTtlMs).toISOString();
+    let account;
     try {
-      const created = await store.createViewerAccount(account);
-      await audit(request, 'viewer.register', 'viewer_account', created.id, null, { status: created.status }, { id: created.id, roles: ['viewer'] });
-      return reply.code(201).send(viewerSession(created));
+      if (existing?.status === 'pending_verification') {
+        // A resend is allowed only with the original password; the public
+        // response remains identical whether the address exists or not.
+        const passwordValid = await verifyPassword(body.password, existing.passwordHash);
+        if (!passwordValid) return genericResponse();
+        account = await store.updateViewerAccount(existing.id, {
+          verificationTokenHash: emailVerificationTokenHash(token, config.emailVerificationSecret),
+          verificationExpiresAt,
+          emailVerifiedAt: null
+        });
+      } else {
+        account = await store.createViewerAccount({
+          email,
+          displayName: body.displayName?.trim() || email.split('@')[0],
+          passwordHash,
+          lastLoginAt: null,
+          status: 'pending_verification',
+          verificationTokenHash: emailVerificationTokenHash(token, config.emailVerificationSecret),
+          verificationExpiresAt,
+          emailVerifiedAt: null
+        });
+      }
+      // Local preview intentionally has no mail provider. It exposes the
+      // one-time code only behind the development-only flag; production always
+      // sends through the configured mailer/webhook.
+      if (config.production || config.mailer || config.mailerWebhookUrl) await sendEmailVerification(config, account, token);
+      await audit(request, existing ? 'viewer.email_verification.resent' : 'viewer.register', 'viewer_account', account.id, null, { status: account.status, verificationExpiresAt }, { id: account.id, roles: ['viewer'] });
+      const response = { status: 'verification_required', message: 'Если этот адрес можно использовать, мы отправили письмо для подтверждения.' };
+      if (!config.production && config.allowDevTokens) response.developmentVerification = { accountId: account.id, token, verifyPath: '/v1/auth/verify-email', expiresAt: verificationExpiresAt };
+      return reply.code(202).send(response);
     } catch (error) {
       if (error.code === 'VIEWER_EMAIL_EXISTS' || error.code === '23505') {
-        return reply.code(409).send({ error: 'ACCOUNT_EXISTS', message: 'Этот адрес уже зарегистрирован. Войди в аккаунт.' });
+        return genericResponse();
       }
-      throw error;
+      request.log.error({ err: error, email }, 'Viewer email verification delivery failed');
+      return reply.code(503).send({ error: 'EMAIL_VERIFICATION_UNAVAILABLE', message: 'Не удалось отправить письмо подтверждения. Попробуй позже.' });
     }
+  });
+
+  app.post('/v1/auth/verify-email', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const body = parseOrReply(viewerEmailVerificationInput, request.body, reply);
+    if (!body) return;
+    const account = await store.getViewerAccount(body.accountId);
+    const invalid = !account || account.status !== 'pending_verification' || !account.verificationTokenHash || !account.verificationExpiresAt
+      || new Date(account.verificationExpiresAt).getTime() < Date.now()
+      || !safeEqualText(account.verificationTokenHash, emailVerificationTokenHash(body.token, config.emailVerificationSecret));
+    if (invalid) return reply.code(400).send({ error: 'INVALID_VERIFICATION', message: 'Ссылка недействительна или уже использована.' });
+    const verifiedAt = now();
+    const verified = await store.updateViewerAccount(account.id, {
+      status: 'active',
+      emailVerifiedAt: verifiedAt,
+      verificationTokenHash: null,
+      verificationExpiresAt: null
+    });
+    await audit(request, 'viewer.email_verification.complete', 'viewer_account', account.id, { status: account.status }, { status: verified.status, emailVerifiedAt: verifiedAt }, { id: account.id, roles: ['viewer'] });
+    return reply.code(200).send(viewerSession(verified));
   });
 
   app.post('/v1/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
