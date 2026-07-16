@@ -45,6 +45,11 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: gradle
+      # `compileSdk = 36` is intentional. Hosted runners do not guarantee that
+      # this newest platform is pre-installed, so install the exact SDK pieces
+      # before compiling rather than silently building against an older API.
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       # This is a debug-only integrity check. Release builds intentionally need
       # the owner-provided Firebase config and signing key, which CI never reads.
       - run: ./gradlew --no-daemon :app:assembleDebug
