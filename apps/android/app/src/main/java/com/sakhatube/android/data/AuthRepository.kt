@@ -1,6 +1,7 @@
 package com.sakhatube.android.data
 
 import com.sakhatube.android.BuildConfig
+import android.content.Context
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
@@ -13,8 +14,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class AuthRepository(
+    context: Context,
     private val baseUrl: String = BuildConfig.AUTH_BASE_URL,
-    private val sessionStore: ViewerSessionStore = InMemoryViewerSessionStore()
+    private val sessionStore: ViewerSessionStore = EncryptedViewerSessionStore(context)
 ) {
     suspend fun register(email: String, username: String, password: CharArray, displayName: String?): String = withContext(Dispatchers.IO) {
         val result = Tasks.await(FirebaseAuth.getInstance().createUserWithEmailAndPassword(email.trim(), password.concatToString()))
@@ -39,8 +41,19 @@ class AuthRepository(
 
     suspend fun restoreCurrentViewer(): ViewerAccount? = withContext(Dispatchers.IO) {
         val session = sessionStore.current() ?: return@withContext null
-        val response = request("/v1/auth/me", "GET", null, bearerToken = session.accessToken)
-        response.optJSONObject("viewer")?.toViewer()
+        try {
+            val response = request("/v1/auth/me", "GET", null, bearerToken = session.accessToken)
+            response.optJSONObject("viewer")?.toViewer() ?: run {
+                sessionStore.clear()
+                null
+            }
+        } catch (_: IOException) {
+            // A rejected/expired token must not remain on disk. Network failures
+            // also return the user to a safe signed-out state rather than keeping
+            // a potentially stale bearer token around.
+            sessionStore.clear()
+            null
+        }
     }
 
     /**

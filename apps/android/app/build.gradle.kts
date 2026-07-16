@@ -86,6 +86,10 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
+    // Access tokens are held in an Android Keystore-backed encrypted preferences
+    // file. The file is excluded from backup and device transfer by the manifest
+    // rules, so a restored device cannot receive another device's session.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Firebase Auth verifies the e-mail/password credential. SakhaTube still
     // owns the viewer profile, public ST-ID and its own API session.

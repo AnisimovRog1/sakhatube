@@ -612,6 +612,38 @@ test('deletion requests require a one-time verification before staff can complet
   assert.equal(JSON.parse(completed.body).item.status, 'completed');
 });
 
+test('verified account deletion revokes every session and anonymizes comments and playback data', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({ store });
+  t.after(() => app.close());
+  const session = await verifiedViewer(app, { email: 'erase@example.com', displayName: 'Удаляемый зритель' });
+  const accountId = app.jwt.decode(session.accessToken).sub;
+  const extraSession = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'erase@example.com', password: 'correct-horse-battery-staple' } });
+  assert.equal(extraSession.statusCode, 200);
+  const comment = await app.inject({
+    method: 'POST', url: '/v1/content/signal/comments', headers: { authorization: `Bearer ${session.accessToken}` }, payload: { text: 'Этот текст должен исчезнуть.' }
+  });
+  assert.equal(comment.statusCode, 201);
+  await app.inject({ method: 'POST', url: '/v1/events/playback', payload: { contentId: 'signal', sessionId: 'delete-test-session', event: 'first_frame', viewerId: accountId } });
+  const request = await app.inject({ method: 'POST', url: '/v1/privacy/deletion-requests', payload: { email: 'erase@example.com', confirmation: true } });
+  const requestBody = JSON.parse(request.body);
+  const verified = await app.inject({ method: 'POST', url: `/v1/privacy/deletion-requests/${requestBody.requestId}/verify`, payload: { token: requestBody.developmentVerification.token } });
+  assert.equal(verified.statusCode, 200);
+  assert.deepEqual(JSON.parse(verified.body), { requestId: requestBody.requestId, status: 'completed', verified: true, deleted: true });
+  const account = store.getViewerAccount(accountId);
+  assert.equal(account.status, 'deleted');
+  assert.match(account.email, /^deleted\+/);
+  assert.equal(account.firebaseUid, null);
+  assert.equal(store.getComment(JSON.parse(comment.body).item.id).text, '');
+  assert.equal(store.getComment(JSON.parse(comment.body).item.id).authorName, 'Удалённый пользователь');
+  assert.equal(store.getComment(JSON.parse(comment.body).item.id).status, 'deleted');
+  const login = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'erase@example.com', password: 'correct-horse-battery-staple' } });
+  assert.equal(login.statusCode, 401);
+  const refresh = await app.inject({ method: 'POST', url: '/v1/auth/refresh', payload: { refreshToken: session.refreshToken } });
+  assert.equal(refresh.statusCode, 401);
+  assert.equal(store.listAudit().some((entry) => entry.action === 'privacy.deletion_request.complete' && entry.entityId === accountId), true);
+});
+
 test('production deletion responses never disclose a verification token', async (t) => {
   const store = createMemoryStore();
   const deliveries = [];

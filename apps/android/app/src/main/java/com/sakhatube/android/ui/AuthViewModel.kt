@@ -1,6 +1,7 @@
 package com.sakhatube.android.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sakhatube.android.data.AuthRepository
 import com.sakhatube.android.data.AuthUiState
@@ -10,13 +11,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class AuthViewModel(
-    private val repository: AuthRepository = AuthRepository()
-) : ViewModel() {
+class AuthViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = AuthRepository(application.applicationContext)
     private val _state = MutableStateFlow<AuthUiState>(AuthUiState.Guest)
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
     private val _deletionState = MutableStateFlow<DeletionUiState>(DeletionUiState.Idle)
     val deletionState: StateFlow<DeletionUiState> = _deletionState.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            repository.restoreCurrentViewer()?.let { viewer ->
+                _state.value = AuthUiState.SignedIn(viewer)
+            }
+        }
+    }
 
     fun register(email: String, username: String, password: CharArray, displayName: String) = runAuth(
         inProgress = AuthUiState.Registering,

@@ -703,6 +703,43 @@ export async function createPostgresStore(connectionString, seedData) {
       const { rows } = await pool.query(`UPDATE viewer_accounts SET ${sets.join(', ')}, updated_at = $${values.length - 1} WHERE id = $${values.length} RETURNING *`, values);
       return mapViewerAccount(rows[0]);
     },
+    async deleteViewerAccountData(id) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: accountRows } = await client.query('SELECT * FROM viewer_accounts WHERE id = $1 FOR UPDATE', [id]);
+        const account = mapViewerAccount(accountRows[0]);
+        if (!account) { await client.query('COMMIT'); return null; }
+        const deletedAt = now();
+        const deletedAlias = id.replace(/-/g, '').slice(0, 20);
+        const revoked = await client.query(
+          "UPDATE viewer_sessions SET revoked_at = $1, revocation_reason = 'account_deleted', last_used_at = $1 WHERE account_id = $2 AND revoked_at IS NULL",
+          [deletedAt, id]
+        );
+        const removedReports = await client.query('DELETE FROM comment_reports WHERE reporter_id = $1', [id]);
+        const removedComments = await client.query(
+          "UPDATE comments SET author_id = 'deleted-account', author_name = 'Удалённый пользователь', body = '', status = 'deleted', moderation_note = 'Удалено вместе с аккаунтом', updated_at = $1 WHERE author_id = $2",
+          [deletedAt, id]
+        );
+        await client.query('UPDATE playback_events SET viewer_id = NULL WHERE viewer_id = $1', [id]);
+        const { rows } = await client.query(
+          `UPDATE viewer_accounts
+             SET public_id = $1, firebase_uid = NULL, email = $2, username = $3,
+                 display_name = 'Удалённый пользователь', password_hash = 'deleted', status = 'deleted',
+                 verification_token_hash = NULL, verification_expires_at = NULL, email_verified_at = NULL,
+                 last_login_at = NULL, updated_at = $4
+           WHERE id = $5 RETURNING *`,
+          [`DELETED-${deletedAlias}`, `deleted+${deletedAlias}@deleted.invalid`, `deleted-${deletedAlias}`, deletedAt, id]
+        );
+        await client.query('COMMIT');
+        return { account: mapViewerAccount(rows[0]), deletedAt, revokedSessions: revoked.rowCount, deletedComments: removedComments.rowCount, removedReports: removedReports.rowCount };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
     async createViewerSession(data) {
       const record = {
         id: randomUUID(),

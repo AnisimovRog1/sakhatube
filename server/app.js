@@ -318,6 +318,40 @@ export function createMemoryStore(seed = defaultSeed) {
       Object.assign(item, patch, { updatedAt: now() });
       return clone(item);
     },
+    deleteViewerAccountData(id) {
+      const account = findViewerAccountById(id);
+      if (!account) return null;
+      const deletedAt = now();
+      const deletedAlias = id.replace(/-/g, '').slice(0, 20);
+      let revokedSessions = 0;
+      for (const session of state.viewerSessions) {
+        if (session.accountId === id && !session.revokedAt) {
+          Object.assign(session, { revokedAt: deletedAt, revocationReason: 'account_deleted', lastUsedAt: deletedAt });
+          revokedSessions += 1;
+        }
+      }
+      let deletedComments = 0;
+      for (const comment of state.comments) {
+        if (comment.authorId !== id) continue;
+        Object.assign(comment, {
+          authorId: 'deleted-account', authorName: 'Удалённый пользователь', text: '',
+          status: 'deleted', moderationNote: 'Удалено вместе с аккаунтом', updatedAt: deletedAt
+        });
+        deletedComments += 1;
+      }
+      state.commentReports = state.commentReports.filter((report) => report.reporterId !== id);
+      for (const event of state.playback) if (event.viewerId === id) event.viewerId = null;
+      Object.assign(account, {
+        publicId: `DELETED-${deletedAlias}`,
+        firebaseUid: null,
+        email: `deleted+${deletedAlias}@deleted.invalid`,
+        username: `deleted-${deletedAlias}`,
+        displayName: 'Удалённый пользователь',
+        passwordHash: 'deleted', status: 'deleted', verificationTokenHash: null,
+        verificationExpiresAt: null, emailVerifiedAt: null, lastLoginAt: null, updatedAt: deletedAt
+      });
+      return { account: clone(account), deletedAt, revokedSessions, deletedComments };
+    },
     createViewerSession(data) {
       const record = { id: randomUUID(), revokedAt: null, revocationReason: null, rotatedAt: null, createdAt: now(), lastUsedAt: now(), ...data };
       state.viewerSessions.unshift(record);
@@ -1624,13 +1658,30 @@ export function buildApp(options = {}) {
       || !safeEqualText(item.verificationTokenHash, deletionTokenHash(body.token, config.deletionVerificationSecret));
     if (invalid) return reply.code(400).send({ error: 'VERIFICATION_INVALID', message: 'Ссылка подтверждения недействительна или истекла. Создай новый запрос на удаление.' });
     const verifiedAt = now();
+    // The link is delivered only to `email`; never let a separately supplied
+    // accountEmail select another person's account. This prevents a verified
+    // requester from deleting an account whose mailbox they do not control.
+    const verifiedEmail = item.email.toLowerCase();
+    const account = await store.getViewerAccountByEmail(verifiedEmail);
+    if (!account || account.status === 'deleted') {
+      const updated = await store.updatePublicRequest(params.id, {
+        status: 'completed', verifiedAt, verificationTokenHash: null,
+        resolutionNote: 'Аккаунт для указанного e-mail не найден: персональные данные в SakhaTube отсутствуют.', resolvedAt: verifiedAt
+      });
+      await audit(request, 'privacy.deletion_request.complete_no_account', 'public_request', updated.id, { type: item.type, status: item.status }, { type: updated.type, status: updated.status, verifiedAt });
+      return { requestId: updated.id, status: updated.status, verified: true, deleted: true };
+    }
+    const deletion = await store.deleteViewerAccountData(account.id);
     const updated = await store.updatePublicRequest(params.id, {
-      status: 'received',
+      status: 'completed',
       verifiedAt,
-      verificationTokenHash: null
+      verificationTokenHash: null,
+      resolutionNote: 'Аккаунт, активные сессии и связанные пользовательские данные удалены или обезличены.',
+      resolvedAt: deletion.deletedAt
     });
+    await audit(request, 'privacy.deletion_request.complete', 'viewer_account', account.id, { status: account.status }, { status: 'deleted', revokedSessions: deletion.revokedSessions, deletedComments: deletion.deletedComments }, { id: account.id, roles: ['viewer'] });
     await audit(request, 'privacy.deletion_request.verify', 'public_request', updated.id, { type: item.type, status: item.status }, { type: updated.type, status: updated.status, verifiedAt });
-    return { requestId: updated.id, status: updated.status, verified: true };
+    return { requestId: updated.id, status: updated.status, verified: true, deleted: true };
   });
 
   app.post('/v1/support/requests', { config: { rateLimit: { max: 8, timeWindow: '1 hour' } } }, async (request, reply) => {
@@ -1660,6 +1711,9 @@ export function buildApp(options = {}) {
     if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Обращение не найдено' });
     if (before.type === 'deletion' && body.status === 'completed' && !before.verifiedAt) {
       return reply.code(409).send({ error: 'DELETION_NOT_VERIFIED', message: 'Нельзя завершить удаление: владелец ещё не подтвердил запрос.' });
+    }
+    if (before.type === 'deletion' && body.status === 'completed' && before.status !== 'completed') {
+      return reply.code(409).send({ error: 'DELETION_MUST_BE_VERIFIED_BY_LINK', message: 'Удаление выполняется автоматически после подтверждения ссылки владельцем.' });
     }
     const item = await store.updatePublicRequest(params.id, {
       status: body.status,
