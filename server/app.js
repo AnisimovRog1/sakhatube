@@ -51,7 +51,6 @@ const publicFiles = new Map([
   ['/', 'index.html'],
   ['/index.html', 'index.html'],
   ['/styles.css', 'styles.css'],
-  ['/runtime-config.js', 'runtime-config.js'],
   ['/firebase-auth.js', 'firebase-auth.js'],
   ['/app.js', 'app.js'],
   ['/admin.html', 'admin.html'],
@@ -612,6 +611,9 @@ function configFrom(overrides = {}) {
   const mediaWorkerEnabled = overrides.mediaWorkerEnabled ?? process.env.MEDIA_WORKER_ENABLED === 'true';
   const firebaseProjectId = overrides.firebaseProjectId ?? process.env.FIREBASE_PROJECT_ID ?? '';
   const firebaseServiceAccountJson = overrides.firebaseServiceAccountJson ?? process.env.FIREBASE_SERVICE_ACCOUNT_JSON ?? '';
+  const firebaseWebApiKey = overrides.firebaseWebApiKey ?? process.env.FIREBASE_WEB_API_KEY ?? '';
+  const firebaseAuthDomain = overrides.firebaseAuthDomain ?? process.env.FIREBASE_AUTH_DOMAIN ?? '';
+  const firebaseWebAppId = overrides.firebaseWebAppId ?? process.env.FIREBASE_WEB_APP_ID ?? '';
   const firebaseVerifier = overrides.firebaseVerifier ?? null;
   const media = overrides.media ?? {
     endpoint: process.env.S3_ENDPOINT,
@@ -630,7 +632,7 @@ function configFrom(overrides = {}) {
   if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
   if (production && mediaWorkerEnabled && mediaWorkerToken.length < 32) throw new Error('MEDIA_WORKER_TOKEN должен содержать не менее 32 символов в production');
   if ((firebaseProjectId && !firebaseServiceAccountJson) || (!firebaseProjectId && firebaseServiceAccountJson)) throw new Error('Для Firebase укажи и FIREBASE_PROJECT_ID, и FIREBASE_SERVICE_ACCOUNT_JSON');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseVerifier };
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseWebApiKey, firebaseAuthDomain, firebaseWebAppId, firebaseVerifier };
 }
 
 function firebaseVerifierFrom(config) {
@@ -885,7 +887,7 @@ export function buildApp(options = {}) {
       directives: {
         defaultSrc: ["'self'"],
         baseUri: ["'self'"],
-        connectSrc: ["'self'"],
+        connectSrc: ["'self'", 'https://identitytoolkit.googleapis.com', 'https://securetoken.googleapis.com', 'https://firebaseinstallations.googleapis.com', 'https://www.googleapis.com'],
         fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
         formAction: ["'self'"],
         frameAncestors: ["'none'"],
@@ -895,7 +897,7 @@ export function buildApp(options = {}) {
         // will move to an entitlement-controlled CDN allow-list.
         mediaSrc: ["'self'", 'https://sakhatube-production.up.railway.app'],
         objectSrc: ["'none'"],
-        scriptSrc: ["'self'"],
+        scriptSrc: ["'self'", 'https://www.gstatic.com'],
         styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com']
       }
     },
@@ -2168,6 +2170,31 @@ export function buildApp(options = {}) {
 
   if (options.serveStatic !== false) {
     app.register(fastifyStatic, { root: projectRoot, serve: false });
+    app.get('/runtime-config.js', async (request, reply) => {
+      const firebaseEnabled = Boolean(
+        config.firebaseProjectId
+        && config.firebaseWebApiKey
+        && config.firebaseAuthDomain
+        && config.firebaseWebAppId
+      );
+      const runtimeConfig = firebaseEnabled
+        ? {
+          auth: { provider: 'firebase' },
+          firebase: {
+            enabled: true,
+            config: {
+              apiKey: config.firebaseWebApiKey,
+              authDomain: config.firebaseAuthDomain,
+              projectId: config.firebaseProjectId,
+              appId: config.firebaseWebAppId
+            }
+          }
+        }
+        : { auth: { provider: 'server' }, firebase: { enabled: false, config: null } };
+      const payload = JSON.stringify(runtimeConfig).replace(/</g, '\\u003c');
+      reply.header('cache-control', 'no-store');
+      return reply.type('application/javascript; charset=utf-8').send(`window.__SAKHATUBE_RUNTIME_CONFIG__ = Object.freeze(${payload});\n`);
+    });
     const legalPages = new Map([
       ['/privacy', 'legal/privacy.html'],
       ['/terms', 'legal/terms.html'],
