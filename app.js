@@ -741,6 +741,7 @@ function setAccountMode(mode) {
   document.querySelector('#account-title').textContent = register ? 'Создать аккаунт' : 'Войти';
   document.querySelector('#account-submit').textContent = register ? 'Создать аккаунт' : 'Войти';
   document.querySelector('#account-password').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
+  document.querySelector('#account-recovery').hidden = register || !firebaseEnabled;
   document.querySelector('#account-hint').textContent = firebaseEnabled
     ? (register ? 'Придумайте логин, укажите e-mail и пароль. Сначала подтвердите e-mail — ID появится после входа.' : 'Введите e-mail и пароль Firebase.')
     : register
@@ -844,6 +845,33 @@ async function submitAccount(event) {
   } finally {
     submit.disabled = false;
     submit.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
+  }
+}
+
+async function requestPasswordRecovery() {
+  const firebaseAuth = window.SakhaTubeFirebaseAuth;
+  const login = document.querySelector('#account-login').value.trim();
+  const error = document.querySelector('#account-error');
+  if (!firebaseAuth?.enabled) return;
+  if (!login) {
+    error.textContent = 'Укажите e-mail — отправим ссылку для восстановления.';
+    error.hidden = false;
+    document.querySelector('#account-login').focus();
+    return;
+  }
+  const recovery = document.querySelector('#account-recovery');
+  recovery.disabled = true;
+  try {
+    await firebaseAuth.sendPasswordReset(login);
+    // Use one message for existing and non-existing accounts so the recovery
+    // control cannot be used to discover registered e-mail addresses.
+    error.textContent = 'Если этот e-mail зарегистрирован, ссылка для восстановления уже отправлена.';
+    error.hidden = false;
+  } catch (requestError) {
+    error.textContent = requestError.message || 'Не удалось отправить письмо. Попробуйте ещё раз.';
+    error.hidden = false;
+  } finally {
+    recovery.disabled = false;
   }
 }
 
@@ -1418,6 +1446,7 @@ settingsForm.addEventListener('submit', (event) => {
   showToast(t('toast.settings'));
 });
 accountForm.addEventListener('submit', submitAccount);
+document.querySelector('#account-recovery').addEventListener('click', requestPasswordRecovery);
 commentForm.addEventListener('submit', submitComment);
 accountDialog.querySelectorAll('[data-account-mode]').forEach((button) => {
   button.addEventListener('click', () => setAccountMode(button.dataset.accountMode));

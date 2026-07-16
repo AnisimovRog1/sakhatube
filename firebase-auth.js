@@ -18,7 +18,7 @@
 
   const providerError = (error) => {
     const code = String(error?.code || '');
-    if (code === 'auth/email-already-in-use') return 'Этот логин уже занят.';
+    if (code === 'auth/email-already-in-use') return 'Этот e-mail уже зарегистрирован.';
     if (code === 'auth/invalid-credential' || code === 'auth/user-not-found' || code === 'auth/wrong-password') return 'Неверный логин или пароль.';
     if (code === 'auth/weak-password') return 'Выберите более надёжный пароль.';
     if (code === 'auth/invalid-email') return 'Введите корректный e-mail.';
@@ -76,6 +76,18 @@
         return identity(result.user, true);
       } catch (error) {
         throw new Error(providerError(error));
+      }
+    },
+    async sendPasswordReset(email) {
+      const current = await load();
+      if (!current) throw new Error('Firebase не настроен.');
+      try {
+        await current.auth.sendPasswordResetEmail(current.instance, email.trim());
+      } catch (error) {
+        // Do not reveal whether an address exists: this avoids account
+        // enumeration and matches Firebase's recommended recovery flow.
+        if (String(error?.code || '') === 'auth/invalid-email') throw new Error('Введите корректный e-mail.');
+        if (String(error?.code || '') === 'auth/too-many-requests') throw new Error('Слишком много попыток. Попробуйте немного позже.');
       }
     },
     async restore() {

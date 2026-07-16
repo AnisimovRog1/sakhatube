@@ -317,6 +317,8 @@ em { color: #dce9ff; font-style: normal; }
 .account-hint, .account-error { margin: 14px 20px 0; font-size: 12px; line-height: 1.45; }
 .account-hint { color: var(--muted); }
 .account-error { padding: 10px 12px; border: 1px solid rgba(255,125,125,.28); border-radius: 10px; background: rgba(159,46,46,.16); color: #ffbebd; }
+.account-recovery { display: block; width: max-content; margin: 10px 20px -4px auto; padding: 0; border: 0; background: transparent; color: var(--blue); font: inherit; font-size: 12px; font-weight: 800; }
+.account-recovery:hover, .account-recovery:focus-visible { color: #a8c7ff; text-decoration: underline; }
 .account-dialog .dialog-actions { padding-top: 16px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 18px 20px 20px; }
 .toast { position: fixed; z-index: 30; right: 18px; bottom: 22px; max-width: min(360px, calc(100vw - 36px)); padding: 12px 15px; border: 1px solid #3a4657; border-radius: 11px; background: #1e2b3d; color: #eaf2ff; font-size: 13px; font-weight: 700; opacity: 0; pointer-events: none; transform: translateY(8px); transition: opacity .2s ease, transform .2s ease; }
