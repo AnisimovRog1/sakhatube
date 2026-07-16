@@ -14,6 +14,7 @@ protocol ViewerAuthServing: Sendable {
 
 protocol ViewerDeletionRequesting: Sendable {
     func startDeletionRequest(email: String, accountEmail: String, message: String?) async throws -> DeletionRequestResponse
+    func deleteViewerAccount(accessToken: String) async throws
 }
 
 extension APIClient: ViewerAuthServing {}
@@ -133,19 +134,15 @@ final class ViewerSessionStore: ObservableObject {
         try? await api.logoutViewer(accessToken: token)
     }
 
-    /// This deliberately creates only a request. It never signs the viewer out
-    /// and never claims that data has been erased: the e-mail confirmation and
-    /// subsequent privacy workflow are authoritative.
-    func startDeletionRequest(confirmingEmail: String, message: String?) async throws -> DeletionRequestResponse {
-        guard let viewer else { throw ViewerDeletionError.signedOut }
-        let expected = viewer.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard confirmingEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-            .caseInsensitiveCompare(expected) == .orderedSame else {
-            throw ViewerDeletionError.emailMismatch
-        }
+    /// The profile has already required a typed DELETE confirmation. On success
+    /// the server deletes the Firebase identity first, then local data and all
+    /// sessions. Only then may this device discard its local credentials.
+    func deleteAccount() async throws {
+        guard let accessToken, viewer != nil else { throw ViewerDeletionError.signedOut }
         isWorking = true
         defer { isWorking = false }
-        return try await api.startDeletionRequest(email: expected, accountEmail: expected, message: message)
+        try await api.deleteViewerAccount(accessToken: accessToken)
+        signOut()
     }
 
     private func accept(_ session: ViewerSessionResponse) {
@@ -208,12 +205,10 @@ private extension String {
 
 enum ViewerDeletionError: LocalizedError {
     case signedOut
-    case emailMismatch
 
     var errorDescription: String? {
         switch self {
         case .signedOut: return "Сначала войди в аккаунт."
-        case .emailMismatch: return "Укажи e-mail текущего аккаунта для подтверждения."
         }
     }
 }

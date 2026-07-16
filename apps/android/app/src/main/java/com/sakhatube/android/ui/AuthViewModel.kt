@@ -41,16 +41,15 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissError() { _state.value = AuthUiState.Guest }
     fun signOut() { repository.signOut(); _state.value = AuthUiState.Guest }
 
-    fun startDeletion(email: String, accountEmail: String, message: String) {
-        if (!email.trim().equals(accountEmail.trim(), ignoreCase = true)) {
-            _deletionState.value = DeletionUiState.Error("Укажи e-mail текущего аккаунта для подтверждения.")
-            return
-        }
+    fun deleteAccount() {
         viewModelScope.launch {
             _deletionState.value = DeletionUiState.Sending
-            runCatching { repository.startDeletionRequest(email, accountEmail, message) }
-                .onSuccess { _deletionState.value = DeletionUiState.Requested(it) }
-                .onFailure { _deletionState.value = DeletionUiState.Error(it.message ?: "Не удалось отправить запрос.") }
+            runCatching { repository.deleteAccount() }
+                .onSuccess {
+                    _deletionState.value = DeletionUiState.Requested("Аккаунт удалён.")
+                    _state.value = AuthUiState.Guest
+                }
+                .onFailure { _deletionState.value = DeletionUiState.Error(it.message ?: "Не удалось удалить аккаунт.") }
         }
     }
 

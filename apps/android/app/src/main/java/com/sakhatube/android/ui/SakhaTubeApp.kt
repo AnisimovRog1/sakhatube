@@ -755,13 +755,12 @@ private fun ProfileScreen(
     }
     if (isShowingDeletion && authState is AuthUiState.SignedIn) {
         DeletionRequestDialog(
-            accountEmail = authState.viewer.email,
             state = deletionState,
             onDismiss = {
                 authViewModel.clearDeletionState()
                 isShowingDeletion = false
             },
-            onSubmit = { email, message -> authViewModel.startDeletion(email, authState.viewer.email, message) }
+            onSubmit = authViewModel::deleteAccount
         )
     }
 }
@@ -834,40 +833,28 @@ private fun SignedInProfileCard(
 
 @Composable
 private fun DeletionRequestDialog(
-    accountEmail: String,
     state: DeletionUiState,
     onDismiss: () -> Unit,
-    onSubmit: (email: String, message: String) -> Unit
+    onSubmit: () -> Unit
 ) {
-    var email by remember(accountEmail) { mutableStateOf(accountEmail) }
-    var message by remember { mutableStateOf("") }
-    var confirmed by remember { mutableStateOf(false) }
+    var confirmation by remember { mutableStateOf("") }
     val sending = state is DeletionUiState.Sending
-    val emailMatches = email.trim().equals(accountEmail.trim(), ignoreCase = true)
+    val isConfirmed = confirmation.trim() == "DELETE"
 
     AlertDialog(
         onDismissRequest = { if (!sending) onDismiss() },
         title = { Text("Удаление аккаунта") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Это только запрос. Мы отправим одноразовую ссылку на e-mail, и удаление начнётся только после подтверждения по почте.")
-                AppField("E-mail аккаунта", email, { email = it }, enabled = !sending, keyboardType = KeyboardType.Email)
-                if (!emailMatches) {
-                    Text("Укажи e-mail текущего аккаунта.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
+                Text("Это действие необратимо. Аккаунт, активные сессии и связанные комментарии будут удалены или обезличены сразу после подтверждения.")
                 OutlinedTextField(
-                    value = message,
-                    onValueChange = { message = it },
-                    label = { Text("Комментарий для поддержки (необязательно)") },
+                    value = confirmation,
+                    onValueChange = { confirmation = it },
+                    label = { Text("Напиши DELETE для подтверждения") },
                     enabled = !sending,
                     modifier = Modifier.fillMaxWidth(),
-                    minLines = 2,
-                    maxLines = 4
+                    singleLine = true
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.Checkbox(checked = confirmed, onCheckedChange = { confirmed = it }, enabled = !sending)
-                    Text("Я понимаю: нужно подтвердить письмо")
-                }
                 when (state) {
                     is DeletionUiState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
                     is DeletionUiState.Requested -> Text(state.message, color = MaterialTheme.colorScheme.primary)
@@ -879,9 +866,9 @@ private fun DeletionRequestDialog(
             if (state is DeletionUiState.Requested) {
                 TextButton(onClick = onDismiss) { Text("Готово") }
             } else {
-                Button(onClick = { onSubmit(email, message) }, enabled = confirmed && emailMatches && !sending) {
+                Button(onClick = onSubmit, enabled = isConfirmed && !sending) {
                     if (sending) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    else Text("Отправить письмо")
+                    else Text("Удалить навсегда")
                 }
             }
         },

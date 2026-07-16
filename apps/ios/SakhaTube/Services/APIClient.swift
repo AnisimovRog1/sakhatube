@@ -156,6 +156,19 @@ actor APIClient {
         )
     }
 
+    /// Deletes the authenticated account after an explicit confirmation in the
+    /// profile UI. The server removes the Firebase identity before local data,
+    /// then revokes every SakhaTube session.
+    func deleteViewerAccount(accessToken: String) async throws {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/account/delete")
+        try await requestNoContent(
+            url,
+            method: "POST",
+            body: DirectAccountDeletionRequest(confirmation: "DELETE"),
+            bearerToken: accessToken
+        )
+    }
+
     // MARK: - Viewer comments
 
     func comments(contentId: String, limit: Int = 50) async throws -> CommentListResponse {
@@ -326,6 +339,10 @@ private struct DeletionRequestPayload: Encodable, Sendable {
     let accountEmail: String
     let message: String?
     let confirmation: Bool
+}
+
+private struct DirectAccountDeletionRequest: Encodable, Sendable {
+    let confirmation: String
 }
 
 struct DeletionRequestResponse: Decodable, Sendable {

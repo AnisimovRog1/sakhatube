@@ -106,7 +106,7 @@ struct ProfileView: View {
                             Label("Удалить аккаунт", systemImage: "person.crop.circle.badge.minus")
                         }
                     }
-                    Text("Запрос не удаляет данные сразу: мы отправим одноразовую ссылку на e-mail аккаунта. Удаление начнётся только после подтверждения по почте.")
+                    Text("Удаление доступно прямо в приложении после явного подтверждения. Оно необратимо: сессии, профиль и комментарии будут удалены или обезличены.")
                         .font(.footnote)
                         .foregroundStyle(AppTheme.secondaryText)
                 }
@@ -145,9 +145,7 @@ private struct DeletionRequestView: View {
     @Environment(\.dismiss) private var dismiss
     let viewer: ViewerDTO
 
-    @State private var email = ""
-    @State private var note = ""
-    @State private var confirmed = false
+    @State private var confirmation = ""
     @State private var successMessage: String?
     @State private var errorMessage: String?
 
@@ -155,27 +153,23 @@ private struct DeletionRequestView: View {
         NavigationStack {
             Form {
                 Section("Перед отправкой") {
-                    Text("Это только запрос. Аккаунт и данные не будут удалены в этом окне.")
-                    TextField("E-mail аккаунта", text: $email)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.emailAddress)
+                    Text("Это действие необратимо. Аккаунт, активные сессии и связанные комментарии будут удалены или обезличены сразу после подтверждения.")
+                    TextField("Напиши DELETE для подтверждения", text: $confirmation)
+                        .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
-                    Text("Укажи e-mail: \(viewer.email)")
+                    Text("Удаляется аккаунт: \(viewer.email)")
                         .font(.footnote)
                         .foregroundStyle(AppTheme.secondaryText)
-                    TextField("Комментарий для поддержки (необязательно)", text: $note, axis: .vertical)
-                        .lineLimit(3...5)
-                    Toggle("Я понимаю: подтверждение придёт на e-mail", isOn: $confirmed)
                 }
 
                 Section {
-                    Button("Отправить письмо для подтверждения", role: .destructive) {
+                    Button("Удалить аккаунт навсегда", role: .destructive) {
                         Task { await submit() }
                     }
                     .disabled(!canSubmit || viewerSession.isWorking)
 
                     if viewerSession.isWorking {
-                        HStack { ProgressView(); Text("Отправляем запрос…") }
+                        HStack { ProgressView(); Text("Удаляем аккаунт…") }
                     }
                     if let successMessage {
                         Text(successMessage).foregroundStyle(.green)
@@ -187,25 +181,19 @@ private struct DeletionRequestView: View {
             }
             .navigationTitle("Удаление аккаунта")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } } }
-            .onAppear { email = viewer.email }
         }
     }
 
     private var canSubmit: Bool {
-        confirmed && email.trimmingCharacters(in: .whitespacesAndNewlines)
-            .caseInsensitiveCompare(viewer.email) == .orderedSame
+        confirmation.trimmingCharacters(in: .whitespacesAndNewlines) == "DELETE"
     }
 
     private func submit() async {
         errorMessage = nil
         successMessage = nil
         do {
-            let response = try await viewerSession.startDeletionRequest(confirmingEmail: email, message: note)
-            guard response.verificationRequired else {
-                errorMessage = "Сервис не запросил подтверждение. Попробуй позже."
-                return
-            }
-            successMessage = "Письмо отправлено. Перейди по одноразовой ссылке из e-mail — только тогда запрос будет передан в обработку."
+            try await viewerSession.deleteAccount()
+            successMessage = "Аккаунт удалён."
         } catch {
             errorMessage = error.localizedDescription
         }

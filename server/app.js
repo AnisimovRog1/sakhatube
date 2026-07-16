@@ -583,6 +583,10 @@ const publicRequestAction = z.object({
   note: z.string().trim().max(1_000).optional()
 }).strict();
 const deletionVerificationInput = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный код подтверждения') }).strict();
+// Deliberately require a typed, irreversible confirmation. A bearer token is
+// not enough by itself because account deletion revokes every session and
+// removes the linked Firebase identity.
+const directAccountDeletionInput = z.object({ confirmation: z.literal('DELETE') }).strict();
 const viewerRegistrationInput = z.object({
   email: z.string().trim().email().max(254),
   password: z.string().min(12, 'Пароль должен содержать минимум 12 символов').max(128),
@@ -1593,6 +1597,37 @@ export function buildApp(options = {}) {
     const account = await store.getViewerAccount(request.user.sub);
     if (!account || account.status !== 'active') return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Сессия недействительна' });
     return { viewer: viewerAccountPublic(account) };
+  });
+
+  // Store policies require an account created in the app to be deletable in
+  // the app. This endpoint is intentionally separate from the public e-mail
+  // request path: the authenticated viewer confirms the destructive action in
+  // their own profile and no mail-provider dependency can trap them in an
+  // account. It is rate-limited and uses the same Firebase-first deletion
+  // order as the verified web privacy flow.
+  app.post('/v1/account/delete', { preHandler: app.requireViewer, config: { rateLimit: { max: 3, timeWindow: '1 hour' } } }, async (request, reply) => {
+    const body = parseOrReply(directAccountDeletionInput, request.body, reply);
+    if (!body) return;
+    const account = await store.getViewerAccount(request.user.sub);
+    if (!account || account.status !== 'active') {
+      return reply.code(401).send({ error: 'SESSION_REVOKED', message: 'Сессия недействительна. Войди снова.' });
+    }
+    if (account.firebaseUid) {
+      if (!deleteFirebaseUser) {
+        await audit(request, 'privacy.account_delete.firebase_unavailable', 'viewer_account', account.id, { status: account.status }, { status: account.status, reason: 'firebase_admin_unconfigured' }, { id: account.id, roles: ['viewer'] });
+        return reply.code(503).send({ error: 'FIREBASE_DELETION_UNAVAILABLE', message: 'Удаление учётной записи временно недоступно. Повтори попытку позже.' });
+      }
+      try {
+        await deleteFirebaseUser(account.firebaseUid);
+      } catch (error) {
+        await audit(request, 'privacy.account_delete.firebase_failed', 'viewer_account', account.id, { status: account.status }, { status: account.status, reason: error?.code ?? 'firebase_delete_failed' }, { id: account.id, roles: ['viewer'] });
+        request.log.error({ err: error, accountId: account.id }, 'Firebase account deletion failed');
+        return reply.code(503).send({ error: 'FIREBASE_DELETION_UNAVAILABLE', message: 'Удаление учётной записи временно недоступно. Повтори попытку позже.' });
+      }
+    }
+    const deletion = await store.deleteViewerAccountData(account.id);
+    await audit(request, 'privacy.account_delete.complete', 'viewer_account', account.id, { status: account.status }, { status: 'deleted', revokedSessions: deletion.revokedSessions, deletedComments: deletion.deletedComments }, { id: account.id, roles: ['viewer'] });
+    return reply.code(200).send({ deleted: true, deletedAt: deletion.deletedAt });
   });
 
   // Community rules acceptance is an explicit, versioned server-side record.

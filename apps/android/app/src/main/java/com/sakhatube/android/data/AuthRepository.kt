@@ -58,20 +58,16 @@ class AuthRepository(
     }
 
     /**
-     * Starts a privacy request only. The server sends a one-time e-mail link;
-     * the app must never imply that the account has already been erased.
+     * The profile UI requires the viewer to type DELETE before this call. The
+     * server deletes the Firebase identity before local data, then revokes all
+     * SakhaTube sessions. Local credentials are cleared only after success.
      */
-    suspend fun startDeletionRequest(email: String, accountEmail: String, message: String?): String = withContext(Dispatchers.IO) {
-        val response = request("/v1/privacy/deletion-requests", "POST", JSONObject().apply {
-            put("email", email.trim())
-            put("accountEmail", accountEmail.trim())
-            message?.trim()?.takeIf { it.isNotEmpty() }?.let { put("message", it) }
-            put("confirmation", true)
-        }, expectedCodes = setOf(202))
-        if (!response.optBoolean("verificationRequired", false)) {
-            throw IOException("Сервис не запросил подтверждение. Попробуй позже.")
-        }
-        "Письмо отправлено. Перейди по одноразовой ссылке из e-mail — только тогда запрос будет передан в обработку."
+    suspend fun deleteAccount(): Unit = withContext(Dispatchers.IO) {
+        val session = sessionStore.current() ?: throw IOException("Сначала войди в аккаунт.")
+        request("/v1/account/delete", "POST", JSONObject().put("confirmation", "DELETE"), bearerToken = session.accessToken)
+        sessionStore.clear()
+        FirebaseApp.initializeApp(appContext)?.let { FirebaseAuth.getInstance(it).signOut() }
+        Unit
     }
 
     fun signOut() {

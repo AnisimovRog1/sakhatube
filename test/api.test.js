@@ -704,6 +704,39 @@ test('verified account deletion revokes every session and anonymizes comments an
   assert.equal(store.listAudit().some((entry) => entry.action === 'privacy.deletion_request.complete' && entry.entityId === accountId), true);
 });
 
+test('authenticated in-app deletion requires explicit confirmation and removes the linked account', async (t) => {
+  const store = createMemoryStore();
+  const deletedFirebaseUids = [];
+  const app = await createTestApp({
+    store,
+    firebaseUserDeleter: async (uid) => { deletedFirebaseUids.push(uid); }
+  });
+  t.after(() => app.close());
+  const session = await verifiedViewer(app, { email: 'direct-delete@example.com', displayName: 'Прямое удаление' });
+  const accountId = app.jwt.decode(session.accessToken).sub;
+  await store.updateViewerAccount(accountId, { firebaseUid: 'firebase-direct-delete-42' });
+
+  const missingConfirmation = await app.inject({
+    method: 'POST', url: '/v1/account/delete', headers: { authorization: `Bearer ${session.accessToken}` }, payload: {}
+  });
+  assert.equal(missingConfirmation.statusCode, 400);
+  assert.equal(store.getViewerAccount(accountId).status, 'active');
+
+  const deleted = await app.inject({
+    method: 'POST', url: '/v1/account/delete', headers: { authorization: `Bearer ${session.accessToken}` }, payload: { confirmation: 'DELETE' }
+  });
+  assert.equal(deleted.statusCode, 200);
+  assert.deepEqual(JSON.parse(deleted.body).deleted, true);
+  assert.deepEqual(deletedFirebaseUids, ['firebase-direct-delete-42']);
+  assert.equal(store.getViewerAccount(accountId).status, 'deleted');
+  assert.equal(store.listAudit().some((entry) => entry.action === 'privacy.account_delete.complete' && entry.entityId === accountId), true);
+
+  const replay = await app.inject({
+    method: 'POST', url: '/v1/account/delete', headers: { authorization: `Bearer ${session.accessToken}` }, payload: { confirmation: 'DELETE' }
+  });
+  assert.equal(replay.statusCode, 401);
+});
+
 test('verified deletion removes the linked Firebase identity before local anonymisation', async (t) => {
   const store = createMemoryStore();
   const deletedFirebaseUids = [];
