@@ -30,6 +30,8 @@ const sourceVideoTypes = new Map([
 const maxSourceVideoBytes = 50 * 1024 * 1024 * 1024;
 const multipartPartSize = 16 * 1024 * 1024;
 const multipartPartPageSize = 100;
+const mediaJobMaxAttempts = 3;
+const mediaJobLeaseMs = 15 * 60 * 1000;
 const scrypt = promisify(scryptCallback);
 const viewerAccessTokenTtlSeconds = 15 * 60;
 const viewerRefreshTokenTtlMsDefault = 14 * 24 * 60 * 60 * 1000;
@@ -90,6 +92,7 @@ export function createMemoryStore(seed = defaultSeed) {
   const state = clone({
     ...seed,
     media: seed.media ?? [],
+    mediaJobs: seed.mediaJobs ?? [],
     publicRequests: seed.publicRequests ?? [],
     viewerAccounts: seed.viewerAccounts ?? [],
     viewerSessions: seed.viewerSessions ?? [],
@@ -108,6 +111,8 @@ export function createMemoryStore(seed = defaultSeed) {
   function findMedia(id) {
     return state.media.find((item) => item.id === id);
   }
+
+  function findMediaJob(id) { return state.mediaJobs.find((item) => item.id === id); }
 
   function findPublicRequest(id) {
     return state.publicRequests.find((item) => item.id === id);
@@ -292,6 +297,43 @@ export function createMemoryStore(seed = defaultSeed) {
       Object.assign(item, patch, { updatedAt: now() });
       return clone(item);
     },
+    createMediaJob(data) {
+      const existing = state.mediaJobs.find((item) => item.sourceAssetId === data.sourceAssetId);
+      if (existing) return clone(existing);
+      const record = {
+        id: randomUUID(), status: 'queued', attempt: 0, maxAttempts: mediaJobMaxAttempts,
+        availableAt: now(), leaseToken: null, leaseExpiresAt: null, startedAt: null,
+        completedAt: null, lastErrorCode: null, createdAt: now(), updatedAt: now(), ...data
+      };
+      state.mediaJobs.unshift(record);
+      return clone(record);
+    },
+    listMediaJobs({ sourceAssetIds } = {}) {
+      return state.mediaJobs.filter((item) => !sourceAssetIds || sourceAssetIds.includes(item.sourceAssetId)).map(clone);
+    },
+    getMediaJob(id) { const item = findMediaJob(id); return item && clone(item); },
+    claimMediaJob({ workerId, leaseToken, leaseMs = mediaJobLeaseMs, at = now() }) {
+      const timestamp = new Date(at).getTime();
+      for (const item of state.mediaJobs) {
+        if (item.status === 'running' && new Date(item.leaseExpiresAt).getTime() <= timestamp && item.attempt >= item.maxAttempts) {
+          Object.assign(item, { status: 'dead', leaseToken: null, leaseExpiresAt: null, completedAt: at, updatedAt: at });
+        }
+      }
+      const job = state.mediaJobs.find((item) => (item.status === 'queued' || item.status === 'retry_wait' || (item.status === 'running' && new Date(item.leaseExpiresAt).getTime() <= timestamp)) && new Date(item.availableAt).getTime() <= timestamp && item.attempt < item.maxAttempts);
+      if (!job) return null;
+      Object.assign(job, { status: 'running', workerId, attempt: job.attempt + 1, leaseToken, leaseExpiresAt: new Date(timestamp + leaseMs).toISOString(), startedAt: job.startedAt ?? at, updatedAt: at });
+      return clone(job);
+    },
+    settleMediaJob(id, { leaseToken, outcome, errorCode = null, retryAt = null, at = now() }) {
+      const item = findMediaJob(id);
+      if (!item) return { status: 'not_found' };
+      if (item.status === 'succeeded' && outcome === 'succeeded') return { status: 'idempotent', job: clone(item) };
+      if (item.status !== 'running' || item.leaseToken !== leaseToken || new Date(item.leaseExpiresAt).getTime() <= new Date(at).getTime()) return { status: 'lease_lost' };
+      const terminal = outcome === 'succeeded' || outcome === 'permanent_failure' || (outcome === 'retryable_failure' && item.attempt >= item.maxAttempts);
+      const status = outcome === 'succeeded' ? 'succeeded' : terminal ? 'dead' : 'retry_wait';
+      Object.assign(item, { status, leaseToken: null, leaseExpiresAt: null, completedAt: terminal ? at : null, availableAt: retryAt ?? at, lastErrorCode: errorCode, updatedAt: at });
+      return { status: 'updated', job: clone(item) };
+    },
     overview() {
       const pendingComments = state.comments.filter((item) => item.status === 'pending').length;
       const published = state.content.filter((item) => item.status === 'published').length;
@@ -417,6 +459,18 @@ const uploadPartsQuery = z.object({
   from: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(multipartPartPageSize).optional()
 }).strict();
+const workerClaimInput = z.object({ workerId: z.string().trim().min(3).max(80) }).strict();
+const workerJobParams = z.object({ id: z.string().uuid() });
+const workerJobSettleInput = z.object({
+  leaseToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  outcome: z.enum(['succeeded', 'retryable_failure', 'permanent_failure']),
+  errorCode: z.string().trim().regex(/^[A-Z0-9_]{3,80}$/).optional(),
+  retryAfterSeconds: z.number().int().min(15).max(86_400).optional(),
+  renditionAssetId: z.string().uuid().optional()
+}).strict().superRefine((value, context) => {
+  if (value.outcome === 'succeeded' && !value.renditionAssetId) context.addIssue({ code: z.ZodIssueCode.custom, path: ['renditionAssetId'], message: 'Нужен готовый HLS-asset' });
+  if (value.outcome !== 'succeeded' && value.renditionAssetId) context.addIssue({ code: z.ZodIssueCode.custom, path: ['renditionAssetId'], message: 'HLS-asset допускается только при успехе' });
+});
 
 function sourceVideoExtension(fileName, contentType) {
   if (!fileName || /[\\/\u0000]/.test(fileName) || /[\r\n]/.test(fileName)) return null;
@@ -456,6 +510,8 @@ function configFrom(overrides = {}) {
   const mailerWebhookUrl = overrides.mailerWebhookUrl ?? process.env.MAILER_WEBHOOK_URL ?? '';
   const mailerWebhookBearerToken = overrides.mailerWebhookBearerToken ?? process.env.MAILER_WEBHOOK_BEARER_TOKEN ?? '';
   const mailer = overrides.mailer ?? null;
+  const mediaWorkerToken = overrides.mediaWorkerToken ?? process.env.MEDIA_WORKER_TOKEN ?? '';
+  const mediaWorkerEnabled = overrides.mediaWorkerEnabled ?? process.env.MEDIA_WORKER_ENABLED === 'true';
   const media = overrides.media ?? {
     endpoint: process.env.S3_ENDPOINT,
     accessKeyId: process.env.S3_ACCESS_KEY_ID,
@@ -471,7 +527,8 @@ function configFrom(overrides = {}) {
   if (production && deletionVerificationSecret.length < 32) throw new Error('DELETION_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
   if (production && emailVerificationSecret.length < 32) throw new Error('EMAIL_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
   if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer };
+  if (production && mediaWorkerEnabled && mediaWorkerToken.length < 32) throw new Error('MEDIA_WORKER_TOKEN должен содержать не менее 32 символов в production');
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled };
 }
 
 function deletionTokenHash(token, secret) {
@@ -703,6 +760,14 @@ export function buildApp(options = {}) {
     if (request.user?.kind === 'viewer') return reply.code(403).send({ error: 'FORBIDDEN', message: 'Недостаточно прав для этого действия' });
     const userRoles = Array.isArray(request.user.roles) ? request.user.roles : [];
     if (!allowed.some((role) => userRoles.includes(role))) reply.code(403).send({ error: 'FORBIDDEN', message: 'Недостаточно прав для этого действия' });
+  });
+  app.decorate('requireMediaWorker', async (request, reply) => {
+    if (!config.mediaWorkerToken) return reply.code(503).send({ error: 'WORKER_UNAVAILABLE', message: 'Обработчик видео ещё не настроен' });
+    const supplied = request.headers['x-sakhatube-worker-token'];
+    if (typeof supplied !== 'string') return reply.code(401).send({ error: 'WORKER_UNAUTHORIZED' });
+    const expected = Buffer.from(config.mediaWorkerToken);
+    const actual = Buffer.from(supplied);
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return reply.code(401).send({ error: 'WORKER_UNAUTHORIZED' });
   });
 
   app.addHook('onReady', async () => {
@@ -1257,10 +1322,15 @@ export function buildApp(options = {}) {
     const query = parseOrReply(mediaListQuery, request.query, reply);
     if (!query) return;
     const assets = await store.listMedia?.({ limit: query.limit ?? 100 }) ?? [];
+    const sourceAssetIds = assets.filter((asset) => asset.kind === 'video_source').map((asset) => asset.id);
+    const jobs = await store.listMediaJobs?.({ sourceAssetIds }) ?? [];
+    const jobsBySource = new Map(jobs.map((job) => [job.sourceAssetId, job]));
     return {
       items: assets
         .filter((asset) => asset.kind === 'video_source')
-        .map((asset) => ({
+        .map((asset) => {
+          const job = jobsBySource.get(asset.id);
+          return {
           id: asset.id,
           kind: asset.kind,
           relation: asset.relation,
@@ -1276,8 +1346,67 @@ export function buildApp(options = {}) {
           completedAt: asset.completedAt,
           queuedAt: asset.queuedAt,
           abortedAt: asset.abortedAt
-        }))
+          , job: job ? {
+            status: job.status,
+            attempt: job.attempt,
+            maxAttempts: job.maxAttempts,
+            availableAt: job.availableAt,
+            startedAt: job.startedAt,
+            completedAt: job.completedAt
+          } : null
+        }; })
     };
+  });
+
+  // Worker-only queue API. It returns the private source key only after a
+  // short lease is atomically claimed; Studio never receives that key.
+  app.post('/v1/internal/media-jobs/claim', { preHandler: app.requireMediaWorker }, async (request, reply) => {
+    const body = parseOrReply(workerClaimInput, request.body, reply);
+    if (!body) return;
+    const leaseToken = randomBytes(32).toString('base64url');
+    const job = await store.claimMediaJob?.({ workerId: body.workerId, leaseToken, leaseMs: mediaJobLeaseMs, at: now() });
+    if (!job) return reply.code(204).send();
+    return {
+      job: {
+        jobId: job.id,
+        sourceAssetId: job.sourceAssetId,
+        contentId: job.contentId,
+        sourceKey: job.sourceKey,
+        contentType: job.contentType,
+        sizeBytes: job.sizeBytes,
+        attempt: job.attempt,
+        leaseToken,
+        leaseExpiresAt: job.leaseExpiresAt
+      }
+    };
+  });
+
+  app.post('/v1/internal/media-jobs/:id/settle', { preHandler: app.requireMediaWorker }, async (request, reply) => {
+    const params = parseOrReply(workerJobParams, request.params, reply);
+    const body = parseOrReply(workerJobSettleInput, request.body, reply);
+    if (!params || !body) return;
+    const job = await store.getMediaJob?.(params.id);
+    if (!job) return reply.code(404).send({ error: 'NOT_FOUND' });
+    if (body.outcome === 'succeeded') {
+      const rendition = await store.getMedia(body.renditionAssetId);
+      if (!rendition || rendition.contentId !== job.contentId || rendition.relation !== 'rendition' || rendition.kind !== 'hls' || rendition.status !== 'ready') {
+        return reply.code(409).send({ error: 'RENDITION_NOT_READY' });
+      }
+    }
+    const retryAt = body.outcome === 'retryable_failure'
+      ? new Date(Date.now() + (body.retryAfterSeconds ?? 60) * 1000).toISOString()
+      : null;
+    const settled = await store.settleMediaJob?.(params.id, { leaseToken: body.leaseToken, outcome: body.outcome, errorCode: body.errorCode ?? null, retryAt, at: now() });
+    if (!settled || settled.status === 'lease_lost') return reply.code(409).send({ error: 'JOB_LEASE_LOST' });
+    if (settled.status === 'not_found') return reply.code(404).send({ error: 'NOT_FOUND' });
+    if (body.outcome === 'succeeded' && settled.status === 'updated') {
+      await store.updateMedia(job.sourceAssetId, { status: 'processed', durationMs: (await store.getMedia(body.renditionAssetId)).durationMs, metadata: { ...(await store.getMedia(job.sourceAssetId)).metadata, processingState: 'ready', renditionAssetId: body.renditionAssetId } });
+    } else if (body.outcome !== 'succeeded' && settled.status === 'updated') {
+      const source = await store.getMedia(job.sourceAssetId);
+      await store.updateMedia(job.sourceAssetId, { status: settled.job.status === 'dead' ? 'failed' : 'queued', metadata: { ...source.metadata, processingState: settled.job.status === 'dead' ? 'failed' : 'queued' } });
+    }
+    await audit(request, `media.transcode.${body.outcome}`, 'media_job', params.id, null, { status: settled.job.status, attempt: settled.job.attempt }, { id: `worker:${job.workerId ?? 'unknown'}`, roles: ['media_worker'] });
+    return { job: { id: settled.job.id, status: settled.job.status, attempt: settled.job.attempt, maxAttempts: settled.job.maxAttempts } };
   });
 
   // This is the only viewer-facing entry point for video. It does not return
@@ -1451,6 +1580,7 @@ export function buildApp(options = {}) {
     if (!params || !body) return;
     const before = await store.getMedia(params.id);
     if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Медиафайл не найден' });
+    if (!before.contentId) return reply.code(409).send({ error: 'CONTENT_REQUIRED_FOR_TRANSCODE', message: 'Перед обработкой привяжите видео к материалу' });
     if (before.status !== 'uploading' || !before.uploadId || !before.partCount) {
       return reply.code(409).send({ error: 'UPLOAD_NOT_ACTIVE', message: 'Эта загрузка уже завершена или отменена' });
     }
@@ -1484,8 +1614,15 @@ export function buildApp(options = {}) {
       queuedAt: now(),
       metadata: { ...uploaded.metadata, processingState: 'queued' }
     });
+    const job = await store.createMediaJob({
+      sourceAssetId: queued.id,
+      contentId: queued.contentId,
+      sourceKey: queued.storageKey,
+      contentType: queued.contentType,
+      sizeBytes: queued.size
+    });
     await audit(request, 'media.transcode.queue', 'media_asset', queued.id, uploaded, queued);
-    return { asset: queued };
+    return { asset: queued, job: { id: job.id, status: job.status } };
   });
 
   app.post('/v1/admin/assets/:id/upload-abort', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {

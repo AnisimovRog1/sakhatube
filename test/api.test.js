@@ -795,6 +795,45 @@ test('playback gateway rejects a ready-looking rendition with external HLS refer
   assert.equal(JSON.parse(manifest.body).error, 'PLAYBACK_RENDITION_INVALID');
 });
 
+test('media worker queue leases a private job once and never exposes it to Studio', async (t) => {
+  const store = createMemoryStore();
+  const workerToken = 'worker-token-that-is-longer-than-thirty-two-characters';
+  const app = await createTestApp({ store, mediaWorkerToken: workerToken });
+  t.after(() => app.close());
+  const source = store.createMedia({
+    kind: 'video_source', relation: 'source', status: 'queued', contentId: 'signal',
+    storageKey: 'incoming/2026-07-16/40000000-0000-4000-8000-000000000001/source.mp4',
+    fileName: 'episode.mp4', contentType: 'video/mp4', size: 1, metadata: { processingState: 'queued' }
+  });
+  const job = store.createMediaJob({ sourceAssetId: source.id, contentId: 'signal', sourceKey: source.storageKey, contentType: source.contentType, sizeBytes: source.size });
+
+  const anonymous = await app.inject({ method: 'POST', url: '/v1/internal/media-jobs/claim', payload: { workerId: 'worker-a' } });
+  assert.equal(anonymous.statusCode, 401);
+  const claim = await app.inject({ method: 'POST', url: '/v1/internal/media-jobs/claim', headers: { 'x-sakhatube-worker-token': workerToken }, payload: { workerId: 'worker-a' } });
+  assert.equal(claim.statusCode, 200);
+  const claimed = JSON.parse(claim.body).job;
+  assert.equal(claimed.jobId, job.id);
+  assert.equal(claimed.sourceKey, source.storageKey);
+  const secondClaim = await app.inject({ method: 'POST', url: '/v1/internal/media-jobs/claim', headers: { 'x-sakhatube-worker-token': workerToken }, payload: { workerId: 'worker-b' } });
+  assert.equal(secondClaim.statusCode, 204);
+
+  const studio = await tokenFor(app, ['content_editor']);
+  const assets = await app.inject({ method: 'GET', url: '/v1/admin/assets', headers: { authorization: `Bearer ${studio}` } });
+  assert.equal(assets.statusCode, 200);
+  assert.equal(JSON.stringify(assets.body).includes(source.storageKey), false);
+
+  const rendition = store.createMedia({
+    kind: 'hls', relation: 'rendition', status: 'ready', contentId: 'signal',
+    storageKey: 'renditions/internal/master.m3u8', fileName: 'master.m3u8',
+    contentType: 'application/vnd.apple.mpegurl', size: 0, durationMs: 1000,
+    metadata: { playback: { hls: { state: 'ready', prefix: 'renditions/internal/', manifestKey: 'renditions/internal/master.m3u8' } } }
+  });
+  const settle = await app.inject({ method: 'POST', url: `/v1/internal/media-jobs/${job.id}/settle`, headers: { 'x-sakhatube-worker-token': workerToken }, payload: { leaseToken: claimed.leaseToken, outcome: 'succeeded', renditionAssetId: rendition.id } });
+  assert.equal(settle.statusCode, 200);
+  assert.equal(JSON.parse(settle.body).job.status, 'succeeded');
+  assert.equal(store.getMedia(source.id).status, 'processed');
+});
+
 test('production refuses a memory store unless preview mode is explicitly enabled', () => {
   assert.throws(() => buildApp({ nodeEnv: 'production', jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters' }), /DATABASE_URL/);
   assert.doesNotThrow(() => buildApp({ nodeEnv: 'production', allowDemoStore: true, jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters' }));

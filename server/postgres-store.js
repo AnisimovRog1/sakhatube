@@ -100,6 +100,17 @@ const mapViewerSession = (row) => row && ({
   createdAt: row.created_at.toISOString()
 });
 
+const mapMediaJob = (row) => row && ({
+  id: row.id, sourceAssetId: row.source_asset_id, contentId: row.content_id,
+  sourceKey: row.source_key, contentType: row.content_type, sizeBytes: Number(row.size_bytes),
+  status: row.status, attempt: row.attempt, maxAttempts: row.max_attempts,
+  availableAt: row.available_at.toISOString(), workerId: row.worker_id,
+  leaseToken: row.lease_token, leaseExpiresAt: row.lease_expires_at ? row.lease_expires_at.toISOString() : null,
+  startedAt: row.started_at ? row.started_at.toISOString() : null,
+  completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+  lastErrorCode: row.last_error_code, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString()
+});
+
 async function migrate(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_items (
@@ -248,6 +259,26 @@ async function migrate(pool) {
       last_used_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS media_transcode_jobs (
+      id UUID PRIMARY KEY,
+      source_asset_id UUID NOT NULL UNIQUE REFERENCES media_assets(id) ON DELETE CASCADE,
+      content_id TEXT NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+      source_key TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes BIGINT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'retry_wait', 'succeeded', 'dead')),
+      attempt INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 10),
+      available_at TIMESTAMPTZ NOT NULL,
+      worker_id TEXT,
+      lease_token TEXT,
+      lease_expires_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      last_error_code TEXT,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
@@ -256,6 +287,7 @@ async function migrate(pool) {
     CREATE INDEX IF NOT EXISTS public_requests_queue_idx ON public_requests(type, status, created_at ASC);
     CREATE INDEX IF NOT EXISTS viewer_accounts_status_idx ON viewer_accounts(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS viewer_sessions_account_idx ON viewer_sessions(account_id, revoked_at, expires_at DESC);
+    CREATE INDEX IF NOT EXISTS media_transcode_jobs_claim_idx ON media_transcode_jobs(status, available_at, created_at);
   `);
 }
 
@@ -641,6 +673,61 @@ export async function createPostgresStore(connectionString, seedData) {
         values
       );
       return mapMedia(rows[0]);
+    },
+    async createMediaJob(data) {
+      const record = { id: randomUUID(), status: 'queued', attempt: 0, maxAttempts: 3, availableAt: now(), createdAt: now(), updatedAt: now(), ...data };
+      const { rows } = await pool.query(
+        `INSERT INTO media_transcode_jobs (id, source_asset_id, content_id, source_key, content_type, size_bytes, status, attempt, max_attempts, available_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (source_asset_id) DO UPDATE SET source_asset_id = EXCLUDED.source_asset_id
+         RETURNING *`,
+        [record.id, record.sourceAssetId, record.contentId, record.sourceKey, record.contentType, record.sizeBytes, record.status, record.attempt, record.maxAttempts, record.availableAt, record.createdAt, record.updatedAt]
+      );
+      return mapMediaJob(rows[0]);
+    },
+    async listMediaJobs({ sourceAssetIds } = {}) {
+      const { rows } = sourceAssetIds?.length
+        ? await pool.query('SELECT * FROM media_transcode_jobs WHERE source_asset_id = ANY($1::uuid[]) ORDER BY created_at DESC', [sourceAssetIds])
+        : await pool.query('SELECT * FROM media_transcode_jobs ORDER BY created_at DESC');
+      return rows.map(mapMediaJob);
+    },
+    async getMediaJob(id) {
+      const { rows } = await pool.query('SELECT * FROM media_transcode_jobs WHERE id = $1', [id]);
+      return mapMediaJob(rows[0]);
+    },
+    async claimMediaJob({ workerId, leaseToken, leaseMs = 900000, at = now() }) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`UPDATE media_transcode_jobs SET status = 'dead', lease_token = NULL, lease_expires_at = NULL, completed_at = $1, updated_at = $1 WHERE status = 'running' AND lease_expires_at <= $1 AND attempt >= max_attempts`, [at]);
+        const { rows } = await client.query(
+          `SELECT * FROM media_transcode_jobs
+           WHERE ((status IN ('queued','retry_wait') AND available_at <= $1)
+              OR (status = 'running' AND lease_expires_at <= $1)) AND attempt < max_attempts
+           ORDER BY available_at ASC, created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1`, [at]
+        );
+        if (!rows[0]) { await client.query('COMMIT'); return null; }
+        const expiresAt = new Date(new Date(at).getTime() + leaseMs).toISOString();
+        const updated = await client.query(`UPDATE media_transcode_jobs SET status = 'running', worker_id = $1, attempt = attempt + 1, lease_token = $2, lease_expires_at = $3, started_at = COALESCE(started_at, $4), updated_at = $4 WHERE id = $5 RETURNING *`, [workerId, leaseToken, expiresAt, at, rows[0].id]);
+        await client.query('COMMIT');
+        return mapMediaJob(updated.rows[0]);
+      } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    },
+    async settleMediaJob(id, { leaseToken, outcome, errorCode = null, retryAt = null, at = now() }) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const selected = await client.query('SELECT * FROM media_transcode_jobs WHERE id = $1 FOR UPDATE', [id]);
+        const current = mapMediaJob(selected.rows[0]);
+        if (!current) { await client.query('COMMIT'); return { status: 'not_found' }; }
+        if (current.status === 'succeeded' && outcome === 'succeeded') { await client.query('COMMIT'); return { status: 'idempotent', job: current }; }
+        if (current.status !== 'running' || current.leaseToken !== leaseToken || new Date(current.leaseExpiresAt).getTime() <= new Date(at).getTime()) { await client.query('COMMIT'); return { status: 'lease_lost' }; }
+        const terminal = outcome === 'succeeded' || outcome === 'permanent_failure' || (outcome === 'retryable_failure' && current.attempt >= current.maxAttempts);
+        const status = outcome === 'succeeded' ? 'succeeded' : terminal ? 'dead' : 'retry_wait';
+        const updated = await client.query(`UPDATE media_transcode_jobs SET status = $1, lease_token = NULL, lease_expires_at = NULL, completed_at = $2, available_at = $3, last_error_code = $4, updated_at = $5 WHERE id = $6 RETURNING *`, [status, terminal ? at : null, retryAt ?? at, errorCode, at, id]);
+        await client.query('COMMIT');
+        return { status: 'updated', job: mapMediaJob(updated.rows[0]) };
+      } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
     },
     async audit(entry) {
       await pool.query(
