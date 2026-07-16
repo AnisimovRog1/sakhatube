@@ -282,6 +282,9 @@ export function createMemoryStore(seed = defaultSeed) {
     listMediaForContent(contentId) {
       return state.media.filter((item) => item.contentId === contentId).map(clone);
     },
+    listMedia({ limit = 100 } = {}) {
+      return state.media.slice(0, Math.max(1, Math.min(200, limit))).map(clone);
+    },
     getMedia(id) { const item = findMedia(id); return item && clone(item); },
     updateMedia(id, patch) {
       const item = findMedia(id);
@@ -407,6 +410,9 @@ const uploadCompleteInput = z.object({
   parts: z.array(uploadPartInput).min(1).max(10_000)
 }).strict();
 const mediaParams = z.object({ id: z.string().uuid() });
+const mediaListQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional()
+}).strict();
 const uploadPartsQuery = z.object({
   from: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(multipartPartPageSize).optional()
@@ -1243,6 +1249,35 @@ export function buildApp(options = {}) {
     if (!await store.getContent(body.contentId)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
     await store.addPlayback({ ...body, viewerId: request.user?.sub ?? null });
     return reply.code(202).send({ accepted: true });
+  });
+
+  // Studio sees processing state but never receives an object-storage key,
+  // multipart upload id, or a source-media URL. Those stay server-side.
+  app.get('/v1/admin/assets', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'legal_reviewer']) }, async (request, reply) => {
+    const query = parseOrReply(mediaListQuery, request.query, reply);
+    if (!query) return;
+    const assets = await store.listMedia?.({ limit: query.limit ?? 100 }) ?? [];
+    return {
+      items: assets
+        .filter((asset) => asset.kind === 'video_source')
+        .map((asset) => ({
+          id: asset.id,
+          kind: asset.kind,
+          relation: asset.relation,
+          status: asset.status,
+          contentId: asset.contentId,
+          fileName: asset.fileName,
+          contentType: asset.contentType,
+          size: asset.size,
+          durationMs: asset.durationMs,
+          processingState: asset.metadata?.processingState ?? 'not_started',
+          createdAt: asset.createdAt,
+          updatedAt: asset.updatedAt,
+          completedAt: asset.completedAt,
+          queuedAt: asset.queuedAt,
+          abortedAt: asset.abortedAt
+        }))
+    };
   });
 
   // This is the only viewer-facing entry point for video. It does not return

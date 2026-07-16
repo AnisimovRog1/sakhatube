@@ -602,6 +602,13 @@ export async function createPostgresStore(connectionString, seedData) {
       );
       return rows.map(mapMedia);
     },
+    async listMedia({ limit = 100 } = {}) {
+      const { rows } = await pool.query(
+        'SELECT * FROM media_assets ORDER BY created_at DESC LIMIT $1',
+        [Math.max(1, Math.min(200, Number(limit) || 100))]
+      );
+      return rows.map(mapMedia);
+    },
     async getMedia(id) {
       const { rows } = await pool.query('SELECT * FROM media_assets WHERE id = $1', [id]);
       return mapMedia(rows[0]);

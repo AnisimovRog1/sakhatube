@@ -543,6 +543,18 @@ test('private multipart upload is role-protected, paged, validated, and queued a
   assert.equal(started.nextPartNumber, null);
   assert.equal(uploads.length, 1);
 
+  const listed = await app.inject({
+    method: 'GET',
+    url: '/v1/admin/assets?limit=10',
+    headers: { authorization: `Bearer ${editor}` }
+  });
+  assert.equal(listed.statusCode, 200);
+  const listedAsset = JSON.parse(listed.body).items.find((item) => item.id === started.asset.id);
+  assert.equal(listedAsset.status, 'uploading');
+  assert.equal(listedAsset.contentId, 'midnight');
+  assert.equal('storageKey' in listedAsset, false);
+  assert.equal('uploadId' in listedAsset, false);
+
   const invalidComplete = await app.inject({
     method: 'POST',
     url: `/v1/admin/assets/${started.asset.id}/upload-complete`,

@@ -40,6 +40,7 @@ let previewMode = 'phone';
 let bannerMediaDraft = null;
 let toastTimer;
 let remoteOverview = null;
+let remoteMedia = [];
 let homeHasUnsavedChanges = false;
 let apiState = { state: 'preview', message: 'Локальный предпросмотр', loading: false };
 let activeUpload = null;
@@ -215,6 +216,54 @@ function normalizeApiComment(item) {
     createdAt: item.createdAt,
     updatedAt: item.updatedAt
   };
+}
+
+function uploadFromRemoteAsset(asset) {
+  const state = String(asset.status || '').toLowerCase();
+  const processing = String(asset.processingState || '').toLowerCase();
+  const labels = {
+    uploading: { status: 'Загрузка в защищённое хранилище', tone: 'processing' },
+    uploaded: { status: 'Файл принят. Ожидает постановки в очередь', tone: 'queued' },
+    queued: { status: 'В очереди обработки', tone: 'queued' },
+    processing: { status: 'Подготавливаем версии для просмотра', tone: 'processing' },
+    processed: { status: 'Версии просмотра готовы', tone: 'ready' },
+    ready: { status: 'Готово к привязке и проверке', tone: 'ready' },
+    aborted: { status: 'Загрузка остановлена', tone: 'stopped' },
+    failed: { status: 'Обработка остановлена: проверь журнал worker', tone: 'error' },
+    error: { status: 'Обработка завершилась ошибкой: проверь журнал worker', tone: 'error' }
+  };
+  const current = labels[state] || labels[processing] || { status: 'Статус обработки уточняется', tone: 'processing' };
+  const content = asset.contentId ? contentById(asset.contentId) : null;
+  return {
+    id: `remote-asset-${asset.id}`,
+    assetId: asset.id,
+    name: asset.fileName || 'Исходное видео',
+    size: formatBytes(Number(asset.size)),
+    status: content ? `${current.status} · ${content.title}` : current.status,
+    tone: current.tone,
+    source: 'remote',
+    createdAt: asset.createdAt,
+    progress: state === 'processed' || state === 'ready' ? 100 : undefined
+  };
+}
+
+function syncRemoteMedia() {
+  const byAssetId = new Map(remoteMedia.map((asset) => [asset.id, asset]));
+  const currentUploads = studio.uploads.filter((item) => !item.assetId || activeUpload?.assetId === item.assetId);
+  const remoteUploads = [...byAssetId.values()].map(uploadFromRemoteAsset);
+  const currentAssetIds = new Set(currentUploads.map((item) => item.assetId).filter(Boolean));
+  studio.uploads = [
+    ...currentUploads,
+    ...remoteUploads.filter((item) => !currentAssetIds.has(item.assetId))
+  ];
+}
+
+async function refreshRemoteMedia() {
+  if (!isApiMode()) return;
+  const result = await apiRequest('/v1/admin/assets?limit=100');
+  remoteMedia = Array.isArray(result.items) ? result.items : [];
+  syncRemoteMedia();
+  renderUploads();
 }
 
 function refreshCommentMetadata() {
@@ -585,6 +634,7 @@ async function uploadVideoToStudio(file) {
     if (upload.cancelled) throw apiError('Загрузка остановлена.', 0);
     updateUploadRecord(upload, { status: 'Файл принят. Очередь обработки: ожидает.', tone: 'queued', progress: 100 });
     updateUploadTransfer({ title: 'Файл принят', copy: 'Очередь обработки: ожидает. Файл не опубликован.', percent: 100, cancellable: false });
+    try { await refreshRemoteMedia(); } catch { /* The accepted upload is still visible locally. */ }
     showToast('Файл принят. Очередь обработки: ожидает.');
   } catch (error) {
     if (!upload.cancelled) {
@@ -633,18 +683,23 @@ async function loadRemoteStudio({ silent = false } = {}) {
   if (!isApiMode() || apiState.loading) return false;
   apiState = { state: 'loading', message: 'Studio API · синхронизация…', loading: true };
   renderConnectionState();
-  const [overviewResult, contentResult, homeResult, commentsResult] = await Promise.allSettled([
+  const [overviewResult, contentResult, homeResult, commentsResult, mediaResult] = await Promise.allSettled([
     apiRequest('/v1/admin/overview'),
     apiRequest('/v1/admin/content'),
     apiRequest('/v1/admin/home/slots'),
-    apiRequest('/v1/admin/comments')
+    apiRequest('/v1/admin/comments'),
+    apiRequest('/v1/admin/assets?limit=100')
   ]);
-  const allResults = [overviewResult, contentResult, homeResult, commentsResult];
+  const allResults = [overviewResult, contentResult, homeResult, commentsResult, mediaResult];
   const rejected = allResults.filter((result) => result.status === 'rejected');
   const accessError = rejected.find((result) => result.reason?.status === 401);
   if (contentResult.status === 'fulfilled') studio.content = contentResult.value.items.map(normalizeApiContent);
   if (homeResult.status === 'fulfilled') studio.homeOrder = homeResult.value.items.map((item) => item.id);
   if (commentsResult.status === 'fulfilled') studio.comments = commentsResult.value.items.map(normalizeApiComment);
+  if (mediaResult.status === 'fulfilled') {
+    remoteMedia = Array.isArray(mediaResult.value.items) ? mediaResult.value.items : [];
+    syncRemoteMedia();
+  }
   refreshCommentMetadata();
   if (overviewResult.status === 'fulfilled') remoteOverview = overviewResult.value;
   homeHasUnsavedChanges = false;
@@ -795,6 +850,9 @@ function navigate(view) {
   document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('is-active', button.dataset.view === view));
   document.querySelector('#studio-kicker').textContent = labels[view][0];
   document.querySelector('#studio-page-title').textContent = labels[view][1];
+  if (view === 'uploads' && isApiMode() && !activeUpload) {
+    void refreshRemoteMedia().catch(() => showToast('Не удалось обновить статусы обработки. Проверь подключение Studio API.'));
+  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
