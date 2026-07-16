@@ -169,6 +169,21 @@ actor APIClient {
         )
     }
 
+    // MARK: - Billing transport
+
+    /// Sends an Apple-signed transaction only over the authenticated SakhaTube
+    /// session. A successful HTTP response is not created by the client: the
+    /// server must validate the JWS and write the entitlement itself.
+    func submitAppleTransaction(signedTransaction: String, accessToken: String) async throws {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/billing/ios/transactions")
+        try await requestNoContent(
+            url,
+            method: "POST",
+            body: AppleTransactionSubmission(signedTransaction: signedTransaction),
+            bearerToken: accessToken
+        )
+    }
+
     // MARK: - Viewer comments
 
     func comments(contentId: String, limit: Int = 50) async throws -> CommentListResponse {
@@ -343,6 +358,10 @@ private struct DeletionRequestPayload: Encodable, Sendable {
 
 private struct DirectAccountDeletionRequest: Encodable, Sendable {
     let confirmation: String
+}
+
+private struct AppleTransactionSubmission: Encodable, Sendable {
+    let signedTransaction: String
 }
 
 struct DeletionRequestResponse: Decodable, Sendable {

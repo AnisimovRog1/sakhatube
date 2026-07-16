@@ -5,6 +5,7 @@ import SwiftUI
 struct SubscriptionView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var storefront: Storefront
+    @EnvironmentObject private var viewerSession: ViewerSessionStore
 
     var body: some View {
         NavigationStack {
@@ -36,7 +37,7 @@ struct SubscriptionView: View {
                     }
 
                     Button("Восстановить покупки") {
-                        Task { await storefront.restorePurchases() }
+                        Task { await storefront.restorePurchases(accessToken: viewerSession.accessTokenForAuthenticatedRequest) }
                     }
                     .frame(maxWidth: .infinity)
                     .buttonStyle(.bordered)
@@ -84,7 +85,7 @@ struct SubscriptionView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.secondaryText)
             }
-            Button("Выбрать") { Task { await storefront.purchase(product) } }
+            Button("Выбрать") { Task { await storefront.purchase(product, accessToken: viewerSession.accessTokenForAuthenticatedRequest) } }
                 .frame(maxWidth: .infinity)
                 .buttonStyle(.borderedProminent)
                 .tint(AppTheme.primary)

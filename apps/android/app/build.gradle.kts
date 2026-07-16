@@ -37,6 +37,7 @@ val authBaseUrl = providers.gradleProperty("SAKHATUBE_AUTH_BASE_URL").orElse(cat
 // Billing is deliberately disabled by default. A release may enable it only
 // after the backend verifies Play purchase tokens and grants access itself.
 val playSubscriptionProductId = providers.gradleProperty("SAKHATUBE_PLAY_SUBSCRIPTION_PRODUCT_ID").orElse("")
+val playSubscriptionProductKey = providers.gradleProperty("SAKHATUBE_PLAY_SUBSCRIPTION_PRODUCT_KEY").orElse("")
 val playBillingEnabled = providers.gradleProperty("SAKHATUBE_PLAY_BILLING_ENABLED").orElse("false")
 val playBillingServerVerificationEnabled = providers.gradleProperty("SAKHATUBE_PLAY_BILLING_SERVER_VERIFICATION_ENABLED").orElse("false")
 
@@ -59,6 +60,7 @@ android {
         buildConfigField("String", "ACCOUNT_DELETION_URL", accountDeletionUrl.get().asBuildConfigString())
         buildConfigField("String", "AUTH_BASE_URL", authBaseUrl.get().asBuildConfigString())
         buildConfigField("String", "PLAY_SUBSCRIPTION_PRODUCT_ID", playSubscriptionProductId.get().asBuildConfigString())
+        buildConfigField("String", "PLAY_SUBSCRIPTION_PRODUCT_KEY", playSubscriptionProductKey.get().asBuildConfigString())
         buildConfigField("boolean", "PLAY_BILLING_ENABLED", playBillingEnabled.get())
         buildConfigField("boolean", "PLAY_BILLING_SERVER_VERIFICATION_ENABLED", playBillingServerVerificationEnabled.get())
     }

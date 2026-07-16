@@ -47,18 +47,32 @@ final class Storefront: ObservableObject {
         }
     }
 
-    func purchase(_ product: Product) async {
+    func purchase(_ product: Product, accessToken: String?) async {
+        guard let accessToken, !accessToken.isEmpty else {
+            state = .failed("Войди в SakhaTube перед оплатой: так покупка будет привязана к твоему аккаунту.")
+            return
+        }
         state = .purchasing(product.id)
         do {
             let result = try await product.purchase()
             switch result {
             case .success(let verification):
                 switch verification {
-                case .verified:
-                    // Do not call `finish()` and do not unlock content here.
-                    // The backend must first verify transaction JWS against Apple
-                    // and return an active SakhaTube entitlement.
-                    state = .awaitingServerVerification
+                case .verified(let transaction):
+                    // Never unlock from StoreKit's device-side result. The JWS
+                    // crosses an authenticated HTTPS boundary and only a future
+                    // server validator may grant access. Do not finish a
+                    // transaction when that server call fails.
+                    do {
+                        try await APIClient().submitAppleTransaction(
+                            signedTransaction: verification.jwsRepresentation,
+                            accessToken: accessToken
+                        )
+                        await transaction.finish()
+                        state = .awaitingServerVerification
+                    } catch {
+                        state = .failed("Покупка получена App Store, но сервер её не подтвердил. Доступ не открыт. \(error.localizedDescription)")
+                    }
                 case .unverified:
                     state = .failed("Покупка не прошла проверку App Store. Деньги за доступ не списаны.")
                 }
@@ -74,13 +88,34 @@ final class Storefront: ObservableObject {
         }
     }
 
-    func restorePurchases() async {
+    func restorePurchases(accessToken: String?) async {
+        guard let accessToken, !accessToken.isEmpty else {
+            state = .failed("Войди в SakhaTube, чтобы восстановить покупки для своего аккаунта.")
+            return
+        }
         state = .loading
         do {
             try await AppStore.sync()
-            // Sync only refreshes Apple's local transaction state. Entitlements
-            // remain disabled until the backend performs server-side validation.
-            state = .restoredAwaitingServerVerification
+            var submitted = false
+            for await verification in Transaction.currentEntitlements {
+                guard case .verified(let transaction) = verification else { continue }
+                do {
+                    try await APIClient().submitAppleTransaction(
+                        signedTransaction: verification.jwsRepresentation,
+                        accessToken: accessToken
+                    )
+                    await transaction.finish()
+                    submitted = true
+                } catch {
+                    // Keep searching for other transactions, but do not claim
+                    // that access was restored when validation is unavailable.
+                    state = .failed("Не удалось проверить восстановленную покупку. Доступ не открыт. \(error.localizedDescription)")
+                    return
+                }
+            }
+            state = submitted
+                ? .restoredAwaitingServerVerification
+                : .unavailable("Для этого Apple ID не найдено покупок SakhaTube.")
         } catch {
             state = .failed("Не удалось восстановить покупки. Попробуй позже.")
         }

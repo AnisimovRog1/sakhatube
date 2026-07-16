@@ -69,14 +69,16 @@ API и серверной выдачей entitlement. До этого прило
 ```bash
 ./gradlew :app:bundleRelease \
   -PSAKHATUBE_PLAY_SUBSCRIPTION_PRODUCT_ID=sakhatube_monthly \
+  -PSAKHATUBE_PLAY_SUBSCRIPTION_PRODUCT_KEY=premium_monthly \
   -PSAKHATUBE_PLAY_BILLING_ENABLED=true \
   -PSAKHATUBE_PLAY_BILLING_SERVER_VERIFICATION_ENABLED=true
 ```
 
-Эти флаги сами по себе ничего не открывают: в исходниках есть дополнительный
-fail-closed предохранитель. Нужен отдельный серверный endpoint для отправки и
-проверки purchase token и серверная выдача доступа; пока этого нет, приложение
-не запустит оплату и не выдаст доступ.
+Клиент отправляет purchase token только по HTTPS и только с короткой
+авторизованной сессией SakhaTube. Эти флаги сами по себе ничего не открывают:
+сервер сейчас намеренно отвечает отказом, пока не добавлена независимая проверка
+Google Play Developer API, durable entitlement и обработка RTDN. До успешного
+ответа сервера приложение не подтверждает покупку локально и не выдаёт доступ.
 
 ## Подключение аккаунта зрителя
 
