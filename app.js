@@ -394,6 +394,8 @@ let pendingAvatar;
 let activeCommentsContentId = '';
 let loadedComments = [];
 const pendingCommentsByContent = new Map();
+const communityRulesVersion = '2026-07-16';
+let viewerRefreshPromise = null;
 
 function loadViewerAuth() {
   try {
@@ -460,7 +462,11 @@ function applyLocale() {
 }
 
 function saveProfile() {
-  localStorage.setItem('sakhatube-profile', JSON.stringify(profile));
+  try {
+    localStorage.setItem('sakhatube-profile', JSON.stringify(profile));
+  } catch {
+    // Private browsing may deny storage; keep the profile for this session.
+  }
 }
 
 function openDialog(dialog) {
@@ -725,6 +731,11 @@ function setAccountMode(mode) {
   accountDialog.querySelectorAll('.account-login-field').forEach((field) => { field.hidden = register; });
   const loginLabel = document.querySelector('.account-login-field');
   if (loginLabel?.firstChild) loginLabel.firstChild.textContent = firebaseEnabled ? 'E-mail для входа' : 'Логин или e-mail';
+  const loginInput = document.querySelector('#account-login');
+  if (loginInput) {
+    loginInput.type = firebaseEnabled ? 'email' : 'text';
+    loginInput.inputMode = firebaseEnabled ? 'email' : 'text';
+  }
   const usernameField = document.querySelector('#account-username')?.closest('label');
   if (usernameField) usernameField.hidden = !register;
   document.querySelector('#account-title').textContent = register ? 'Создать аккаунт' : 'Войти';
@@ -869,6 +880,63 @@ function viewerRequestHeaders() {
   return viewerAuth?.accessToken ? { authorization: `Bearer ${viewerAuth.accessToken}` } : {};
 }
 
+async function refreshViewerSession() {
+  if (!viewerAuth?.refreshToken) return false;
+  if (!viewerRefreshPromise) {
+    viewerRefreshPromise = (async () => {
+      try {
+        const response = await fetch('/v1/auth/refresh', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ refreshToken: viewerAuth.refreshToken })
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload?.accessToken || !payload?.refreshToken || !payload?.viewer) throw new Error('refresh_failed');
+        saveViewerAuth(payload);
+        profile = { ...profile, name: payload.viewer.displayName || profile.name };
+        saveProfile();
+        renderProfile();
+        return true;
+      } catch {
+        saveViewerAuth(null);
+        renderProfile();
+        return false;
+      } finally {
+        viewerRefreshPromise = null;
+      }
+    })();
+  }
+  return viewerRefreshPromise;
+}
+
+async function viewerFetch(url, options = {}) {
+  const send = () => fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), ...viewerRequestHeaders() },
+    credentials: options.credentials || 'same-origin'
+  });
+  const initial = await send();
+  if (initial.status !== 401 || !viewerAuth?.refreshToken || !await refreshViewerSession()) return initial;
+  return send();
+}
+
+function needsCommunityRulesAcceptance() {
+  return Boolean(viewerAuth?.viewer) && viewerAuth.viewer.communityRulesVersion !== communityRulesVersion;
+}
+
+async function acceptCommunityRules() {
+  const response = await viewerFetch('/v1/community-rules/acceptance', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ version: communityRulesVersion, accepted: true })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.viewer) throw new Error(payload.message || 'Не удалось принять правила сообщества.');
+  saveViewerAuth({ ...viewerAuth, viewer: payload.viewer });
+  renderProfile();
+}
+
 function commentDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -892,6 +960,8 @@ function renderComments() {
   const formHint = document.querySelector('#comment-form-hint');
   const text = document.querySelector('#comment-text');
   const submit = document.querySelector('#comment-submit');
+  const consent = document.querySelector('#comment-rules-consent');
+  const consentInput = document.querySelector('#comment-rules-input');
   if (!list || !formHint || !text || !submit) return;
   const pending = localPendingComments(activeCommentsContentId);
   const items = [...pending, ...loadedComments];
@@ -906,12 +976,15 @@ function renderComments() {
     : '<p class="comments-empty">Пока нет комментариев. Будьте первым, кто начнёт обсуждение.</p>';
 
   const signedIn = Boolean(viewerAuth?.accessToken);
+  const needsRules = signedIn && needsCommunityRulesAcceptance();
   text.disabled = !signedIn;
   text.placeholder = signedIn ? 'Напишите комментарий' : 'Войдите, чтобы написать комментарий';
   submit.disabled = false;
   submit.textContent = signedIn ? 'Отправить' : 'Войти';
+  if (consent) consent.hidden = !needsRules;
+  if (!needsRules && consentInput) consentInput.checked = false;
   formHint.textContent = signedIn
-    ? 'Комментарий появится после модерации.'
+    ? (needsRules ? 'Прими правила сообщества перед первой публикацией.' : 'Комментарий появится после модерации.')
     : 'Войдите в аккаунт, чтобы участвовать в обсуждении.';
 }
 
@@ -962,13 +1035,21 @@ async function submitComment(event) {
     text?.focus();
     return;
   }
+  if (needsCommunityRulesAcceptance()) {
+    const consent = document.querySelector('#comment-rules-input');
+    if (!consent?.checked) {
+      setCommentsStatus('Прими правила сообщества перед первой публикацией.');
+      consent?.focus();
+      return;
+    }
+  }
   submit.disabled = true;
   submit.textContent = 'Отправляем…';
   try {
-    const response = await fetch(`/v1/content/${encodeURIComponent(activeCommentsContentId)}/comments`, {
+    if (needsCommunityRulesAcceptance()) await acceptCommunityRules();
+    const response = await viewerFetch(`/v1/content/${encodeURIComponent(activeCommentsContentId)}/comments`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...viewerRequestHeaders() },
-      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: value })
     });
     const payload = await response.json().catch(() => ({}));
@@ -988,8 +1069,8 @@ async function submitComment(event) {
 
 async function deletePendingComment(id) {
   try {
-    const response = await fetch(`/v1/comments/${encodeURIComponent(id)}/delete`, {
-      method: 'POST', headers: viewerRequestHeaders(), credentials: 'same-origin'
+    const response = await viewerFetch(`/v1/comments/${encodeURIComponent(id)}/delete`, {
+      method: 'POST'
     });
     if (!response.ok && response.status !== 404) {
       const payload = await response.json().catch(() => ({}));
@@ -1011,10 +1092,9 @@ async function reportComment(id) {
   }
   if (!window.confirm('Отправить жалобу на этот комментарий?')) return;
   try {
-    const response = await fetch(`/v1/comments/${encodeURIComponent(id)}/report`, {
+    const response = await viewerFetch(`/v1/comments/${encodeURIComponent(id)}/report`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...viewerRequestHeaders() },
-      credentials: 'same-origin', body: JSON.stringify({ reason: 'abuse' })
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: 'abuse' })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.message || 'Не удалось отправить жалобу.');

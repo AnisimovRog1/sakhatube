@@ -44,8 +44,10 @@
   // Firebase proves the identity. The SakhaTube server exchanges this
   // short-lived ID token for its own access/refresh session; no Firebase
   // refresh credential is copied into app storage.
-  const identity = async (user) => ({
-    idToken: await user.getIdToken(),
+  const identity = async (user, forceRefresh = false) => ({
+    // A verification link can be opened seconds after the first token was
+    // issued. Refresh during login/restore so `email_verified` is not stale.
+    idToken: await user.getIdToken(forceRefresh),
     email: user.email || '',
     uid: user.uid,
     displayName: user.displayName || user.email?.split('@')[0] || 'Пользователь',
@@ -71,7 +73,7 @@
       if (!current) throw new Error('Firebase не настроен.');
       try {
         const result = await current.auth.signInWithEmailAndPassword(current.instance, email, password);
-        return identity(result.user);
+        return identity(result.user, true);
       } catch (error) {
         throw new Error(providerError(error));
       }
@@ -82,7 +84,7 @@
       return new Promise((resolve) => {
         const stop = current.auth.onAuthStateChanged(current.instance, async (user) => {
           stop();
-          resolve(user ? identity(user) : null);
+          resolve(user ? identity(user, true) : null);
         }, () => resolve(null));
       });
     },

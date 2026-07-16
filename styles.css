@@ -305,6 +305,9 @@ em { color: #dce9ff; font-style: normal; }
 .comment-form textarea { display: block; width: 100%; min-height: 76px; resize: vertical; padding: 11px 12px; border: 1px solid #343842; border-radius: 11px; outline: 0; background: #111318; color: var(--text); font: inherit; font-size: 13px; line-height: 1.4; }
 .comment-form textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .comment-form textarea:disabled { opacity: .62; cursor: not-allowed; }
+.comment-rules-consent { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.4; cursor: pointer; }
+.comment-rules-consent input { width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--primary); flex: none; }
+.comment-rules-consent a { color: #91baff; text-underline-offset: 2px; }
 .comment-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
 .comment-form-footer span { color: var(--muted); font-size: 11px; line-height: 1.35; }
 .comment-form-footer .button { min-height: 38px; flex: none; padding: 0 14px; }
