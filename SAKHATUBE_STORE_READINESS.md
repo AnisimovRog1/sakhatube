@@ -71,6 +71,10 @@
 4. Подписать iOS/AAB, пройти TestFlight и закрытый Play track.
 5. Заполнить App Privacy, Data safety, возрастные анкеты, reviewer access и только после этого отправлять на review.
 
+## Railway: что добавить перед production
+
+Шаблон имён переменных без секретов: [release/railway.env.example](release/railway.env.example). Критично задать `PUBLIC_APP_URL`, `MAILER_WEBHOOK_URL`, сильные `JWT_SECRET` и `DELETION_VERIFICATION_SECRET`. `PAYMENTS_ENABLED` должен оставаться `false`, пока покупки не проверяются сервером.
+
 ## Официальные правила
 
 - [Apple App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
