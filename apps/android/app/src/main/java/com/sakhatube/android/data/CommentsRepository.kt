@@ -29,7 +29,9 @@ class CommentsRepository(
 ) {
     private val consentStore = CommentCommunityConsentStore(context.applicationContext)
     suspend fun approved(contentId: String): List<ViewerComment> = withContext(Dispatchers.IO) {
-        request("/v1/content/$contentId/comments?limit=50", "GET", null, null)
+        // The feed stays public, but an authenticated viewer must send their
+        // short-lived session so the server can filter authors they blocked.
+        request("/v1/content/$contentId/comments?limit=50", "GET", null, sessionStore.current()?.accessToken)
             .optJSONArray("items").toComments()
     }
 
@@ -63,6 +65,7 @@ class CommentsRepository(
     }
 
     fun currentViewerId(): String? = sessionStore.current()?.viewer?.id
+    fun currentViewer(): ViewerAccount? = sessionStore.current()?.viewer
     fun isSignedIn(): Boolean = sessionStore.current() != null
     fun hasAcceptedCommunityRules(): Boolean = currentViewerId()?.let(consentStore::hasAccepted) == true
     suspend fun acceptCommunityRules(): Unit = withContext(Dispatchers.IO) {

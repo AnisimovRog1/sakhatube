@@ -1247,6 +1247,12 @@ export function buildApp(options = {}) {
     && !value.includes('\\')
     && value.split('/').every((part) => part && part !== '.' && part !== '..');
 
+  // Keep byte-range playback working for fMP4 HLS segments.  Some players
+  // request only the needed range of a segment; dropping that header makes
+  // seeking needlessly download the entire object.  Do not pass arbitrary
+  // range syntax through to storage.
+  const validByteRange = (value) => typeof value === 'string' && /^bytes=\d*-\d*$/.test(value);
+
   const hlsManifestIsGatewaySafe = (body) => {
     const text = body.toString('utf8');
     if (!text.startsWith('#EXTM3U')) return false;
@@ -2348,8 +2354,12 @@ export function buildApp(options = {}) {
       return reply.code(502).send({ error: 'PLAYBACK_RENDITION_INVALID', message: 'Версия видео требует повторной обработки' });
     }
     const storageKey = requestedPath === 'master.m3u8' ? hls.manifestKey : `${hls.prefix}${requestedPath}`;
+    const range = request.headers.range;
+    if (range && !validByteRange(range)) return reply.code(416).send({ error: 'RANGE_NOT_SATISFIABLE' });
     try {
-      const object = await mediaStore.get(storageKey);
+      // A partial playlist cannot be validated safely, so playlists are always
+      // fetched as a complete document.  Segment ranges are forwarded.
+      const object = await mediaStore.get(storageKey, requestedPath.endsWith('.m3u8') ? undefined : range);
       if (requestedPath.endsWith('.m3u8')) {
         const chunks = [];
         for await (const chunk of object.Body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -2365,6 +2375,9 @@ export function buildApp(options = {}) {
       reply.header('content-type', object.ContentType || 'application/octet-stream');
       reply.header('cache-control', 'private, no-store');
       reply.header('accept-ranges', 'bytes');
+      if (object.ContentRange) reply.header('content-range', object.ContentRange);
+      if (object.ContentLength !== undefined) reply.header('content-length', object.ContentLength);
+      if (object.ContentRange) reply.code(206);
       return reply.send(object.Body);
     } catch (error) {
       request.log.error(error);
@@ -2539,7 +2552,7 @@ export function buildApp(options = {}) {
     await mediaStore.put({ storageKey, body, contentType: part.mimetype });
     try {
       const item = await store.createMedia({ kind: 'banner', storageKey, fileName: part.filename || `banner.${extension}`, contentType: part.mimetype, size: body.length });
-      audit(request, 'media.banner.upload', 'media_asset', item.id, null, item);
+      await audit(request, 'media.banner.upload', 'media_asset', item.id, null, item);
       return reply.code(201).send({ item: { ...item, url: `/v1/media/${item.id}` } });
     } catch (error) {
       await mediaStore.remove(storageKey);

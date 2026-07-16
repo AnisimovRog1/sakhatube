@@ -279,7 +279,12 @@ function refreshCommentMetadata() {
 }
 
 function isSafeBannerMedia(media) {
-  return Boolean(media && typeof media.src === 'string' && /^data:image\/(?:jpeg|png|webp);base64,/i.test(media.src));
+  // Local preview uses a data URL; connected Studio uses a same-origin media
+  // route.  Do not accept arbitrary remote URLs in either case.
+  return Boolean(media && typeof media.src === 'string' && (
+    /^data:image\/(?:jpeg|png|webp);base64,/i.test(media.src)
+    || /^\/v1\/media\/[0-9a-f-]{36}$/i.test(media.src)
+  ));
 }
 
 function formatBytes(bytes) {
@@ -400,17 +405,45 @@ function normalizeUploadPlan(payload, file) {
   const assetId = payload?.asset?.id;
   const partSize = Number(payload?.partSize);
   const parts = Array.isArray(payload?.parts) ? payload.parts : [];
-  if (!assetId || !Number.isInteger(partSize) || partSize < 1 || !parts.length) {
+  const partCount = Number(payload?.partCount);
+  const nextPartNumber = payload?.nextPartNumber === null ? null : Number(payload?.nextPartNumber);
+  if (!assetId || !Number.isInteger(partSize) || partSize < 1 || !Number.isInteger(partCount) || partCount < 1 || !parts.length) {
     throw apiError('Studio API вернул неполный план загрузки. Файл не был передан.', 0);
   }
   const expectedParts = Math.ceil(file.size / partSize);
-  if (parts.length !== expectedParts) {
+  if (partCount !== expectedParts || parts.length > expectedParts) {
     throw apiError('Studio API вернул неверное количество частей. Файл не был передан.', 0);
   }
   const orderedParts = [...parts].sort((left, right) => Number(left.number) - Number(right.number));
   const valid = orderedParts.every((part, index) => Number(part.number) === index + 1 && typeof part.url === 'string' && /^https:\/\//i.test(part.url));
   if (!valid) throw apiError('Studio API вернул недействительные адреса защищённой загрузки. Файл не был передан.', 0);
-  return { assetId, partSize, parts: orderedParts };
+  if (nextPartNumber !== null && (!Number.isInteger(nextPartNumber) || nextPartNumber !== orderedParts.length + 1 || nextPartNumber > expectedParts)) {
+    throw apiError('Studio API вернул неверную следующую часть загрузки. Файл не был передан.', 0);
+  }
+  if (nextPartNumber === null && orderedParts.length !== expectedParts) {
+    throw apiError('Studio API не выдал все части загрузки. Файл не был передан.', 0);
+  }
+  return { assetId, partSize, partCount, expectedParts, parts: orderedParts, nextPartNumber };
+}
+
+async function loadRemainingUploadParts(plan) {
+  const parts = [...plan.parts];
+  let nextPartNumber = plan.nextPartNumber;
+  while (nextPartNumber !== null) {
+    const page = await apiRequest(`/v1/admin/assets/${encodeURIComponent(plan.assetId)}/upload-parts?from=${nextPartNumber}&limit=100`);
+    const received = Array.isArray(page.parts) ? [...page.parts].sort((left, right) => Number(left.number) - Number(right.number)) : [];
+    const valid = received.length > 0 && received.every((part, index) => Number(part.number) === nextPartNumber + index && typeof part.url === 'string' && /^https:\/\//i.test(part.url));
+    const following = page.nextPartNumber === null ? null : Number(page.nextPartNumber);
+    if (!valid || (following !== null && (!Number.isInteger(following) || following <= nextPartNumber || following > plan.expectedParts))) {
+      throw apiError('Studio API вернул неполную страницу частей. Файл не был передан.', 0);
+    }
+    parts.push(...received);
+    nextPartNumber = following;
+  }
+  if (parts.length !== plan.expectedParts || !parts.every((part, index) => Number(part.number) === index + 1)) {
+    throw apiError('Studio API не выдал полный план загрузки. Файл не был передан.', 0);
+  }
+  return { ...plan, parts };
 }
 
 function updateUploadTransfer({ title, copy, percent = 0, cancellable = false, hidden = false } = {}) {
@@ -623,11 +656,20 @@ async function uploadVideoToStudio(file) {
       method: 'POST',
       body: { fileName: file.name, contentType: file.type, size: file.size, ...(contentId ? { contentId } : {}) }
     });
-    const plan = normalizeUploadPlan(init, file);
+    let plan = normalizeUploadPlan(init, file);
     upload.assetId = plan.assetId;
     if (upload.cancelled) {
       await closeLateInitializedUpload(upload);
       throw apiError('Загрузка остановлена.', 0);
+    }
+    if (plan.nextPartNumber !== null) {
+      updateUploadRecord(upload, { status: 'Получаем защищённый план для большого файла…', tone: 'processing', progress: 0, assetId: plan.assetId });
+      updateUploadTransfer({ title: 'Готовим большой файл', copy: 'Studio получает следующие одноразовые адреса передачи.', percent: 0, cancellable: true });
+      plan = await loadRemainingUploadParts(plan);
+      if (upload.cancelled) {
+        await closeLateInitializedUpload(upload);
+        throw apiError('Загрузка остановлена.', 0);
+      }
     }
     updateUploadRecord(upload, { status: 'Передача в защищённое хранилище · 0%', tone: 'processing', progress: 0, assetId: plan.assetId });
     updateUploadTransfer({ title: 'Передаём видео', copy: 'Файл идёт напрямую в защищённое хранилище. Он ещё не опубликован.', percent: 0, cancellable: true });
@@ -895,7 +937,6 @@ function openContentDialog(item = null) {
 }
 
 function openBannerDialog(banner = null) {
-  if (isApiMode()) { showToast('Баннеры нельзя публиковать через текущий Studio API — этот серверный этап ещё не подключён.'); return; }
   bannerForm.reset();
   bannerMediaDraft = isSafeBannerMedia(banner?.media) ? clone(banner.media) : null;
   const contentSelect = document.querySelector('#banner-content');
@@ -1315,7 +1356,10 @@ bannerForm.addEventListener('submit', (event) => {
   };
   if (isApiMode()) {
     try {
-      const result = await apiRequest(id ? `/v1/admin/banners/${encodeURIComponent(id)}` : '/v1/admin/banners', { method: id ? 'PATCH' : 'POST', body: data });
+      // `media` is only a browser preview descriptor.  The API accepts the
+      // opaque mediaId, never a user-controlled URL or data URL.
+      const { media, ...payload } = data;
+      const result = await apiRequest(id ? `/v1/admin/banners/${encodeURIComponent(id)}` : '/v1/admin/banners', { method: id ? 'PATCH' : 'POST', body: payload });
       if (id) Object.assign(bannerById(id), normalizeApiBanner(result.item));
       else studio.banners.push(normalizeApiBanner(result.item));
     } catch (error) { showToast(error.message || 'Не удалось сохранить баннер'); return; }

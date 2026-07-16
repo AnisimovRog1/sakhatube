@@ -338,16 +338,21 @@ test('public catalog and home expose only published content', async (t) => {
 });
 
 test('Studio manages home banners while public home exposes only active published links', async (t) => {
-  const app = await createTestApp();
+  const store = createMemoryStore();
+  const app = await createTestApp({ store });
   t.after(() => app.close());
   const editor = await tokenFor(app, ['content_editor']);
+  const bannerMedia = store.createMedia({
+    kind: 'banner', relation: 'asset', status: 'ready', storageKey: 'banners/test.jpg',
+    fileName: 'test.jpg', contentType: 'image/jpeg', size: 42
+  });
   const created = await app.inject({
     method: 'POST', url: '/v1/admin/banners', headers: { authorization: `Bearer ${editor}` },
-    payload: { contentId: 'signal', eyebrow: 'ВЫБОР', title: 'Тестовый баннер', description: 'Проверка витрины.', cta: 'Открыть', tone: 'poster-three', active: false }
+    payload: { contentId: 'signal', eyebrow: 'ВЫБОР', title: 'Тестовый баннер', description: 'Проверка витрины.', cta: 'Открыть', tone: 'poster-three', active: false, mediaId: bannerMedia.id }
   });
   assert.equal(created.statusCode, 201);
   const item = JSON.parse(created.body).item;
-  assert.equal(item.media, null);
+  assert.deepEqual(item.media, { id: bannerMedia.id, src: `/v1/media/${bannerMedia.id}`, name: 'test.jpg', size: 42 });
 
   const activate = await app.inject({
     method: 'PATCH', url: `/v1/admin/banners/${item.id}`, headers: { authorization: `Bearer ${editor}` }, payload: { active: true }
@@ -1070,8 +1075,8 @@ test('temporary demo media is public but restricted to its own prefix', async (t
 test('playback sessions fail closed and stream only an explicitly ready free HLS rendition', async (t) => {
   const requestedKeys = [];
   const mediaStore = {
-    async get(key) {
-      requestedKeys.push(key);
+    async get(key, range) {
+      requestedKeys.push([key, range]);
       if (key === 'renditions/signal-release/master.m3u8') {
         return { ContentType: 'application/vnd.apple.mpegurl', Body: Readable.from(['#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=600000\nvideo/playlist.m3u8\n']) };
       }
@@ -1079,7 +1084,9 @@ test('playback sessions fail closed and stream only an explicitly ready free HLS
         return { ContentType: 'application/vnd.apple.mpegurl', Body: Readable.from(['#EXTM3U\n#EXTINF:4,\nsegment-001.m4s\n']) };
       }
       if (key === 'renditions/signal-release/video/segment-001.m4s') {
-        return { ContentType: 'video/iso.segment', Body: Readable.from(['segment']) };
+        return range
+          ? { ContentType: 'video/iso.segment', ContentLength: 4, ContentRange: 'bytes 0-3/7', Body: Readable.from(['segm']) }
+          : { ContentType: 'video/iso.segment', Body: Readable.from(['segment']) };
       }
       throw new Error('object missing');
     }
@@ -1134,12 +1141,13 @@ test('playback sessions fail closed and stream only an explicitly ready free HLS
   const token = session.manifestUrl.split('/')[3];
   const childPlaylist = await app.inject({ method: 'GET', url: `/v1/playback/${token}/video/playlist.m3u8` });
   assert.equal(childPlaylist.statusCode, 200);
-  const segment = await app.inject({ method: 'GET', url: `/v1/playback/${token}/video/segment-001.m4s` });
-  assert.equal(segment.statusCode, 200);
+  const segment = await app.inject({ method: 'GET', url: `/v1/playback/${token}/video/segment-001.m4s`, headers: { range: 'bytes=0-3' } });
+  assert.equal(segment.statusCode, 206);
+  assert.equal(segment.headers['content-range'], 'bytes 0-3/7');
   assert.deepEqual(requestedKeys, [
-    'renditions/signal-release/master.m3u8',
-    'renditions/signal-release/video/playlist.m3u8',
-    'renditions/signal-release/video/segment-001.m4s'
+    ['renditions/signal-release/master.m3u8', undefined],
+    ['renditions/signal-release/video/playlist.m3u8', undefined],
+    ['renditions/signal-release/video/segment-001.m4s', 'bytes=0-3']
   ]);
 
   const traversal = await app.inject({ method: 'GET', url: `/v1/playback/${token}/..%2Fsecret.m3u8` });

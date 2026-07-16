@@ -474,7 +474,7 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         Text(comment.authorName, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                         if (comment.status != null) Text("На модерации", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        else if (viewModel.signedIn()) {
+                        else if (viewModel.canBlock(comment)) {
                             Row {
                                 IconButton(onClick = { reportTarget = comment }, modifier = Modifier.size(36.dp)) {
                                     Icon(Icons.Outlined.Flag, contentDescription = "Пожаловаться")
@@ -486,7 +486,13 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
                         }
                     }
                     Text(comment.text)
-                    if (comment.status != null) TextButton(onClick = { viewModel.delete(comment.id) }) { Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Удалить") }
+                    if (comment.status != null && viewModel.canDelete(comment)) {
+                        TextButton(onClick = { viewModel.delete(comment.id) }) {
+                            Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Удалить")
+                        }
+                    }
                 }
             }
         }
@@ -819,7 +825,7 @@ private fun SignedInProfileCard(
             Text("@$username · ID $publicId", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(email, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                "Сессия действует только до закрытия приложения: токен не записывается в память устройства.",
+                "Вход защищён: пароль не хранится в приложении, а сессия автоматически истекает.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

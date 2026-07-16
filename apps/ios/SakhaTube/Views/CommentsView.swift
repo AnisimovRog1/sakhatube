@@ -168,7 +168,13 @@ struct CommentsView: View {
         isLoading = comments.isEmpty
         defer { isLoading = false }
         do {
-            comments = try await api.comments(contentId: contentId).items
+            // The public endpoint also accepts an optional viewer session. Send
+            // it when present so the server can exclude authors this viewer has
+            // blocked. Anonymous viewers still receive the public feed.
+            comments = try await api.comments(
+                contentId: contentId,
+                accessToken: viewerSession.accessTokenForAuthenticatedRequest
+            ).items
         } catch {
             errorMessage = error.localizedDescription
         }

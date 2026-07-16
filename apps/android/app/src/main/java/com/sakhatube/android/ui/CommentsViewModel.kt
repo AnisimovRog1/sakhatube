@@ -25,6 +25,10 @@ class CommentsViewModel(application: Application) : AndroidViewModel(application
     fun signedIn() = repository.isSignedIn()
     fun viewerId() = repository.currentViewerId()
     fun hasAcceptedCommunityRules() = repository.hasAcceptedCommunityRules()
+    fun canDelete(comment: ViewerComment): Boolean =
+        repository.currentViewer()?.displayName == comment.authorName
+    fun canBlock(comment: ViewerComment): Boolean =
+        comment.status == null && repository.currentViewer()?.displayName != comment.authorName && repository.isSignedIn()
 
     fun load(contentId: String) = viewModelScope.launch {
         _state.value = _state.value.copy(loading = true, error = null)

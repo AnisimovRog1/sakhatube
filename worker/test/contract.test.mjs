@@ -19,6 +19,11 @@ test('probe validation creates private relative-key HLS plan', () => {
   assert.equal(asset.metadata.playback.hls.manifestKey, asset.storageKey);
   assert.equal(asset.metadata.poster.key.startsWith('renditions/'), true);
 });
+test('small but valid sources still receive one playable rendition', () => {
+  const small = validateProbe({ format: { duration: '3' }, streams: [{ codec_type: 'video', width: 240, height: 135 }] });
+  const plan = createRenditionPlan(job, small, new Date('2026-07-16T00:00:00.000Z'));
+  assert.deepEqual(plan.renditions.map((rendition) => rendition.height), [135]);
+});
 test('rejects video-less and extreme probes', () => {
   assert.throws(() => validateProbe({ format: { duration: '1' }, streams: [] }), JobError);
   assert.throws(() => validateProbe({ ...probe, streams: [{ codec_type: 'video', width: 9000, height: 1080 }] }), JobError);

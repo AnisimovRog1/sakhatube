@@ -42,11 +42,16 @@ export function validateProbe(raw) {
 export function createRenditionPlan(job, probe, now = new Date()) {
   const releaseId = randomUUID();
   const prefix = `renditions/${releaseId}/`;
+  // A valid source is allowed down to 64px for archival/test material.  Do not
+  // produce a master manifest with zero variants for sources below 360px:
+  // retain the source height as a single playable rendition instead.
+  const heights = [360, 540, 720, 1080].filter((height) => height <= probe.height);
+  if (!heights.length) heights.push(probe.height);
   return {
     releaseId, sourceAssetId: job.sourceAssetId, contentId: job.contentId,
     prefix, manifestKey: `${prefix}master.m3u8`, posterKey: `${prefix}poster.jpg`,
     generatedAt: now.toISOString(), durationMs: probe.durationMs,
-    renditions: [360, 540, 720, 1080].filter((height) => height <= probe.height).map((height) => ({ height, playlistKey: `${prefix}v${height}/index.m3u8` }))
+    renditions: heights.map((height) => ({ height, playlistKey: `${prefix}v${height}/index.m3u8` }))
   };
 }
 

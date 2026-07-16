@@ -186,10 +186,13 @@ actor APIClient {
 
     // MARK: - Viewer comments
 
-    func comments(contentId: String, limit: Int = 50) async throws -> CommentListResponse {
+    func comments(contentId: String, limit: Int = 50, accessToken: String? = nil) async throws -> CommentListResponse {
         var components = URLComponents(url: AppConfiguration.apiBaseURL.appending(path: "v1/content/\(contentId)/comments"), resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "limit", value: String(min(max(limit, 1), 50)))]
         guard let url = components?.url else { throw APIClientError.invalidResponse }
+        if let accessToken, !accessToken.isEmpty {
+            return try await request(url, bearerToken: accessToken)
+        }
         return try await request(url)
     }
 
