@@ -15,7 +15,9 @@ struct CommentsView: View {
     @State private var message: String?
     @State private var errorMessage: String?
     @State private var reportTarget: ViewerCommentDTO?
+    @State private var blockTarget: ViewerCommentDTO?
     @State private var isShowingAuth = false
+    @State private var isShowingBlockedViewers = false
 
     private let api = APIClient()
 
@@ -39,8 +41,10 @@ struct CommentsView: View {
                             CommentRow(
                                 comment: comment,
                                 canDelete: canDelete(comment),
+                                canBlock: canBlock(comment),
                                 onReport: { reportTarget = comment },
-                                onDelete: { Task { await delete(comment) } }
+                                onDelete: { Task { await delete(comment) } },
+                                onBlock: { blockTarget = comment }
                             )
                             .listRowBackground(AppTheme.surface)
                         }
@@ -53,10 +57,24 @@ struct CommentsView: View {
             .safeAreaInset(edge: .bottom) { composer }
             .navigationTitle("Комментарии")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        isShowingBlockedViewers = true
+                    } label: {
+                        Image(systemName: "person.crop.circle.badge.xmark")
+                    }
+                    .accessibilityLabel("Заблокированные пользователи")
+                }
+                ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } }
+            }
         }
         .task { await load() }
         .sheet(isPresented: $isShowingAuth) { ViewerAuthView().environmentObject(viewerSession) }
+        .sheet(isPresented: $isShowingBlockedViewers) {
+            BlockedViewersView(api: api)
+                .environmentObject(viewerSession)
+        }
         .confirmationDialog("Пожаловаться", isPresented: Binding(get: { reportTarget != nil }, set: { if !$0 { reportTarget = nil } })) {
             ForEach(CommentReportReason.allCases) { reason in
                 Button(reason.title, role: reason == .other ? nil : .destructive) {
@@ -66,6 +84,14 @@ struct CommentsView: View {
             Button("Отмена", role: .cancel) { reportTarget = nil }
         } message: {
             Text("Жалоба будет отправлена модерации.")
+        }
+        .confirmationDialog("Заблокировать пользователя?", isPresented: Binding(get: { blockTarget != nil }, set: { if !$0 { blockTarget = nil } })) {
+            Button("Заблокировать", role: .destructive) {
+                if let blockTarget { Task { await blockAuthor(of: blockTarget) } }
+            }
+            Button("Отмена", role: .cancel) { blockTarget = nil }
+        } message: {
+            Text("Его одобренные комментарии больше не будут показываться тебе. Разблокировать можно в этом же разделе.")
         }
     }
 
@@ -111,6 +137,10 @@ struct CommentsView: View {
     private func canDelete(_ comment: ViewerCommentDTO) -> Bool {
         guard let viewer = viewerSession.viewer else { return false }
         return comment.authorName == viewer.displayName
+    }
+
+    private func canBlock(_ comment: ViewerCommentDTO) -> Bool {
+        viewerSession.viewer != nil && comment.status == "approved" && !canDelete(comment)
     }
 
     private func load() async {
@@ -170,13 +200,31 @@ struct CommentsView: View {
             errorMessage = error.localizedDescription
         }
     }
+
+    private func blockAuthor(of comment: ViewerCommentDTO) async {
+        defer { blockTarget = nil }
+        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+            isShowingAuth = true
+            return
+        }
+        do {
+            let response = try await api.blockCommentAuthor(id: comment.id, accessToken: token)
+            comments.removeAll { $0.authorName == comment.authorName }
+            let name = response.item.viewer?.displayName ?? comment.authorName
+            message = "Пользователь \(name) заблокирован."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }
 
 private struct CommentRow: View {
     let comment: ViewerCommentDTO
     let canDelete: Bool
+    let canBlock: Bool
     let onReport: () -> Void
     let onDelete: () -> Void
+    let onBlock: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -185,7 +233,10 @@ private struct CommentRow: View {
                 Spacer()
                 Menu {
                     if canDelete { Button("Удалить", role: .destructive, action: onDelete) }
-                    else { Button("Пожаловаться", role: .destructive, action: onReport) }
+                    else {
+                        Button("Пожаловаться", role: .destructive, action: onReport)
+                        if canBlock { Button("Заблокировать пользователя", role: .destructive, action: onBlock) }
+                    }
                 } label: {
                     Image(systemName: "ellipsis").foregroundStyle(AppTheme.secondaryText)
                 }
@@ -200,6 +251,87 @@ private struct CommentRow: View {
             .foregroundStyle(AppTheme.secondaryText)
         }
         .padding(.vertical, 6)
+    }
+}
+
+private struct BlockedViewersView: View {
+    let api: APIClient
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var viewerSession: ViewerSessionStore
+
+    @State private var blocks: [ViewerBlockDTO] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if viewerSession.viewer == nil {
+                    ContentUnavailableView(
+                        "Войди в аккаунт",
+                        systemImage: "person.badge.key",
+                        description: Text("Список блокировок доступен только владельцу аккаунта."))
+                } else if isLoading {
+                    ProgressView("Загружаем список…")
+                } else if blocks.isEmpty {
+                    ContentUnavailableView(
+                        "Заблокированных нет",
+                        systemImage: "person.crop.circle.badge.checkmark",
+                        description: Text("Здесь появятся пользователи, чьи комментарии ты скрыл."))
+                } else {
+                    List {
+                        if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(.footnote) }
+                        ForEach(blocks) { block in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(block.viewer?.displayName ?? "Пользователь")
+                                        .font(.body.weight(.semibold))
+                                    if let username = block.viewer?.username {
+                                        Text("@\(username)").font(.caption).foregroundStyle(AppTheme.secondaryText)
+                                    }
+                                }
+                                Spacer()
+                                Button("Разблокировать") { Task { await unblock(block) } }
+                                    .buttonStyle(.bordered)
+                            }
+                            .padding(.vertical, 3)
+                            .listRowBackground(AppTheme.surface)
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .refreshable { await load() }
+                }
+            }
+            .background(AppTheme.background)
+            .navigationTitle("Заблокированные")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+            isLoading = false
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            blocks = try await api.viewerBlocks(accessToken: token).items
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func unblock(_ block: ViewerBlockDTO) async {
+        guard let token = viewerSession.accessTokenForAuthenticatedRequest else { return }
+        do {
+            try await api.unblockViewer(id: block.id, accessToken: token)
+            blocks.removeAll { $0.id == block.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

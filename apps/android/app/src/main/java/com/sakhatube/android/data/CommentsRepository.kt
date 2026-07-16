@@ -48,6 +48,16 @@ class CommentsRepository(
         Unit
     }
 
+    /**
+     * The API deliberately accepts a comment id rather than exposing the
+     * author's internal account id in the public comments response. The server
+     * resolves the author and creates the viewer-specific block there.
+     */
+    suspend fun blockAuthor(commentId: String): Unit = withContext(Dispatchers.IO) {
+        request("/v1/comments/$commentId/block", "POST", null, requireToken(), setOf(201))
+        Unit
+    }
+
     fun currentViewerId(): String? = sessionStore.current()?.viewer?.id
     fun isSignedIn(): Boolean = sessionStore.current() != null
 

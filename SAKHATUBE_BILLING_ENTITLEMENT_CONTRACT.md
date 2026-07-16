@@ -1,6 +1,6 @@
 # SakhaTube — контракт биллинга и прав просмотра
 
-Статус: **контракт и fail-closed защита готовы; интеграция с магазинами не реализована.**
+Статус: **контракт, fail-closed transport endpoints и защита готовы; интеграция с магазинами не реализована.**
 
 Этот документ задаёт единственный допустимый путь от покупки к просмотру. Он не является инструкцией «включить платежи» и не означает, что StoreKit 2, Google Play Billing, Apple App Store Server API, RTDN или Google Play Developer API уже подключены.
 
@@ -89,7 +89,16 @@
 | `GET /v1/me/entitlements` | Показать серверные права без receipt/token | Подтверждённый viewer |
 | `POST /v1/billing/restore` | Пересверить покупки, не доверяя клиенту | Подтверждённый viewer |
 
-Ни один из этих endpoint-ов пока не добавлен намеренно: незавершённая интеграция не должна выглядеть как работающая покупка.
+Клиентские endpoint-ы уже существуют как безопасный транспортный каркас. Пока проверка Apple/Google не реализована, они отвечают `503 BILLING_VALIDATION_UNAVAILABLE`, не записывают raw receipt/JWS/token в логи и **никогда не создают entitlement**. Webhook endpoint-ы отвечают `503 BILLING_WEBHOOK_UNAVAILABLE` до появления проверки подписи и дедупликации.
+
+### Защищённая конфигурация каркаса
+
+`BILLING_PRODUCT_CATALOG_JSON` содержит только серверный список продуктов. Каждый продукт обязан иметь уникальные `productKey`, `appleProductId` и `googlePlayProductId`; клиент не может подменить их. При подготовке реального валидатора используются только production secrets:
+
+- `APPLE_APP_BUNDLE_ID`, `APPLE_APP_STORE_ISSUER_ID`, `APPLE_APP_STORE_KEY_ID`, `APPLE_APP_STORE_PRIVATE_KEY`;
+- `GOOGLE_PLAY_PACKAGE_NAME`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`.
+
+Частично заданные Apple credentials и некорректный Google service account блокируют запуск. Наличие этих переменных само по себе не включает платежи и не даёт доступ — нужен отдельный завершённый validator, event/entitlement storage, notification verification и security review.
 
 ## Критерии включения production-платежей
 

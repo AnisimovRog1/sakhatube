@@ -50,5 +50,20 @@ class CommentsViewModel(application: Application) : AndroidViewModel(application
             .onFailure { _state.value = _state.value.copy(error = it.message ?: "Не удалось удалить комментарий.") }
     }
 
+    fun blockAuthor(commentId: String) = viewModelScope.launch {
+        runCatching { repository.blockAuthor(commentId) }
+            .onSuccess {
+                // The service filters every current and future public comment
+                // from this author for the signed-in viewer. Reload instead of
+                // inferring author identity on-device.
+                _state.value = _state.value.copy(
+                    items = _state.value.items.filterNot { it.id == commentId },
+                    notice = "Пользователь заблокирован. Его комментарии больше не будут показаны.",
+                    error = null
+                )
+            }
+            .onFailure { _state.value = _state.value.copy(error = it.message ?: "Не удалось заблокировать пользователя.") }
+    }
+
     fun clearMessage() { _state.value = _state.value.copy(error = null, notice = null) }
 }

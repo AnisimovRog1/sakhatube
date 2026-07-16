@@ -1166,5 +1166,66 @@ test('production fails closed when PAYMENTS_ENABLED is requested without a store
   const body = JSON.parse(health.body);
   assert.equal(body.payments, 'disabled');
   assert.equal(body.billing.status, 'blocked_not_implemented');
+  assert.equal(body.billing.serverValidation, 'scaffold_fail_closed');
   assert.equal(body.billing.entitlementGrants, 'blocked');
+});
+
+test('billing transport is authenticated, validates configuration, and fails closed without granting access', async (t) => {
+  const app = await createTestApp({
+    appleAppBundleId: 'com.sakhatube.app',
+    googlePlayPackageName: 'com.sakhatube.app',
+    billingProductCatalogJson: JSON.stringify([{
+      productKey: 'premium_monthly', kind: 'subscription',
+      appleProductId: 'com.sakhatube.premium.monthly',
+      googlePlayProductId: 'premium_monthly', contentScope: 'all_premium',
+      territories: ['RU'], active: true
+    }])
+  });
+  t.after(() => app.close());
+  const viewer = await verifiedViewer(app, { email: 'billing@example.com', displayName: 'Покупатель' });
+  const unauthenticated = await app.inject({ method: 'POST', url: '/v1/billing/ios/transactions', payload: { signedTransaction: 'x'.repeat(200) } });
+  assert.equal(unauthenticated.statusCode, 401);
+
+  const apple = await app.inject({
+    method: 'POST', url: '/v1/billing/ios/transactions',
+    headers: { authorization: `Bearer ${viewer.accessToken}` },
+    payload: { signedTransaction: 'signed-storekit-jws.'.repeat(12) }
+  });
+  assert.equal(apple.statusCode, 503);
+  assert.equal(JSON.parse(apple.body).error, 'BILLING_VALIDATION_UNAVAILABLE');
+
+  const android = await app.inject({
+    method: 'POST', url: '/v1/billing/android/purchases',
+    headers: { authorization: `Bearer ${viewer.accessToken}` },
+    payload: { productKey: 'premium_monthly', purchaseToken: 'purchase-token-for-test-only-123456789' }
+  });
+  assert.equal(android.statusCode, 503);
+  assert.equal(JSON.parse(android.body).error, 'BILLING_VALIDATION_UNAVAILABLE');
+
+  const unknownProduct = await app.inject({
+    method: 'POST', url: '/v1/billing/android/purchases',
+    headers: { authorization: `Bearer ${viewer.accessToken}` },
+    payload: { productKey: 'other_monthly', purchaseToken: 'purchase-token-for-test-only-123456789' }
+  });
+  assert.equal(unknownProduct.statusCode, 400);
+
+  const entitlements = await app.inject({ method: 'GET', url: '/v1/me/entitlements', headers: { authorization: `Bearer ${viewer.accessToken}` } });
+  assert.equal(entitlements.statusCode, 200);
+  assert.deepEqual(JSON.parse(entitlements.body).items, []);
+  const webhook = await app.inject({ method: 'POST', url: '/v1/billing/apple/notifications', payload: { signedPayload: 'not-trusted' } });
+  assert.equal(webhook.statusCode, 503);
+});
+
+test('billing configuration rejects partial Apple credentials and duplicate store product IDs', () => {
+  assert.throws(() => buildApp({
+    appleAppStoreIssuerId: 'issuer-only',
+    jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters'
+  }), /Apple billing credentials/);
+  assert.throws(() => buildApp({
+    jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters',
+    billingProductCatalogJson: JSON.stringify([
+      { productKey: 'premium_monthly', kind: 'subscription', appleProductId: 'com.sakhatube.premium', googlePlayProductId: 'premium_monthly', contentScope: 'all_premium', territories: ['RU'], active: true },
+      { productKey: 'premium_yearly', kind: 'subscription', appleProductId: 'com.sakhatube.premium', googlePlayProductId: 'premium_yearly', contentScope: 'all_premium', territories: ['RU'], active: true }
+    ])
+  }), /повторяющиеся product ID/);
 });

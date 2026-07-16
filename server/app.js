@@ -602,6 +602,28 @@ const firebaseExchangeInput = z.object({
   username: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/, 'Логин: 3–32 символа, латиница, цифры, точка, дефис или подчёркивание').optional(),
   displayName: z.string().trim().min(2).max(60).optional()
 }).strict();
+// Purchase credentials are deliberately accepted only by server endpoints and
+// are never placed in audit records or error responses.  These schemas are a
+// transport contract, not proof of a purchase.
+const appleTransactionInput = z.object({
+  signedTransaction: z.string().trim().min(100).max(32_768)
+}).strict();
+const googlePurchaseInput = z.object({
+  productKey: z.string().trim().regex(/^[a-z][a-z0-9_]{2,63}$/),
+  purchaseToken: z.string().trim().min(20).max(4_096)
+}).strict();
+const billingRestoreInput = z.object({
+  platform: z.enum(['ios', 'android'])
+}).strict();
+const billingProductConfig = z.object({
+  productKey: z.string().trim().regex(/^[a-z][a-z0-9_]{2,63}$/),
+  kind: z.enum(['subscription', 'one_time_purchase']),
+  appleProductId: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/),
+  googlePlayProductId: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/),
+  contentScope: z.string().trim().min(3).max(160),
+  territories: z.array(z.string().trim().min(2).max(16)).min(1).max(250),
+  active: z.boolean()
+}).strict();
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
   sessionId: z.string().min(16).max(128),
@@ -657,23 +679,81 @@ function sourceVideoExtension(fileName, contentType) {
   return extension;
 }
 
+function parseBillingProductCatalog(rawCatalog) {
+  if (!rawCatalog) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(rawCatalog);
+  } catch {
+    throw new Error('BILLING_PRODUCT_CATALOG_JSON должен быть корректным JSON');
+  }
+  const result = z.array(billingProductConfig).max(100).safeParse(parsed);
+  if (!result.success) throw new Error('BILLING_PRODUCT_CATALOG_JSON содержит некорректный продукт');
+  const keys = new Set();
+  const appleIds = new Set();
+  const googleIds = new Set();
+  for (const product of result.data) {
+    if (keys.has(product.productKey) || appleIds.has(product.appleProductId) || googleIds.has(product.googlePlayProductId)) {
+      throw new Error('BILLING_PRODUCT_CATALOG_JSON содержит повторяющиеся product ID');
+    }
+    keys.add(product.productKey);
+    appleIds.add(product.appleProductId);
+    googleIds.add(product.googlePlayProductId);
+  }
+  return result.data;
+}
+
+function billingCredentialConfiguration({ appleIssuerId, appleKeyId, applePrivateKey, googleServiceAccountJson }) {
+  const appleConfiguredParts = [appleIssuerId, appleKeyId, applePrivateKey].filter(Boolean).length;
+  if (appleConfiguredParts > 0 && appleConfiguredParts !== 3) {
+    throw new Error('Apple billing credentials должны быть заданы все вместе: APPLE_APP_STORE_ISSUER_ID, APPLE_APP_STORE_KEY_ID, APPLE_APP_STORE_PRIVATE_KEY');
+  }
+  if (googleServiceAccountJson) {
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(googleServiceAccountJson);
+    } catch {
+      throw new Error('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON должен быть корректным JSON');
+    }
+    if (!serviceAccount || typeof serviceAccount.client_email !== 'string' || typeof serviceAccount.private_key !== 'string' || typeof serviceAccount.project_id !== 'string') {
+      throw new Error('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON не содержит service account для Google Play');
+    }
+  }
+  return {
+    appleConfigured: appleConfiguredParts === 3,
+    googleConfigured: Boolean(googleServiceAccountJson)
+  };
+}
+
 function configFrom(overrides = {}) {
   const railwayHost = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
   const production = (overrides.nodeEnv ?? process.env.NODE_ENV) === 'production' || railwayHost;
   const jwtSecret = overrides.jwtSecret ?? process.env.JWT_SECRET ?? 'local-development-secret-change-before-production';
   const allowedOrigins = overrides.allowedOrigins ?? (process.env.ALLOWED_ORIGINS || 'http://localhost:4173,http://localhost:3000').split(',').map((item) => item.trim()).filter(Boolean);
   const allowDemoStore = overrides.allowDemoStore ?? process.env.ALLOW_DEMO_STORE === 'true';
-  // A visual paywall is not a payment implementation. No environment variable
-  // can grant a commercial entitlement: this server has no StoreKit / Google
-  // Play receipt validator or verified store-notification handler yet.
+  // A visual paywall is not a payment implementation.  The endpoints below
+  // intentionally remain fail-closed until official server validators and
+  // notification verification are implemented and independently reviewed.
   const paymentsRequested = overrides.paymentsEnabled ?? process.env.PAYMENTS_ENABLED === 'true';
+  const billingProducts = parseBillingProductCatalog(overrides.billingProductCatalogJson ?? process.env.BILLING_PRODUCT_CATALOG_JSON ?? '');
+  const appleAppBundleId = overrides.appleAppBundleId ?? process.env.APPLE_APP_BUNDLE_ID ?? '';
+  const googlePlayPackageName = overrides.googlePlayPackageName ?? process.env.GOOGLE_PLAY_PACKAGE_NAME ?? '';
+  const billingCredentials = billingCredentialConfiguration({
+    appleIssuerId: overrides.appleAppStoreIssuerId ?? process.env.APPLE_APP_STORE_ISSUER_ID ?? '',
+    appleKeyId: overrides.appleAppStoreKeyId ?? process.env.APPLE_APP_STORE_KEY_ID ?? '',
+    applePrivateKey: overrides.appleAppStorePrivateKey ?? process.env.APPLE_APP_STORE_PRIVATE_KEY ?? '',
+    googleServiceAccountJson: overrides.googlePlayServiceAccountJson ?? process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON ?? ''
+  });
   const billing = {
     contractVersion: billingContractVersion,
     requested: Boolean(paymentsRequested),
-    serverValidation: 'not_implemented',
+    serverValidation: 'scaffold_fail_closed',
     entitlementGrants: 'blocked',
     status: paymentsRequested ? 'blocked_not_implemented' : 'disabled',
-    canGrantEntitlements: false
+    canGrantEntitlements: false,
+    productsConfigured: billingProducts.length,
+    appleValidatorConfigured: billingCredentials.appleConfigured && Boolean(appleAppBundleId),
+    googleValidatorConfigured: billingCredentials.googleConfigured && Boolean(googlePlayPackageName)
   };
   const paymentsEnabled = !production && Boolean(paymentsRequested);
   const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
@@ -712,7 +792,7 @@ function configFrom(overrides = {}) {
   if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
   if (production && mediaWorkerEnabled && mediaWorkerToken.length < 32) throw new Error('MEDIA_WORKER_TOKEN должен содержать не менее 32 символов в production');
   if ((firebaseProjectId && !firebaseServiceAccountJson) || (!firebaseProjectId && firebaseServiceAccountJson)) throw new Error('Для Firebase укажи и FIREBASE_PROJECT_ID, и FIREBASE_SERVICE_ACCOUNT_JSON');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseWebApiKey, firebaseAuthDomain, firebaseWebAppId, firebaseVerifier };
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, billingProducts, appleAppBundleId, googlePlayPackageName, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseWebApiKey, firebaseAuthDomain, firebaseWebAppId, firebaseVerifier };
 }
 
 function firebaseVerifierFrom(config) {
@@ -1170,7 +1250,7 @@ export function buildApp(options = {}) {
     };
   };
 
-  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', payments: config.paymentsEnabled ? 'development-only' : 'disabled', billing: { contractVersion: config.billing.contractVersion, status: config.billing.status, serverValidation: config.billing.serverValidation, entitlementGrants: config.billing.entitlementGrants }, time: now() }));
+  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', payments: config.paymentsEnabled ? 'development-only' : 'disabled', billing: { contractVersion: config.billing.contractVersion, status: config.billing.status, serverValidation: config.billing.serverValidation, entitlementGrants: config.billing.entitlementGrants, productsConfigured: config.billing.productsConfigured, appleValidatorConfigured: config.billing.appleValidatorConfigured, googleValidatorConfigured: config.billing.googleValidatorConfigured }, time: now() }));
 
   // Local-only bootstrap. A production Studio must delegate identity to an OIDC provider.
   app.post('/v1/dev/token', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -1477,6 +1557,74 @@ export function buildApp(options = {}) {
     if (!account || account.status !== 'active') return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Сессия недействительна' });
     return { viewer: viewerAccountPublic(account) };
   });
+
+  // These routes are intentionally usable by native clients now, but no
+  // request can grant access until official Apple/Google verification is
+  // implemented server-side.  In particular, do not add a client-side
+  // "validated" flag or turn PAYMENTS_ENABLED into an entitlement switch.
+  const verifiedBillingViewer = async (request, reply) => {
+    const account = await store.getViewerAccount(request.user.sub);
+    if (!account || account.status !== 'active' || !account.emailVerifiedAt) {
+      reply.code(403).send({ error: 'VERIFIED_VIEWER_REQUIRED', message: 'Подтверди e-mail, чтобы управлять покупками.' });
+      return null;
+    }
+    return account;
+  };
+  const billingUnavailable = (reply) => reply.code(503).send({
+    error: 'BILLING_VALIDATION_UNAVAILABLE',
+    message: 'Проверка покупок временно недоступна. Доступ не был выдан.'
+  });
+
+  app.get('/v1/me/entitlements', { preHandler: app.requireViewer }, async (request, reply) => {
+    const account = await verifiedBillingViewer(request, reply);
+    if (!account) return;
+    // Never infer an entitlement from a device receipt or the UI.  Once the
+    // immutable event/entitlement store exists this remains the only public
+    // read model, with no receipt/JWS/token fields in its response.
+    return { items: [], status: 'validation_unavailable' };
+  });
+
+  app.post('/v1/billing/ios/transactions', { preHandler: app.requireViewer, bodyLimit: 40 * 1024, config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const account = await verifiedBillingViewer(request, reply);
+    if (!account) return;
+    if (!config.appleAppBundleId || !config.billingProducts.length) return billingUnavailable(reply);
+    const body = parseOrReply(appleTransactionInput, request.body, reply);
+    if (!body) return;
+    // `signedTransaction` intentionally goes no further than this boundary
+    // until a signature, bundle ID, product, transaction status and refund
+    // validator is implemented.  Do not log it or persist it in audit data.
+    await audit(request, 'billing.apple.transaction.rejected_unavailable', 'viewer_account', account.id, null, { platform: 'ios', reason: 'validator_unavailable' }, { id: account.id, roles: ['viewer'] });
+    return billingUnavailable(reply);
+  });
+
+  app.post('/v1/billing/android/purchases', { preHandler: app.requireViewer, bodyLimit: 8 * 1024, config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const account = await verifiedBillingViewer(request, reply);
+    if (!account) return;
+    if (!config.googlePlayPackageName || !config.billingProducts.length) return billingUnavailable(reply);
+    const body = parseOrReply(googlePurchaseInput, request.body, reply);
+    if (!body) return;
+    const product = config.billingProducts.find((item) => item.productKey === body.productKey && item.active);
+    if (!product) return reply.code(400).send({ error: 'UNKNOWN_BILLING_PRODUCT', message: 'Этот продукт недоступен.' });
+    // The token is deliberately neither logged nor persisted.  It must later
+    // be checked against Google Play Developer API before an event is written.
+    await audit(request, 'billing.google.purchase.rejected_unavailable', 'viewer_account', account.id, null, { platform: 'android', productKey: product.productKey, reason: 'validator_unavailable' }, { id: account.id, roles: ['viewer'] });
+    return billingUnavailable(reply);
+  });
+
+  app.post('/v1/billing/restore', { preHandler: app.requireViewer, config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const account = await verifiedBillingViewer(request, reply);
+    if (!account) return;
+    const body = parseOrReply(billingRestoreInput, request.body, reply);
+    if (!body) return;
+    await audit(request, 'billing.restore.rejected_unavailable', 'viewer_account', account.id, null, { platform: body.platform, reason: 'validator_unavailable' }, { id: account.id, roles: ['viewer'] });
+    return billingUnavailable(reply);
+  });
+
+  // Store webhooks must be signature-verified and deduplicated before their
+  // body is trusted.  Until that implementation exists, reject them without
+  // reading, logging or recording the signed payload.
+  app.post('/v1/billing/apple/notifications', { bodyLimit: 40 * 1024, config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (_request, reply) => reply.code(503).send({ error: 'BILLING_WEBHOOK_UNAVAILABLE' }));
+  app.post('/v1/billing/google/rtdn', { bodyLimit: 40 * 1024, config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (_request, reply) => reply.code(503).send({ error: 'BILLING_WEBHOOK_UNAVAILABLE' }));
 
   app.get('/v1/admin/overview', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'moderator', 'analyst']) }, async () => store.overview());
   app.get('/v1/admin/content', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'analyst']) }, async () => ({ items: await store.listContent() }));

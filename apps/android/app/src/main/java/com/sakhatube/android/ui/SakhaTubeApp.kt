@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -369,6 +370,7 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
     val state by viewModel.state.collectAsStateWithLifecycle()
     var text by remember(contentId) { mutableStateOf("") }
     var reportTarget by remember { mutableStateOf<ViewerComment?>(null) }
+    var blockTarget by remember { mutableStateOf<ViewerComment?>(null) }
     LaunchedEffect(contentId) { viewModel.load(contentId) }
 
     if (reportTarget != null) {
@@ -378,6 +380,21 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
             text = { Text("Жалоба будет отправлена модераторам. Мы не сообщим автору, кто её отправил.") },
             confirmButton = { TextButton(onClick = { viewModel.report(reportTarget!!.id); reportTarget = null }) { Text("Отправить") } },
             dismissButton = { TextButton(onClick = { reportTarget = null }) { Text("Отмена") } }
+        )
+    }
+
+    if (blockTarget != null) {
+        AlertDialog(
+            onDismissRequest = { blockTarget = null },
+            title = { Text("Заблокировать пользователя?") },
+            text = { Text("Его комментарии будут скрыты для тебя. Пользователь не получит уведомление о блокировке.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.blockAuthor(blockTarget!!.id)
+                    blockTarget = null
+                }) { Text("Заблокировать") }
+            },
+            dismissButton = { TextButton(onClick = { blockTarget = null }) { Text("Отмена") } }
         )
     }
 
@@ -415,7 +432,16 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         Text(comment.authorName, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                         if (comment.status != null) Text("На модерации", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        else if (viewModel.signedIn()) IconButton(onClick = { reportTarget = comment }, modifier = Modifier.size(36.dp)) { Icon(Icons.Outlined.Flag, contentDescription = "Пожаловаться") }
+                        else if (viewModel.signedIn()) {
+                            Row {
+                                IconButton(onClick = { reportTarget = comment }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Outlined.Flag, contentDescription = "Пожаловаться")
+                                }
+                                IconButton(onClick = { blockTarget = comment }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Outlined.Block, contentDescription = "Заблокировать автора")
+                                }
+                            }
+                        }
                     }
                     Text(comment.text)
                     if (comment.status != null) TextButton(onClick = { viewModel.delete(comment.id) }) { Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Удалить") }

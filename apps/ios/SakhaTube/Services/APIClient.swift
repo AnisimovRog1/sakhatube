@@ -180,6 +180,24 @@ actor APIClient {
         try await requestNoContent(url, method: "POST", bearerToken: accessToken)
     }
 
+    /// Blocks the approved comment author for the current viewer. The server
+    /// owns the author identity, so the client never receives or stores a
+    /// private account identifier merely to perform this action.
+    func blockCommentAuthor(id: String, accessToken: String) async throws -> ViewerBlockResponse {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/comments/\(id)/block")
+        return try await request(url, method: "POST", body: EmptyRequest(), bearerToken: accessToken)
+    }
+
+    func viewerBlocks(accessToken: String) async throws -> ViewerBlockListResponse {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/viewer/blocks")
+        return try await request(url, bearerToken: accessToken)
+    }
+
+    func unblockViewer(id: String, accessToken: String) async throws {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/viewer/blocks/\(id)")
+        try await requestNoContent(url, method: "DELETE", bearerToken: accessToken)
+    }
+
     private func request<Response: Decodable>(_ url: URL) async throws -> Response {
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
@@ -313,6 +331,26 @@ struct CommentCreateResponse: Decodable, Sendable {
     let message: String
 }
 
+struct ViewerBlockResponse: Decodable, Sendable {
+    let item: ViewerBlockDTO
+}
+
+struct ViewerBlockListResponse: Decodable, Sendable {
+    let items: [ViewerBlockDTO]
+}
+
+struct ViewerBlockDTO: Decodable, Identifiable, Sendable, Equatable {
+    let id: String
+    let createdAt: String
+    let viewer: BlockedViewerDTO?
+}
+
+struct BlockedViewerDTO: Decodable, Sendable, Equatable {
+    let id: String
+    let username: String
+    let displayName: String
+}
+
 struct ViewerCommentDTO: Decodable, Identifiable, Sendable, Equatable {
     let id: String
     let contentId: String
@@ -341,6 +379,7 @@ enum CommentReportReason: String, Encodable, CaseIterable, Identifiable, Sendabl
 
 private struct CommentCreateRequest: Encodable, Sendable { let text: String }
 private struct CommentReportRequest: Encodable, Sendable { let reason: CommentReportReason }
+private struct EmptyRequest: Encodable, Sendable {}
 
 struct ViewerRegistrationResponse: Decodable, Sendable {
     let status: String
