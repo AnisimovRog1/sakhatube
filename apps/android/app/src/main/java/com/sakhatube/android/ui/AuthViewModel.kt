@@ -18,17 +18,17 @@ class AuthViewModel(
     private val _deletionState = MutableStateFlow<DeletionUiState>(DeletionUiState.Idle)
     val deletionState: StateFlow<DeletionUiState> = _deletionState.asStateFlow()
 
-    fun register(email: String, password: CharArray, displayName: String) = runAuth(
+    fun register(email: String, username: String, password: CharArray, displayName: String) = runAuth(
         inProgress = AuthUiState.Registering,
         success = { AuthUiState.VerificationRequired(it) }
     ) {
-        try { repository.register(email, password, displayName) } finally { password.fill('\u0000') }
+        try { repository.register(email, username, password, displayName) } finally { password.fill('\u0000') }
     }
 
-    fun login(email: String, password: CharArray) = runAuth(
+    fun login(login: String, password: CharArray) = runAuth(
         inProgress = AuthUiState.SigningIn,
         success = { AuthUiState.SignedIn(it.viewer) }
-    ) { try { repository.login(email, password) } finally { password.fill('\u0000') } }
+    ) { try { repository.login(login, password) } finally { password.fill('\u0000') } }
 
     fun verifyEmail(verificationLink: String) = runAuth(
         inProgress = AuthUiState.VerifyingEmail,

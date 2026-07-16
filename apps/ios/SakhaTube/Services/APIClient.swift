@@ -86,12 +86,12 @@ actor APIClient {
     /// Passwords are supplied only for this HTTPS request and are never persisted
     /// by the client. The server deliberately returns a generic registration
     /// response to avoid revealing whether an email already has an account.
-    func registerViewer(email: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse {
+    func registerViewer(email: String, username: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse {
         let url = AppConfiguration.apiBaseURL.appending(path: "v1/auth/register")
         return try await request(
             url,
             method: "POST",
-            body: ViewerRegistrationRequest(email: email, password: password, displayName: displayName)
+            body: ViewerRegistrationRequest(email: email, username: username, password: password, displayName: displayName)
         )
     }
 
@@ -100,9 +100,9 @@ actor APIClient {
         return try await request(url, method: "POST", body: ViewerEmailVerificationRequest(accountId: accountId, token: token))
     }
 
-    func loginViewer(email: String, password: String) async throws -> ViewerSessionResponse {
+    func loginViewer(login: String, password: String) async throws -> ViewerSessionResponse {
         let url = AppConfiguration.apiBaseURL.appending(path: "v1/auth/login")
-        return try await request(url, method: "POST", body: ViewerLoginRequest(email: email, password: password))
+        return try await request(url, method: "POST", body: ViewerLoginRequest(login: login, password: password))
     }
 
     func viewerMe(accessToken: String) async throws -> ViewerMeResponse {
@@ -219,6 +219,7 @@ actor APIClient {
 
 private struct ViewerRegistrationRequest: Encodable, Sendable {
     let email: String
+    let username: String
     let password: String
     let displayName: String?
 }
@@ -229,7 +230,7 @@ private struct ViewerEmailVerificationRequest: Encodable, Sendable {
 }
 
 private struct ViewerLoginRequest: Encodable, Sendable {
-    let email: String
+    let login: String
     let password: String
 }
 
@@ -271,8 +272,10 @@ struct ViewerMeResponse: Decodable, Sendable {
 struct ViewerDTO: Decodable, Sendable, Equatable {
     let id: String
     let email: String
+    let username: String
     let displayName: String
-    let emailVerifiedAt: String?
+    let status: String
+    let createdAt: String?
 }
 
 // MARK: - Protected playback transport

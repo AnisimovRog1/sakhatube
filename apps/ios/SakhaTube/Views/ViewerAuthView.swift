@@ -6,6 +6,8 @@ struct ViewerAuthView: View {
 
     @State private var mode: Mode = .signIn
     @State private var email = ""
+    @State private var username = ""
+    @State private var login = ""
     @State private var password = ""
     @State private var displayName = ""
     @State private var verificationLink = ""
@@ -31,10 +33,10 @@ struct ViewerAuthView: View {
 
                 switch mode {
                 case .signIn:
-                    credentialsFields(includeName: false)
+                    signInFields
                     submitButton("Войти") { await signIn() }
                 case .signUp:
-                    credentialsFields(includeName: true)
+                    signUpFields
                     submitButton("Отправить письмо") { await signUp() }
                 case .verify:
                     Section("Ссылка из письма") {
@@ -69,20 +71,32 @@ struct ViewerAuthView: View {
         }
     }
 
-    @ViewBuilder
-    private func credentialsFields(includeName: Bool) -> some View {
+    private var signInFields: some View {
         Section {
-            if includeName {
-                TextField("Имя", text: $displayName)
-                    .textContentType(.nickname)
-            }
+            TextField("Логин или e-mail", text: $login)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textContentType(.username)
+            SecureField("Пароль", text: $password)
+                .textContentType(.password)
+        }
+    }
+
+    private var signUpFields: some View {
+        Section {
+            TextField("Имя", text: $displayName)
+                .textContentType(.nickname)
+            TextField("Логин", text: $username)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textContentType(.username)
             TextField("Email", text: $email)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.emailAddress)
                 .textContentType(.emailAddress)
             SecureField("Пароль (от 12 символов)", text: $password)
-                .textContentType(includeName ? .newPassword : .password)
+                .textContentType(.newPassword)
         }
     }
 
@@ -101,7 +115,7 @@ struct ViewerAuthView: View {
     private func signIn() async {
         resetFeedback()
         do {
-            try await viewerSession.login(email: email, password: password)
+            try await viewerSession.login(login: login, password: password)
             dismiss()
         } catch { errorMessage = error.userFacingAuthMessage }
     }
@@ -109,7 +123,7 @@ struct ViewerAuthView: View {
     private func signUp() async {
         resetFeedback()
         do {
-            let response = try await viewerSession.register(email: email, password: password, displayName: displayName.nilIfBlank)
+            let response = try await viewerSession.register(email: email, username: username, password: password, displayName: displayName.nilIfBlank)
             message = response.message
             mode = .verify
         } catch { errorMessage = error.userFacingAuthMessage }

@@ -511,6 +511,8 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
     val deletionState by authViewModel.deletionState.collectAsStateWithLifecycle()
     var isShowingDeletion by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var login by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
     var verificationLink by remember { mutableStateOf("") }
@@ -530,6 +532,8 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
             when (authState) {
                 is AuthUiState.SignedIn -> SignedInProfileCard(
                     viewerName = authState.viewer.displayName,
+                    username = authState.viewer.username,
+                    publicId = authState.viewer.id,
                     email = authState.viewer.email,
                     onSignOut = authViewModel::signOut,
                     onRequestDeletion = {
@@ -540,21 +544,25 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
                 else -> AuthCard(
                     mode = mode,
                     email = email,
+                    username = username,
+                    login = login,
                     password = password,
                     displayName = displayName,
                     verificationLink = verificationLink,
                     state = authState,
                     onModeChange = { mode = it; authViewModel.dismissError() },
                     onEmailChange = { email = it },
+                    onUsernameChange = { username = it },
+                    onLoginChange = { login = it },
                     onPasswordChange = { password = it },
                     onDisplayNameChange = { displayName = it },
                     onVerificationLinkChange = { verificationLink = it },
                     onRegister = {
-                        authViewModel.register(email, password.toCharArray(), displayName)
+                        authViewModel.register(email, username, password.toCharArray(), displayName)
                         password = ""
                     },
                     onLogin = {
-                        authViewModel.login(email, password.toCharArray())
+                        authViewModel.login(login, password.toCharArray())
                         password = ""
                     },
                     onVerify = {
@@ -611,6 +619,8 @@ private enum class ProfileMode { SignIn, Register, Verify }
 @Composable
 private fun SignedInProfileCard(
     viewerName: String,
+    username: String,
+    publicId: String,
     email: String,
     onSignOut: () -> Unit,
     onRequestDeletion: () -> Unit
@@ -618,6 +628,7 @@ private fun SignedInProfileCard(
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Text(viewerName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("@$username · ID $publicId", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(email, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
                 "Сессия действует только до закрытия приложения: токен не записывается в память устройства.",
@@ -695,12 +706,16 @@ private fun DeletionRequestDialog(
 private fun AuthCard(
     mode: ProfileMode,
     email: String,
+    username: String,
+    login: String,
     password: String,
     displayName: String,
     verificationLink: String,
     state: AuthUiState,
     onModeChange: (ProfileMode) -> Unit,
     onEmailChange: (String) -> Unit,
+    onUsernameChange: (String) -> Unit,
+    onLoginChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onDisplayNameChange: (String) -> Unit,
     onVerificationLinkChange: (String) -> Unit,
@@ -724,8 +739,11 @@ private fun AuthCard(
                 ProfileMode.SignIn, ProfileMode.Register -> {
                     if (mode == ProfileMode.Register) {
                         AppField("Имя", displayName, onDisplayNameChange, enabled = !pending)
+                        AppField("Логин", username, onUsernameChange, enabled = !pending)
+                        AppField("E-mail", email, onEmailChange, enabled = !pending, keyboardType = KeyboardType.Email)
+                    } else {
+                        AppField("Логин или e-mail", login, onLoginChange, enabled = !pending)
                     }
-                    AppField("E-mail", email, onEmailChange, enabled = !pending, keyboardType = KeyboardType.Email)
                     AppField("Пароль", password, onPasswordChange, enabled = !pending, password = true)
                     if (mode == ProfileMode.Register) {
                         Text("Минимум 12 символов. Пароль не сохраняется на устройстве.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -748,8 +766,8 @@ private fun AuthCard(
                     ProfileMode.Verify -> onVerify
                 },
                 enabled = !pending && when (mode) {
-                    ProfileMode.SignIn -> email.isNotBlank() && password.isNotBlank()
-                    ProfileMode.Register -> email.isNotBlank() && password.length >= 12 && displayName.trim().length >= 2
+                    ProfileMode.SignIn -> login.isNotBlank() && password.isNotBlank()
+                    ProfileMode.Register -> email.isNotBlank() && username.trim().length >= 3 && password.length >= 12 && displayName.trim().length >= 2
                     ProfileMode.Verify -> verificationLink.isNotBlank()
                 }
             ) {

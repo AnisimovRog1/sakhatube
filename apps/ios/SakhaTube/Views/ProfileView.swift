@@ -42,9 +42,18 @@ struct ProfileView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(viewerSession.viewer?.displayName ?? "Гостевой режим")
                                 .font(.title3.weight(.bold))
-                            Text(viewerSession.viewer?.email ?? "Аватар остаётся только в текущем сеансе и не отправляется на сервер.")
-                                .font(.subheadline)
-                                .foregroundStyle(AppTheme.secondaryText)
+                            if let viewer = viewerSession.viewer {
+                                Text("@\(viewer.username) · ID \(viewer.id)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(AppTheme.secondaryText)
+                                Text(viewer.email)
+                                    .font(.subheadline)
+                                    .foregroundStyle(AppTheme.secondaryText)
+                            } else {
+                                Text("Аватар остаётся только в текущем сеансе и не отправляется на сервер.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(AppTheme.secondaryText)
+                            }
                         }
                         Spacer()
                     }

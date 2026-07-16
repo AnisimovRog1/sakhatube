@@ -5,9 +5,9 @@ import Security
 /// additive server feature: the app does not invent refresh tokens or pretend
 /// that an expired access token is a persistent sign-in.
 protocol ViewerAuthServing: Sendable {
-    func registerViewer(email: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse
+    func registerViewer(email: String, username: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse
     func verifyViewerEmail(accountId: String, token: String) async throws -> ViewerSessionResponse
-    func loginViewer(email: String, password: String) async throws -> ViewerSessionResponse
+    func loginViewer(login: String, password: String) async throws -> ViewerSessionResponse
     func viewerMe(accessToken: String) async throws -> ViewerMeResponse
 }
 
@@ -62,10 +62,10 @@ final class ViewerSessionStore: ObservableObject {
         return viewer
     }
 
-    func register(email: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse {
+    func register(email: String, username: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse {
         isWorking = true
         defer { isWorking = false }
-        return try await api.registerViewer(email: email, password: password, displayName: displayName)
+        return try await api.registerViewer(email: email, username: username, password: password, displayName: displayName)
     }
 
     func verifyEmail(link: String) async throws {
@@ -76,10 +76,10 @@ final class ViewerSessionStore: ObservableObject {
         accept(session)
     }
 
-    func login(email: String, password: String) async throws {
+    func login(login: String, password: String) async throws {
         isWorking = true
         defer { isWorking = false }
-        let session = try await api.loginViewer(email: email, password: password)
+        let session = try await api.loginViewer(login: login, password: password)
         accept(session)
     }
 

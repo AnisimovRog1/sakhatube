@@ -13,9 +13,10 @@ class AuthRepository(
     private val baseUrl: String = BuildConfig.AUTH_BASE_URL,
     private val sessionStore: ViewerSessionStore = InMemoryViewerSessionStore()
 ) {
-    suspend fun register(email: String, password: CharArray, displayName: String?): String = withContext(Dispatchers.IO) {
+    suspend fun register(email: String, username: String, password: CharArray, displayName: String?): String = withContext(Dispatchers.IO) {
         val body = JSONObject().apply {
             put("email", email.trim())
+            put("username", username.trim())
             put("password", password.concatToString())
             displayName?.trim()?.takeIf { it.isNotEmpty() }?.let { put("displayName", it) }
         }
@@ -25,9 +26,9 @@ class AuthRepository(
         )
     }
 
-    suspend fun login(email: String, password: CharArray): ViewerSession = withContext(Dispatchers.IO) {
+    suspend fun login(login: String, password: CharArray): ViewerSession = withContext(Dispatchers.IO) {
         val response = request("/v1/auth/login", "POST", JSONObject().apply {
-            put("email", email.trim())
+            put("login", login.trim())
             put("password", password.concatToString())
         })
         response.toSession().also(sessionStore::save)
@@ -132,7 +133,8 @@ private fun JSONObject.toSession(): ViewerSession {
 private fun JSONObject.toViewer(): ViewerAccount? {
     val id = optString("id").trim()
     val email = optString("email").trim()
+    val username = optString("username").trim()
     val displayName = optString("displayName").trim()
-    if (id.isEmpty() || email.isEmpty() || displayName.isEmpty()) return null
-    return ViewerAccount(id, email, displayName, optString("status").trim(), optString("createdAt").trim().ifBlank { null })
+    if (id.isEmpty() || email.isEmpty() || username.isEmpty() || displayName.isEmpty()) return null
+    return ViewerAccount(id, email, username, displayName, optString("status").trim(), optString("createdAt").trim().ifBlank { null })
 }

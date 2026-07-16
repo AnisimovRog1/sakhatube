@@ -8,6 +8,7 @@ package com.sakhatube.android.data
 data class ViewerAccount(
     val id: String,
     val email: String,
+    val username: String,
     val displayName: String,
     val status: String,
     val createdAt: String?
