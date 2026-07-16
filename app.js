@@ -13,7 +13,9 @@ const shows = [
   { title: 'Sintel: решение', meta: 'Бесплатно · CC BY 3.0 · 24 сек', poster: 'poster-four', posterUrl: ccTestAsset('posters/sintel-03.jpg'), genre: 'Драма', mp4: ccTestAsset('long/sintel-03.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · SINTEL · CC BY 3.0' },
   { title: 'Big Buck Bunny: утро', meta: 'Бесплатно · CC BY 3.0 · 30 сек', poster: 'poster-five', posterUrl: ccTestAsset('posters/bunny-01.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/bunny-01.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · BIG BUCK BUNNY · CC BY 3.0' },
   { title: 'Big Buck Bunny: навстречу', meta: 'Бесплатно · CC BY 3.0 · 30 сек', poster: 'poster-one', posterUrl: ccTestAsset('posters/bunny-02.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/bunny-02.mp4'), playerMeta: 'ЛЕГАЛЬНЫЙ ТЕСТ · BIG BUCK BUNNY · CC BY 3.0' },
-  { title: 'Elephants Dream', meta: 'Бесплатно · CC BY 3.0 · 10 мин', poster: 'poster-three', posterUrl: ccTestAsset('posters/elephants-dream.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/elephants-dream.mp4'), playerMeta: 'ОТКРЫТОЕ КИНО · ELEPHANTS DREAM · CC BY 3.0' }
+  { title: 'Elephants Dream', meta: 'Бесплатно · CC BY 3.0 · 10 мин', poster: 'poster-three', posterUrl: ccTestAsset('posters/elephants-dream.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/elephants-dream.mp4'), playerMeta: 'ОТКРЫТОЕ КИНО · ELEPHANTS DREAM · CC BY 3.0' },
+  { title: 'Cosmos Laundromat: First Cycle', meta: 'Бесплатно · CC BY 4.0 · 12 мин', poster: 'poster-two', posterUrl: ccTestAsset('posters/cosmos-laundromat.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/cosmos-laundromat.mp4'), playerMeta: 'ОТКРЫТОЕ КИНО · COSMOS LAUNDROMAT · CC BY 4.0' },
+  { title: 'Caminandes 3: Llamigos', meta: 'Бесплатно · CC BY 3.0 · 2 мин', poster: 'poster-five', posterUrl: ccTestAsset('posters/caminandes-llamigos.jpg'), genre: 'Анимация', mp4: ccTestAsset('long/caminandes-llamigos.mp4'), playerMeta: 'ОТКРЫТОЕ КИНО · CAMINANDES · CC BY 3.0' }
 ];
 
 const sintelShortCopy = [
