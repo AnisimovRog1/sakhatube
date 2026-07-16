@@ -735,12 +735,14 @@ function setAccountMode(mode) {
   accountDialog.querySelectorAll('.account-register-field').forEach((field) => { field.hidden = !register; });
   accountDialog.querySelectorAll('.account-login-field').forEach((field) => { field.hidden = register; });
   const loginLabel = document.querySelector('.account-login-field');
-  if (loginLabel?.firstChild) loginLabel.firstChild.textContent = firebaseEnabled ? 'E-mail для входа' : 'Логин или e-mail';
+  if (loginLabel?.firstChild) loginLabel.firstChild.textContent = firebaseEnabled ? 'E-mail' : 'Логин или e-mail';
   const loginInput = document.querySelector('#account-login');
   if (loginInput) {
     loginInput.type = firebaseEnabled ? 'email' : 'text';
     loginInput.inputMode = firebaseEnabled ? 'email' : 'text';
   }
+  const displayNameInput = document.querySelector('#account-display-name');
+  if (displayNameInput) displayNameInput.required = register;
   const usernameField = document.querySelector('#account-username')?.closest('label');
   if (usernameField) usernameField.hidden = !register;
   document.querySelector('#account-title').textContent = register ? 'Создать аккаунт' : 'Войти';
@@ -748,7 +750,7 @@ function setAccountMode(mode) {
   document.querySelector('#account-password').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
   document.querySelector('#account-recovery').hidden = register || !firebaseEnabled;
   document.querySelector('#account-hint').textContent = firebaseEnabled
-    ? (register ? 'Придумайте логин, укажите e-mail и пароль. Сначала подтвердите e-mail — ID появится после входа.' : 'Введите e-mail и пароль Firebase.')
+    ? (register ? 'Укажите имя, логин, e-mail и пароль. Подтвердите e-mail, затем войдите — ID появится после входа.' : 'Введите e-mail и пароль.')
     : register
     ? 'Придумайте логин и пароль. E-mail нужен только для подтверждения и восстановления. Постоянный ID появится после подтверждения аккаунта.'
     : 'Введите логин и пароль. Для ранних аккаунтов работает также e-mail.';
@@ -780,9 +782,9 @@ async function submitAccount(event) {
   const submit = document.querySelector('#account-submit');
   error.hidden = true;
   error.textContent = '';
-  if (!password || (mode === 'register' && (!username || !email || password.length < 12)) || (mode === 'login' && !login)) {
+  if (!password || (mode === 'register' && (!displayName || !username || !email || password.length < 12)) || (mode === 'login' && !login)) {
     error.textContent = mode === 'register'
-      ? 'Укажите логин, e-mail и пароль минимум из 12 символов.'
+      ? 'Укажите имя, логин, e-mail и пароль минимум из 12 символов.'
       : (firebaseEnabled ? 'Укажите e-mail и пароль.' : 'Укажите логин и пароль.');
     error.hidden = false;
     return;
