@@ -286,6 +286,28 @@ em { color: #dce9ff; font-style: normal; }
 .setting-switch input:checked + i { background: var(--primary); }
 .setting-switch input:checked + i::after { transform: translateX(17px); }
 .dialog-copy { margin: 0; padding: 20px; color: #cbd2dd; font-size: 14px; line-height: 1.55; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.comments-dialog { width: min(560px, calc(100vw - 32px)); }
+.comments-body { min-height: 180px; max-height: min(48vh, 470px); padding: 4px 20px 12px; overflow: auto; }
+.comments-status { margin: 14px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.comments-list { display: grid; gap: 2px; }
+.comment-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 13px 0; border-top: 1px solid rgba(255,255,255,.08); }
+.comment-item:first-child { border-top: 0; }
+.comment-author { display: block; margin-bottom: 4px; color: #f2f5fa; font-size: 13px; font-weight: 800; }
+.comment-meta { color: var(--muted); font-size: 11px; }
+.comment-text { margin: 7px 0 0; color: #dce2ec; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.comment-pending { margin-top: 7px; color: #98b9f3; font-size: 11px; font-weight: 700; }
+.comment-item-actions { display: flex; align-items: flex-start; gap: 5px; }
+.comment-item-actions button { min-width: 28px; min-height: 28px; padding: 0 8px; border: 1px solid #343842; border-radius: 8px; background: transparent; color: #aeb7c7; font-size: 11px; font-weight: 700; }
+.comment-item-actions button:hover, .comment-item-actions button:focus-visible { border-color: #6884b3; color: #eaf2ff; }
+.comments-empty { padding: 24px 0; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; }
+.comment-form { padding: 14px 20px 18px; border-top: 1px solid var(--line); }
+.comment-form textarea { display: block; width: 100%; min-height: 76px; resize: vertical; padding: 11px 12px; border: 1px solid #343842; border-radius: 11px; outline: 0; background: #111318; color: var(--text); font: inherit; font-size: 13px; line-height: 1.4; }
+.comment-form textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.comment-form textarea:disabled { opacity: .62; cursor: not-allowed; }
+.comment-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.comment-form-footer span { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.comment-form-footer .button { min-height: 38px; flex: none; padding: 0 14px; }
 .account-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 16px 20px 0; padding: 4px; border-radius: 12px; background: #14171d; }
 .account-tabs button { min-height: 36px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 800; }
 .account-tabs button.is-active { background: #2a364b; color: #eaf2ff; box-shadow: 0 3px 12px rgba(0,0,0,.22); }

@@ -309,7 +309,7 @@ test('public catalog and home expose only published content', async (t) => {
   t.after(() => app.close());
   const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
   assert.equal(catalog.statusCode, 200);
-  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['midnight', 'signal']);
+  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['midnight', 'signal', 'cc-shorts']);
   assert.equal(JSON.parse(catalog.body).items[0].ageRating, '16+');
   assert.equal('compliance' in JSON.parse(catalog.body).items[0], false);
   assert.equal('licenseReference' in JSON.parse(catalog.body).items[0], false);
@@ -1043,7 +1043,9 @@ test('production never exposes demo rights records as commercial catalogue entri
   t.after(() => app.close());
   const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
   assert.equal(catalog.statusCode, 200);
-  assert.deepEqual(JSON.parse(catalog.body).items, []);
+  const items = JSON.parse(catalog.body).items;
+  assert.deepEqual(items.map((item) => item.id), ['cc-shorts']);
+  assert.equal(items[0].access, 'free');
 });
 
 test('production hides paid content until payment validation is configured', async (t) => {
@@ -1065,7 +1067,7 @@ test('production hides paid content until payment validation is configured', asy
   t.after(() => app.close());
 
   const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
-  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['signal']);
+  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['signal', 'cc-shorts']);
   const health = await app.inject({ method: 'GET', url: '/health' });
   assert.equal(JSON.parse(health.body).payments, 'disabled');
 });
@@ -1090,7 +1092,7 @@ test('production fails closed when PAYMENTS_ENABLED is requested without a store
   t.after(() => app.close());
 
   const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
-  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['signal']);
+  assert.deepEqual(JSON.parse(catalog.body).items.map((item) => item.id), ['signal', 'cc-shorts']);
   const health = await app.inject({ method: 'GET', url: '/health' });
   const body = JSON.parse(health.body);
   assert.equal(body.payments, 'disabled');

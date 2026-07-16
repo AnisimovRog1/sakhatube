@@ -75,10 +75,30 @@ const demoCompliance = {
   verificationReference: 'DEMO-REVIEW-ONLY'
 };
 
+// A small, clearly attributed Creative Commons record used solely by the
+// temporary 5-video / 10-Shorts test set in Railway Bucket. Unlike the demo
+// placeholders it is allowed in production: every asset retains its CC BY
+// attribution in demo-media/cc-test-set/credits.json.
+const creativeCommonsCompliance = {
+  ageRating: '6+',
+  rightsBasis: 'license',
+  rightsHolder: 'Blender Foundation',
+  licenseReference: 'CC BY 3.0 — https://creativecommons.org/licenses/by/3.0/',
+  territories: ['global'],
+  startsAt: '2026-07-01T00:00:00.000Z',
+  endsAt: null,
+  audioLanguages: ['en'],
+  subtitleLanguages: [],
+  verifiedAt: '2026-07-16T00:00:00.000Z',
+  verifiedBy: 'SakhaTube CC catalogue check',
+  verificationReference: 'https://creativecommons.org/licenses/by/3.0/'
+};
+
 export const defaultSeed = {
   content: [
     { id: 'midnight', title: 'После полуночи', kind: 'series', genre: 'Драма', synopsis: 'История, в которой одна ночь меняет всё.', status: 'published', access: 'subscription', episodes: 8, views: 128430, likes: 18320, compliance: demoCompliance, createdAt: '2026-07-10T10:00:00.000Z', updatedAt: '2026-07-14T09:00:00.000Z' },
     { id: 'signal', title: 'Тихий сигнал', kind: 'series', genre: 'Мистика', synopsis: 'Каждый новый сигнал открывает ещё одну тайну.', status: 'published', access: 'free', episodes: 10, views: 96420, likes: 12180, compliance: demoCompliance, createdAt: '2026-07-09T10:00:00.000Z', updatedAt: '2026-07-14T09:00:00.000Z' },
+    { id: 'cc-shorts', title: 'Sintel и Big Buck Bunny — Shorts', kind: 'clip', genre: 'Анимация', synopsis: 'Временный легальный набор вертикальных роликов по лицензии CC BY 3.0.', status: 'published', access: 'free', episodes: 10, views: 0, likes: 0, compliance: creativeCommonsCompliance, createdAt: '2026-07-16T00:00:00.000Z', updatedAt: '2026-07-16T00:00:00.000Z' },
     { id: 'floor', title: 'Пятый этаж', kind: 'series', genre: 'Триллер', synopsis: 'Черновик нового сериала.', status: 'draft', access: 'subscription', episodes: 6, views: 0, likes: 0, compliance: demoCompliance, createdAt: '2026-07-14T10:00:00.000Z', updatedAt: '2026-07-14T10:00:00.000Z' }
   ],
   homeSlots: ['midnight', 'signal'],

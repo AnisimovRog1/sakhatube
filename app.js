@@ -33,6 +33,7 @@ const bunnyShortCopy = [
 
 const shorts = [
   ...['01', '02', '03', '04', '05'].map((number, index) => ({
+    contentId: 'cc-shorts',
     title: sintelShortCopy[index][0],
     category: 'SINTEL · CC BY 3.0',
     text: sintelShortCopy[index][1],
@@ -43,6 +44,7 @@ const shorts = [
     poster: ccTestAsset(`short-posters/sintel-${number}.jpg`)
   })),
   ...['01', '02', '03', '04', '05'].map((number, index) => ({
+    contentId: 'cc-shorts',
     title: bunnyShortCopy[index][0],
     category: 'BIG BUCK BUNNY · CC BY 3.0',
     text: bunnyShortCopy[index][1],
@@ -354,8 +356,10 @@ const notificationsDialog = document.querySelector('#notifications-dialog');
 const settingsDialog = document.querySelector('#settings-dialog');
 const actionDialog = document.querySelector('#action-dialog');
 const accountDialog = document.querySelector('#account-dialog');
+const commentsDialog = document.querySelector('#comments-dialog');
 const settingsForm = document.querySelector('#settings-form');
 const accountForm = document.querySelector('#account-form');
+const commentForm = document.querySelector('#comment-form');
 const toast = document.querySelector('#toast');
 const carouselViewport = document.querySelector('#carousel-viewport');
 const carouselNode = document.querySelector('#premiere-carousel');
@@ -387,6 +391,9 @@ let shortCleanTimer;
 let profile = loadProfile();
 let viewerAuth = loadViewerAuth();
 let pendingAvatar;
+let activeCommentsContentId = '';
+let loadedComments = [];
+const pendingCommentsByContent = new Map();
 
 function loadViewerAuth() {
   try {
@@ -858,6 +865,166 @@ function openAction(title, copy, eyebrow = 'SAKHATUBE') {
   openDialog(actionDialog);
 }
 
+function viewerRequestHeaders() {
+  return viewerAuth?.accessToken ? { authorization: `Bearer ${viewerAuth.accessToken}` } : {};
+}
+
+function commentDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const sameDay = new Date().toDateString() === date.toDateString();
+  return new Intl.DateTimeFormat('ru-RU', sameDay
+    ? { hour: '2-digit', minute: '2-digit' }
+    : { day: 'numeric', month: 'short' }).format(date);
+}
+
+function localPendingComments(contentId) {
+  return pendingCommentsByContent.get(contentId) || [];
+}
+
+function setCommentsStatus(message) {
+  const node = document.querySelector('#comments-status');
+  if (node) node.textContent = message;
+}
+
+function renderComments() {
+  const list = document.querySelector('#comments-list');
+  const formHint = document.querySelector('#comment-form-hint');
+  const text = document.querySelector('#comment-text');
+  const submit = document.querySelector('#comment-submit');
+  if (!list || !formHint || !text || !submit) return;
+  const pending = localPendingComments(activeCommentsContentId);
+  const items = [...pending, ...loadedComments];
+  list.innerHTML = items.length
+    ? items.map((comment) => {
+      const ownPending = comment.pending === true;
+      const actions = ownPending
+        ? `<button type="button" data-comment-delete="${escapeHTML(comment.id)}" aria-label="Удалить комментарий">Удалить</button>`
+        : `<button type="button" data-comment-report="${escapeHTML(comment.id)}" aria-label="Пожаловаться на комментарий">Жалоба</button>`;
+      return `<article class="comment-item"><div><span class="comment-author">${escapeHTML(comment.authorName)}</span><span class="comment-meta">${escapeHTML(commentDate(comment.createdAt))}</span><p class="comment-text">${escapeHTML(comment.text)}</p>${ownPending ? '<span class="comment-pending">На модерации — его видите только вы.</span>' : ''}</div><div class="comment-item-actions">${actions}</div></article>`;
+    }).join('')
+    : '<p class="comments-empty">Пока нет комментариев. Будьте первым, кто начнёт обсуждение.</p>';
+
+  const signedIn = Boolean(viewerAuth?.accessToken);
+  text.disabled = !signedIn;
+  text.placeholder = signedIn ? 'Напишите комментарий' : 'Войдите, чтобы написать комментарий';
+  submit.disabled = false;
+  submit.textContent = signedIn ? 'Отправить' : 'Войти';
+  formHint.textContent = signedIn
+    ? 'Комментарий появится после модерации.'
+    : 'Войдите в аккаунт, чтобы участвовать в обсуждении.';
+}
+
+async function loadComments() {
+  if (!activeCommentsContentId) return;
+  setCommentsStatus('Загружаем комментарии…');
+  loadedComments = [];
+  renderComments();
+  if (!canUseCatalogApi()) {
+    setCommentsStatus('Комментарии доступны в опубликованной версии SakhaTube.');
+    return;
+  }
+  try {
+    const response = await fetch(`/v1/content/${encodeURIComponent(activeCommentsContentId)}/comments?limit=50`, {
+      headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store'
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || 'Не удалось загрузить комментарии.');
+    loadedComments = Array.isArray(payload.items) ? payload.items : [];
+    setCommentsStatus(loadedComments.length ? `Комментарии · ${loadedComments.length}` : 'Комментарии');
+  } catch (error) {
+    setCommentsStatus(error.message || 'Не удалось загрузить комментарии. Попробуйте ещё раз.');
+  }
+  renderComments();
+}
+
+async function openShortComments(short) {
+  activeCommentsContentId = short.contentId || 'cc-shorts';
+  document.querySelector('#comments-title').textContent = `Комментарии · ${short.title}`;
+  const text = document.querySelector('#comment-text');
+  if (text) text.value = '';
+  openDialog(commentsDialog);
+  await loadComments();
+}
+
+async function submitComment(event) {
+  event.preventDefault();
+  if (!viewerAuth?.accessToken) {
+    closeDialog(commentsDialog);
+    openAccountDialog();
+    return;
+  }
+  const text = document.querySelector('#comment-text');
+  const submit = document.querySelector('#comment-submit');
+  const value = text?.value.trim();
+  if (!value) {
+    setCommentsStatus('Напишите комментарий перед отправкой.');
+    text?.focus();
+    return;
+  }
+  submit.disabled = true;
+  submit.textContent = 'Отправляем…';
+  try {
+    const response = await fetch(`/v1/content/${encodeURIComponent(activeCommentsContentId)}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...viewerRequestHeaders() },
+      credentials: 'same-origin',
+      body: JSON.stringify({ text: value })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || 'Не удалось отправить комментарий.');
+    const pending = localPendingComments(activeCommentsContentId);
+    pending.unshift({ ...payload.item, pending: true });
+    pendingCommentsByContent.set(activeCommentsContentId, pending);
+    text.value = '';
+    setCommentsStatus('Комментарий отправлен на модерацию.');
+    showToast('Комментарий отправлен на модерацию');
+  } catch (error) {
+    setCommentsStatus(error.message || 'Не удалось отправить комментарий.');
+  } finally {
+    renderComments();
+  }
+}
+
+async function deletePendingComment(id) {
+  try {
+    const response = await fetch(`/v1/comments/${encodeURIComponent(id)}/delete`, {
+      method: 'POST', headers: viewerRequestHeaders(), credentials: 'same-origin'
+    });
+    if (!response.ok && response.status !== 404) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.message || 'Не удалось удалить комментарий.');
+    }
+    pendingCommentsByContent.set(activeCommentsContentId, localPendingComments(activeCommentsContentId).filter((item) => item.id !== id));
+    setCommentsStatus('Комментарий удалён.');
+    renderComments();
+  } catch (error) {
+    setCommentsStatus(error.message || 'Не удалось удалить комментарий.');
+  }
+}
+
+async function reportComment(id) {
+  if (!viewerAuth?.accessToken) {
+    closeDialog(commentsDialog);
+    openAccountDialog();
+    return;
+  }
+  if (!window.confirm('Отправить жалобу на этот комментарий?')) return;
+  try {
+    const response = await fetch(`/v1/comments/${encodeURIComponent(id)}/report`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...viewerRequestHeaders() },
+      credentials: 'same-origin', body: JSON.stringify({ reason: 'abuse' })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || 'Не удалось отправить жалобу.');
+    setCommentsStatus('Жалоба отправлена на проверку.');
+    showToast('Жалоба отправлена');
+  } catch (error) {
+    setCommentsStatus(error.message || 'Не удалось отправить жалобу.');
+  }
+}
+
 function openNotifications() {
   document.querySelector('#notifications-button i')?.remove();
   openDialog(notificationsDialog);
@@ -921,7 +1088,7 @@ async function handleShortAction(action, button) {
     button.querySelector('b').setAttribute('aria-hidden', 'true');
     showToast(isActive ? 'Сохранено на потом' : 'Убрано из сохранённого');
   }
-  if (action === 'comments') openAction('Комментарии', `Комментарии к «${short.title}» появятся здесь. Для теста лента и действия уже работают.`, 'ОБСУЖДЕНИЕ');
+  if (action === 'comments') await openShortComments(short);
   if (action === 'more') openAction('Настроить рекомендации', 'Можно скрыть ролик, пожаловаться или убрать похожие материалы из ленты.', 'ДЛЯ ВАС');
   if (action === 'sound') {
     const video = document.querySelector('#shorts-stage .short-video');
@@ -975,6 +1142,18 @@ document.addEventListener('click', (event) => {
   const actionButton = event.target.closest('[data-action]');
   if (actionButton) {
     handleAction(actionButton.dataset.action, actionButton);
+    return;
+  }
+
+  const commentDelete = event.target.closest('[data-comment-delete]');
+  if (commentDelete) {
+    void deletePendingComment(commentDelete.dataset.commentDelete);
+    return;
+  }
+
+  const commentReport = event.target.closest('[data-comment-report]');
+  if (commentReport) {
+    void reportComment(commentReport.dataset.commentReport);
     return;
   }
 
@@ -1159,6 +1338,7 @@ settingsForm.addEventListener('submit', (event) => {
   showToast(t('toast.settings'));
 });
 accountForm.addEventListener('submit', submitAccount);
+commentForm.addEventListener('submit', submitComment);
 accountDialog.querySelectorAll('[data-account-mode]').forEach((button) => {
   button.addEventListener('click', () => setAccountMode(button.dataset.accountMode));
 });
