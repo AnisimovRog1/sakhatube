@@ -24,6 +24,7 @@ class CommentsViewModel(application: Application) : AndroidViewModel(application
 
     fun signedIn() = repository.isSignedIn()
     fun viewerId() = repository.currentViewerId()
+    fun hasAcceptedCommunityRules() = repository.hasAcceptedCommunityRules()
 
     fun load(contentId: String) = viewModelScope.launch {
         _state.value = _state.value.copy(loading = true, error = null)
@@ -36,6 +37,22 @@ class CommentsViewModel(application: Application) : AndroidViewModel(application
         runCatching { repository.post(contentId, text) }
             .onSuccess { comment -> _state.value = _state.value.copy(items = listOf(comment) + _state.value.items, notice = "Комментарий отправлен на модерацию.", error = null) }
             .onFailure { _state.value = _state.value.copy(error = it.message ?: "Не удалось отправить комментарий.") }
+    }
+
+    fun acceptCommunityRulesAndPost(contentId: String, text: String, onPosted: () -> Unit) = viewModelScope.launch {
+        runCatching {
+            repository.acceptCommunityRules()
+            repository.post(contentId, text)
+        }.onSuccess { comment ->
+            _state.value = _state.value.copy(
+                items = listOf(comment) + _state.value.items,
+                notice = "Правила приняты. Комментарий отправлен на модерацию.",
+                error = null
+            )
+            onPosted()
+        }.onFailure {
+            _state.value = _state.value.copy(error = it.message ?: "Не удалось сохранить согласие с правилами.")
+        }
     }
 
     fun report(commentId: String) = viewModelScope.launch {

@@ -180,6 +180,18 @@ actor APIClient {
         try await requestNoContent(url, method: "POST", bearerToken: accessToken)
     }
 
+    /// Records a versioned, server-side acceptance before the viewer can
+    /// create user-generated content. A device-side flag is only a UX cache.
+    func acceptCommunityRules(version: String, accessToken: String) async throws -> ViewerMeResponse {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/community-rules/acceptance")
+        return try await request(
+            url,
+            method: "POST",
+            body: CommunityRulesAcceptanceRequest(version: version, accepted: true),
+            bearerToken: accessToken
+        )
+    }
+
     /// Blocks the approved comment author for the current viewer. The server
     /// owns the author identity, so the client never receives or stores a
     /// private account identifier merely to perform this action.
@@ -380,6 +392,10 @@ enum CommentReportReason: String, Encodable, CaseIterable, Identifiable, Sendabl
 private struct CommentCreateRequest: Encodable, Sendable { let text: String }
 private struct CommentReportRequest: Encodable, Sendable { let reason: CommentReportReason }
 private struct EmptyRequest: Encodable, Sendable {}
+private struct CommunityRulesAcceptanceRequest: Encodable, Sendable {
+    let version: String
+    let accepted: Bool
+}
 
 struct ViewerRegistrationResponse: Decodable, Sendable {
     let status: String

@@ -38,6 +38,9 @@ const viewerAccessTokenTtlSeconds = 15 * 60;
 const viewerRefreshTokenTtlMsDefault = 14 * 24 * 60 * 60 * 1000;
 const emailVerificationTtlMsDefault = 24 * 60 * 60 * 1000;
 const billingContractVersion = '2026-07-16';
+// Bump this value whenever the published community rules materially change.
+// Existing users must explicitly accept the new version before posting again.
+const communityRulesVersion = '2026-07-16';
 const passwordScrypt = { N: 16_384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
 // This hash is used only when a login email is absent.  Performing the same
 // scrypt operation for both paths keeps the login endpoint from becoming an
@@ -373,7 +376,8 @@ export function createMemoryStore(seed = defaultSeed) {
         username: `deleted-${deletedAlias}`,
         displayName: 'Удалённый пользователь',
         passwordHash: 'deleted', status: 'deleted', verificationTokenHash: null,
-        verificationExpiresAt: null, emailVerifiedAt: null, lastLoginAt: null, updatedAt: deletedAt
+        verificationExpiresAt: null, emailVerifiedAt: null, communityRulesVersion: null,
+        communityRulesAcceptedAt: null, lastLoginAt: null, updatedAt: deletedAt
       });
       return { account: clone(account), deletedAt, revokedSessions, deletedComments };
     },
@@ -552,6 +556,10 @@ const commentCreateInput = z.object({
   text: z.string().trim().min(1).max(1_000).refine((value) => !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(value), 'Комментарий содержит недопустимые символы')
 }).strict();
 const commentReportInput = z.object({ reason: z.enum(commentReportReasons), note: z.string().trim().max(500).optional() }).strict();
+const communityRulesAcceptanceInput = z.object({
+  version: z.literal(communityRulesVersion),
+  accepted: z.literal(true)
+}).strict();
 const publicCommentsQuery = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).strict();
 const commentReportQuery = z.object({ status: z.enum(['open', 'resolved']).optional() }).strict();
 const viewerBlockParams = z.object({ id: z.string().uuid() });
@@ -887,6 +895,8 @@ function viewerAccountPublic(account) {
     email: account.email,
     displayName: account.displayName,
     status: account.status,
+    communityRulesVersion: account.communityRulesVersion ?? null,
+    communityRulesAcceptedAt: account.communityRulesAcceptedAt ?? null,
     createdAt: account.createdAt
   };
 }
@@ -1558,6 +1568,24 @@ export function buildApp(options = {}) {
     return { viewer: viewerAccountPublic(account) };
   });
 
+  // Community rules acceptance is an explicit, versioned server-side record.
+  // A UI checkbox alone is not enough to unlock user-generated content.
+  app.post('/v1/community-rules/acceptance', { preHandler: app.requireViewer, config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
+    const body = parseOrReply(communityRulesAcceptanceInput, request.body, reply);
+    if (!body) return;
+    const account = await store.getViewerAccount(request.user.sub);
+    if (!account || account.status !== 'active' || !account.emailVerifiedAt) {
+      return reply.code(403).send({ error: 'VERIFIED_VIEWER_REQUIRED', message: 'Подтверди e-mail, чтобы принять правила сообщества.' });
+    }
+    const acceptedAt = now();
+    const updated = await store.updateViewerAccount(account.id, {
+      communityRulesVersion: body.version,
+      communityRulesAcceptedAt: acceptedAt
+    });
+    await audit(request, 'viewer.community_rules.accept', 'viewer_account', account.id, { communityRulesVersion: account.communityRulesVersion ?? null }, { communityRulesVersion: body.version, acceptedAt }, { id: account.id, roles: ['viewer'] });
+    return { viewer: viewerAccountPublic(updated ?? account) };
+  });
+
   // These routes are intentionally usable by native clients now, but no
   // request can grant access until official Apple/Google verification is
   // implemented server-side.  In particular, do not add a client-side
@@ -1768,6 +1796,14 @@ export function buildApp(options = {}) {
     const [content, account] = await Promise.all([store.getContent(params.id), store.getViewerAccount(request.user.sub)]);
     if (!isPubliclyAvailable(content, now(), publicationGate)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
     if (!account || account.status !== 'active' || !account.emailVerifiedAt) return reply.code(403).send({ error: 'VERIFIED_VIEWER_REQUIRED', message: 'Подтверди e-mail, чтобы писать комментарии.' });
+    if (account.communityRulesVersion !== communityRulesVersion || !account.communityRulesAcceptedAt) {
+      return reply.code(403).send({
+        error: 'COMMUNITY_RULES_ACCEPTANCE_REQUIRED',
+        message: 'Прими правила сообщества перед публикацией комментария.',
+        communityRulesVersion,
+        acceptancePath: '/v1/community-rules/acceptance'
+      });
+    }
     const item = await store.createComment({ contentId: content.id, authorId: account.id, authorName: account.displayName, text: body.text });
     await audit(request, 'comment.create', 'comment', item.id, null, { status: item.status, contentId: item.contentId }, { id: account.id, roles: ['viewer'] });
     return reply.code(201).send({ item: viewerComment(item), message: 'Комментарий отправлен на модерацию.' });

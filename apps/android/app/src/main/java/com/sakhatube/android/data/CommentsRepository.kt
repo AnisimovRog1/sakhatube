@@ -27,12 +27,16 @@ class CommentsRepository(
     private val baseUrl: String = BuildConfig.CATALOG_BASE_URL,
     private val sessionStore: ViewerSessionStore = EncryptedViewerSessionStore(context)
 ) {
+    private val consentStore = CommentCommunityConsentStore(context.applicationContext)
     suspend fun approved(contentId: String): List<ViewerComment> = withContext(Dispatchers.IO) {
         request("/v1/content/$contentId/comments?limit=50", "GET", null, null)
             .optJSONArray("items").toComments()
     }
 
     suspend fun post(contentId: String, text: String): ViewerComment = withContext(Dispatchers.IO) {
+        if (!hasAcceptedCommunityRules()) {
+            throw IOException("Перед публикацией прими правила сообщества.")
+        }
         val token = requireToken()
         request("/v1/content/$contentId/comments", "POST", JSONObject().put("text", text.trim()), token)
             .optJSONObject("item").toComment() ?: throw IOException("Сервис не подтвердил комментарий.")
@@ -60,6 +64,20 @@ class CommentsRepository(
 
     fun currentViewerId(): String? = sessionStore.current()?.viewer?.id
     fun isSignedIn(): Boolean = sessionStore.current() != null
+    fun hasAcceptedCommunityRules(): Boolean = currentViewerId()?.let(consentStore::hasAccepted) == true
+    suspend fun acceptCommunityRules(): Unit = withContext(Dispatchers.IO) {
+        val viewerId = currentViewerId()
+            ?: throw IOException("Войди в аккаунт, чтобы принять правила.")
+        request(
+            "/v1/community-rules/acceptance",
+            "POST",
+            JSONObject().put("version", COMMUNITY_RULES_VERSION).put("accepted", true),
+            requireToken()
+        )
+        // Never unlock local posting from a checkbox alone: this write is made
+        // only after the server has stored its versioned acceptance record.
+        consentStore.accept(viewerId)
+    }
 
     private fun requireToken(): String = sessionStore.current()?.accessToken
         ?: throw IOException("Войди в аккаунт, чтобы продолжить.")
@@ -85,6 +103,22 @@ class CommentsRepository(
         } finally { connection.disconnect() }
     }
 }
+
+/**
+ * Consent is local and scoped to the public SakhaTube account ID, so signing
+ * out or switching accounts never applies another viewer's acknowledgement.
+ * The policy version is part of the key: changed rules require consent again.
+ */
+private class CommentCommunityConsentStore(context: Context) {
+    private val preferences = context.getSharedPreferences("sakhatube.comment-community-consent", Context.MODE_PRIVATE)
+
+    fun hasAccepted(viewerId: String): Boolean = preferences.getLong(key(viewerId), 0L) > 0L
+    fun accept(viewerId: String) { preferences.edit().putLong(key(viewerId), System.currentTimeMillis()).apply() }
+
+    private fun key(viewerId: String) = "community-rules.$COMMUNITY_RULES_VERSION.$viewerId"
+}
+
+private const val COMMUNITY_RULES_VERSION = "2026-07-16"
 
 private fun JSONArray?.toComments(): List<ViewerComment> = buildList {
     if (this@toComments != null) for (index in 0 until length()) optJSONObject(index).toComment()?.let(::add)

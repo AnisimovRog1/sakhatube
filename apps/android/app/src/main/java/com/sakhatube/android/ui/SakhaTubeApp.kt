@@ -371,6 +371,9 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
     var text by remember(contentId) { mutableStateOf("") }
     var reportTarget by remember { mutableStateOf<ViewerComment?>(null) }
     var blockTarget by remember { mutableStateOf<ViewerComment?>(null) }
+    var pendingCommentText by remember(contentId) { mutableStateOf("") }
+    var showCommunityConsent by remember(contentId) { mutableStateOf(false) }
+    val context = LocalContext.current
     LaunchedEffect(contentId) { viewModel.load(contentId) }
 
     if (reportTarget != null) {
@@ -398,6 +401,34 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
         )
     }
 
+    if (showCommunityConsent) {
+        val rulesUrl = BuildConfig.COMMUNITY_RULES_URL.takeIf { it.startsWith("https://") }
+        val termsUrl = BuildConfig.TERMS_URL.takeIf { it.startsWith("https://") }
+        AlertDialog(
+            onDismissRequest = { showCommunityConsent = false },
+            title = { Text("Правила сообщества") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Перед первой публикацией комментария нужно принять правила сообщества и пользовательское соглашение.")
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { rulesUrl?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } }, enabled = rulesUrl != null) { Text("Правила") }
+                        TextButton(onClick = { termsUrl?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } }, enabled = termsUrl != null) { Text("Соглашение") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.acceptCommunityRulesAndPost(contentId, pendingCommentText) {
+                        text = ""
+                        pendingCommentText = ""
+                    }
+                    showCommunityConsent = false
+                }) { Text("Принимаю") }
+            },
+            dismissButton = { TextButton(onClick = { showCommunityConsent = false }) { Text("Отмена") } }
+        )
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Outlined.Forum, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -413,7 +444,18 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
                 minLines = 2,
                 maxLines = 4
             )
-            Button(onClick = { viewModel.post(contentId, text); text = "" }, enabled = text.trim().isNotEmpty()) { Text("Отправить") }
+            Button(
+                onClick = {
+                    if (viewModel.hasAcceptedCommunityRules()) {
+                        viewModel.post(contentId, text)
+                        text = ""
+                    } else {
+                        pendingCommentText = text
+                        showCommunityConsent = true
+                    }
+                },
+                enabled = text.trim().isNotEmpty()
+            ) { Text("Отправить") }
         } else {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {

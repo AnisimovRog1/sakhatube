@@ -18,8 +18,16 @@ struct CommentsView: View {
     @State private var blockTarget: ViewerCommentDTO?
     @State private var isShowingAuth = false
     @State private var isShowingBlockedViewers = false
+    @State private var isShowingCommunityRulesConsent = false
+    @State private var isAcceptingCommunityRules = false
+    @AppStorage("sakhatube.community-rules.accepted-version") private var acceptedCommunityRulesVersion = ""
 
     private let api = APIClient()
+    private let communityRulesVersion = "2026-07-16"
+
+    private var hasAcceptedCommunityRules: Bool {
+        acceptedCommunityRulesVersion == communityRulesVersion
+    }
 
     var body: some View {
         NavigationStack {
@@ -75,6 +83,13 @@ struct CommentsView: View {
             BlockedViewersView(api: api)
                 .environmentObject(viewerSession)
         }
+        .sheet(isPresented: $isShowingCommunityRulesConsent) {
+            CommunityRulesConsentView(isAccepting: isAcceptingCommunityRules) {
+                Task { await acceptCommunityRulesAndPublish() }
+            }
+            .presentationDetents([.height(330)])
+            .presentationDragIndicator(.visible)
+        }
         .confirmationDialog("Пожаловаться", isPresented: Binding(get: { reportTarget != nil }, set: { if !$0 { reportTarget = nil } })) {
             ForEach(CommentReportReason.allCases) { reason in
                 Button(reason.title, role: reason == .other ? nil : .destructive) {
@@ -127,6 +142,12 @@ struct CommentsView: View {
                     .font(.caption)
                     .foregroundStyle(AppTheme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if !hasAcceptedCommunityRules {
+                    Text("Перед первой публикацией нужно принять правила сообщества.")
+                        .font(.caption2)
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
         .padding(.horizontal, AppTheme.pagePadding)
@@ -158,6 +179,18 @@ struct CommentsView: View {
             isShowingAuth = true
             return
         }
+        guard hasAcceptedCommunityRules else {
+            isShowingCommunityRulesConsent = true
+            return
+        }
+        await publishComment(using: token)
+    }
+
+    private func publishComment(using existingToken: String? = nil) async {
+        guard let token = existingToken ?? viewerSession.accessTokenForAuthenticatedRequest else {
+            isShowingAuth = true
+            return
+        }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         isSending = true
@@ -168,6 +201,32 @@ struct CommentsView: View {
             comments.insert(response.item, at: 0)
             draft = ""
             message = response.message
+        } catch {
+            if let apiError = error as? APIClientError,
+               case .server(let code, _, _) = apiError,
+               code == "COMMUNITY_RULES_ACCEPTANCE_REQUIRED" {
+                acceptedCommunityRulesVersion = ""
+            }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func acceptCommunityRulesAndPublish() async {
+        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+            isShowingCommunityRulesConsent = false
+            isShowingAuth = true
+            return
+        }
+        isAcceptingCommunityRules = true
+        errorMessage = nil
+        defer { isAcceptingCommunityRules = false }
+        do {
+            _ = try await api.acceptCommunityRules(version: communityRulesVersion, accessToken: token)
+            // Cache only the exact version that the server accepted. The API
+            // remains authoritative and will require consent again if needed.
+            acceptedCommunityRulesVersion = communityRulesVersion
+            isShowingCommunityRulesConsent = false
+            await publishComment(using: token)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -215,6 +274,42 @@ struct CommentsView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+private struct CommunityRulesConsentView: View {
+    let isAccepting: Bool
+    let onAccept: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Image(systemName: "checkmark.shield")
+                .font(.title2)
+                .foregroundStyle(AppTheme.primary)
+            Text("Правила сообщества")
+                .font(.title3.weight(.bold))
+            Text("Публикуя комментарии, ты обязуешься соблюдать правила: без оскорблений, спама, угроз и нарушений чужих прав.")
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.secondaryText)
+            Link("Открыть правила сообщества", destination: AppConfiguration.apiBaseURL.appending(path: "community-rules"))
+                .font(.subheadline.weight(.semibold))
+            HStack {
+                Button("Не сейчас") { dismiss() }
+                    .buttonStyle(.bordered)
+                Spacer()
+                Button(action: onAccept) {
+                    if isAccepting { ProgressView().tint(.black) }
+                    else { Text("Принимаю") }
+                }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppTheme.primary)
+                    .disabled(isAccepting)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.background)
     }
 }
 

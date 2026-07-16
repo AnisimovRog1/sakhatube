@@ -26,6 +26,17 @@ async function verifiedViewer(app, { email, displayName }) {
   return JSON.parse(verified.body);
 }
 
+async function acceptCommunityRules(app, viewer) {
+  const accepted = await app.inject({
+    method: 'POST',
+    url: '/v1/community-rules/acceptance',
+    headers: { authorization: `Bearer ${viewer.accessToken}` },
+    payload: { version: '2026-07-16', accepted: true }
+  });
+  assert.equal(accepted.statusCode, 200);
+  return JSON.parse(accepted.body).viewer;
+}
+
 function publishableCompliance(overrides = {}) {
   return {
     ageRating: '16+',
@@ -524,6 +535,16 @@ test('verified viewers can submit, report, and delete comments without exposing 
   t.after(() => app.close());
   const author = await verifiedViewer(app, { email: 'author@example.com', displayName: 'Автор' });
   const reporter = await verifiedViewer(app, { email: 'reporter@example.com', displayName: 'Репортёр' });
+  const beforeAcceptance = await app.inject({
+    method: 'POST', url: '/v1/content/signal/comments',
+    headers: { authorization: `Bearer ${author.accessToken}` },
+    payload: { text: 'Этот комментарий пока должен быть отклонён.' }
+  });
+  assert.equal(beforeAcceptance.statusCode, 403);
+  assert.equal(JSON.parse(beforeAcceptance.body).error, 'COMMUNITY_RULES_ACCEPTANCE_REQUIRED');
+  const acceptedViewer = await acceptCommunityRules(app, author);
+  assert.equal(acceptedViewer.communityRulesVersion, '2026-07-16');
+  assert.ok(acceptedViewer.communityRulesAcceptedAt);
   const create = await app.inject({
     method: 'POST', url: '/v1/content/signal/comments',
     headers: { authorization: `Bearer ${author.accessToken}` },
@@ -568,6 +589,7 @@ test('viewer blocks hide approved comment authors only for the blocker and can b
   t.after(() => app.close());
   const author = await verifiedViewer(app, { email: 'block-author@example.com', displayName: 'Автор для блока' });
   const viewer = await verifiedViewer(app, { email: 'block-viewer@example.com', displayName: 'Зритель для блока' });
+  await acceptCommunityRules(app, author);
   const created = await app.inject({
     method: 'POST', url: '/v1/content/signal/comments',
     headers: { authorization: `Bearer ${author.accessToken}` }, payload: { text: 'Комментарий, который можно скрыть.' }
@@ -654,6 +676,7 @@ test('verified account deletion revokes every session and anonymizes comments an
   const app = await createTestApp({ store });
   t.after(() => app.close());
   const session = await verifiedViewer(app, { email: 'erase@example.com', displayName: 'Удаляемый зритель' });
+  await acceptCommunityRules(app, session);
   const accountId = app.jwt.decode(session.accessToken).sub;
   const extraSession = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'erase@example.com', password: 'correct-horse-battery-staple' } });
   assert.equal(extraSession.statusCode, 200);

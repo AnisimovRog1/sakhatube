@@ -96,6 +96,8 @@ const mapViewerAccount = (row) => row && ({
   verificationTokenHash: row.verification_token_hash,
   verificationExpiresAt: row.verification_expires_at ? row.verification_expires_at.toISOString() : null,
   emailVerifiedAt: row.email_verified_at ? row.email_verified_at.toISOString() : null,
+  communityRulesVersion: row.community_rules_version ?? null,
+  communityRulesAcceptedAt: row.community_rules_accepted_at ? row.community_rules_accepted_at.toISOString() : null,
   lastLoginAt: row.last_login_at ? row.last_login_at.toISOString() : null,
   createdAt: row.created_at.toISOString(),
   updatedAt: row.updated_at.toISOString()
@@ -270,6 +272,8 @@ async function migrate(pool) {
       verification_token_hash TEXT,
       verification_expires_at TIMESTAMPTZ,
       email_verified_at TIMESTAMPTZ,
+      community_rules_version TEXT,
+      community_rules_accepted_at TIMESTAMPTZ,
       last_login_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL,
@@ -281,6 +285,8 @@ async function migrate(pool) {
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS verification_token_hash TEXT;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMPTZ;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+    ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS community_rules_version TEXT;
+    ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS community_rules_accepted_at TIMESTAMPTZ;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS public_id TEXT;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS username TEXT;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS firebase_uid TEXT;
@@ -702,9 +708,9 @@ export async function createPostgresStore(connectionString, seedData) {
         ...data
       };
       const { rows } = await pool.query(
-        `INSERT INTO viewer_accounts (id, public_id, firebase_uid, email, username, display_name, password_hash, status, verification_token_hash, verification_expires_at, email_verified_at, last_login_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-        [record.id, record.publicId, record.firebaseUid ?? null, record.email, record.username, record.displayName, record.passwordHash, record.status, record.verificationTokenHash, record.verificationExpiresAt, record.emailVerifiedAt, record.lastLoginAt, record.createdAt, record.updatedAt]
+        `INSERT INTO viewer_accounts (id, public_id, firebase_uid, email, username, display_name, password_hash, status, verification_token_hash, verification_expires_at, email_verified_at, community_rules_version, community_rules_accepted_at, last_login_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+        [record.id, record.publicId, record.firebaseUid ?? null, record.email, record.username, record.displayName, record.passwordHash, record.status, record.verificationTokenHash, record.verificationExpiresAt, record.emailVerifiedAt, record.communityRulesVersion ?? null, record.communityRulesAcceptedAt ?? null, record.lastLoginAt, record.createdAt, record.updatedAt]
       );
       return mapViewerAccount(rows[0]);
     },
@@ -733,6 +739,8 @@ export async function createPostgresStore(connectionString, seedData) {
         verificationTokenHash: 'verification_token_hash',
         verificationExpiresAt: 'verification_expires_at',
         emailVerifiedAt: 'email_verified_at',
+        communityRulesVersion: 'community_rules_version',
+        communityRulesAcceptedAt: 'community_rules_accepted_at',
         lastLoginAt: 'last_login_at'
       };
       const entries = Object.entries(patch).filter(([key]) => fields[key]);
@@ -767,6 +775,7 @@ export async function createPostgresStore(connectionString, seedData) {
              SET public_id = $1, firebase_uid = NULL, email = $2, username = $3,
                  display_name = 'Удалённый пользователь', password_hash = 'deleted', status = 'deleted',
                  verification_token_hash = NULL, verification_expires_at = NULL, email_verified_at = NULL,
+                 community_rules_version = NULL, community_rules_accepted_at = NULL,
                  last_login_at = NULL, updated_at = $4
            WHERE id = $5 RETURNING *`,
           [`DELETED-${deletedAlias}`, `deleted+${deletedAlias}@deleted.invalid`, `deleted-${deletedAlias}`, deletedAt, id]
