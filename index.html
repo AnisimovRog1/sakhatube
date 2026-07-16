@@ -93,18 +93,36 @@
         </section>
 
         <section class="screen" id="profile-screen" data-screen="profile">
-          <div class="profile-hero"><button class="profile-avatar" data-profile-initial data-action="profile-settings" type="button" aria-label="Изменить фото профиля">А</button><div><p class="eyebrow" data-i18n="profile.eyebrow">МОЙ ПРОФИЛЬ</p><h1 data-profile-name>Алексей</h1><p data-profile-summary>Русский · 5 сериалов в избранном</p></div><button class="button button-ghost" data-action="profile-settings" data-i18n="profile.settings" type="button">Настроить</button></div>
-          <div class="profile-grid">
-            <button class="profile-card" data-action="subscription" type="button"><span>Подписка</span><strong>Sakha+ активна</strong><small>до 14 августа 2026</small></button>
-            <button class="profile-card" data-action="continue" type="button"><span>Продолжить</span><strong>1 сериал</strong><small>6 минут осталось</small></button>
-            <button class="profile-card" data-route="downloads" type="button"><span>Загрузки</span><strong>1,4 ГБ</strong><small>из 10 ГБ</small></button>
+          <div class="profile-page">
+            <header class="profile-identity">
+              <button class="profile-avatar profile-avatar-large" data-profile-initial data-action="profile-settings" type="button" aria-label="Изменить фото профиля">А</button>
+              <div class="profile-identity-copy"><p class="eyebrow">ВАШ ПРОФИЛЬ</p><h1 data-profile-name>Гость</h1><p data-profile-summary>Войдите, чтобы синхронизировать избранное</p></div>
+              <button class="profile-login" data-action="account" type="button">Войти</button>
+            </header>
+
+            <button class="premium-card" data-action="subscription" type="button" aria-label="Узнать о Sakha Plus">
+              <span class="premium-card-glow" aria-hidden="true"></span>
+              <span class="premium-card-top"><span class="premium-kicker">SAKHATUBE PLUS</span><span class="premium-status">СКОРО</span></span>
+              <strong>Больше свободы<br />для просмотра</strong>
+              <span class="premium-benefits"><span>Без рекламы</span><span>Загрузки офлайн</span><span>Премиальные истории</span></span>
+              <span class="premium-cta">Узнать о запуске <b aria-hidden="true">→</b></span>
+            </button>
+
+            <button class="profile-points" data-action="subscription" type="button">
+              <span class="points-mark" aria-hidden="true">S</span>
+              <span><strong>Мои баллы</strong><small>Программа лояльности готовится</small></span>
+              <b class="points-value">0</b><i aria-hidden="true">›</i>
+            </button>
+
+            <section class="profile-menu profile-menu-polished" aria-label="Управление профилем">
+              <button class="profile-menu-item" data-action="history" type="button"><span class="profile-menu-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 7v5l3 2"/></svg></span><span><strong>История просмотров</strong><small>Продолжайте с того же места</small></span><b>›</b></button>
+              <button class="profile-menu-item" data-action="saved" type="button"><span class="profile-menu-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v16l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg></span><span><strong>Мой список</strong><small>Избранное и «на потом»</small></span><b>›</b></button>
+              <button class="profile-menu-item" data-action="notifications" type="button"><span class="profile-menu-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></span><span><strong>Уведомления</strong><small>Премьеры и ответы на комментарии</small></span><b>›</b></button>
+              <button class="profile-menu-item" data-action="profile-settings" type="button"><span class="profile-menu-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.3 2.3-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56v.1h-3.25v-.1a1.7 1.7 0 0 0-1.02-1.56 1.7 1.7 0 0 0-1.89.34l-.05.06-2.3-2.3.06-.06A1.7 1.7 0 0 0 6.45 15a1.7 1.7 0 0 0-1.55-1.03h-.1v-3.25h.1A1.7 1.7 0 0 0 6.45 9.7a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.3-2.3.05.06a1.7 1.7 0 0 0 1.89.34 1.7 1.7 0 0 0 1.02-1.56v-.1h3.25v.1a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.3 2.3-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.02h.1v3.25h-.1A1.7 1.7 0 0 0 19.4 15Z"/></svg></span><span><strong>Настройки</strong><small>Язык, автоплей и фото профиля</small></span><b>›</b></button>
+              <button class="profile-menu-item" data-action="security" type="button"><span class="profile-menu-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg></span><span><strong>Безопасность</strong><small>Устройства и способ входа</small></span><b>›</b></button>
+            </section>
+            <p class="profile-note">SakhaTube хранит только то, что нужно для вашего просмотра.</p>
           </div>
-          <section class="profile-menu" aria-label="Управление профилем">
-            <button class="profile-menu-item" data-action="history" type="button"><span><strong>История просмотров</strong><small>С того места, где остановился</small></span><b>›</b></button>
-            <button class="profile-menu-item" data-action="saved" type="button"><span><strong>Сохранённое</strong><small>Избранное и «на потом»</small></span><b>›</b></button>
-            <button class="profile-menu-item" data-action="notifications" type="button"><span><strong>Уведомления</strong><small>2 новых сообщения</small></span><b>›</b></button>
-            <button class="profile-menu-item" data-action="security" type="button"><span><strong>Безопасность и устройства</strong><small>Входы, устройства и защита</small></span><b>›</b></button>
-          </section>
         </section>
       </main>
 

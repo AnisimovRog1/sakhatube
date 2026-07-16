@@ -312,7 +312,7 @@ const locales = {
     'catalog.eyebrow': 'КАТАЛОГ', 'catalog.title': 'Найди историю под настроение', 'catalog.description': 'Сериалы, шоу и короткие видео.<span>Всё на своём месте.</span>',
     'foryou.eyebrow': 'ПЕРСОНАЛЬНАЯ ЛЕНТА', 'foryou.title': 'Для<br /><em>вас.</em>', 'foryou.description': 'Смотри дальше без поиска.<span>Сцены, тизеры и эпизоды по твоим интересам.</span>',
     'downloads.eyebrow': 'ОФЛАЙН', 'downloads.title': 'Загрузки', 'downloads.description': 'Смотри без сети.<span>В дороге, в самолёте, где угодно.</span>',
-    'profile.eyebrow': 'МОЙ ПРОФИЛЬ', 'profile.settings': 'Настроить', 'profile.summary': '5 сериалов в избранном',
+    'profile.eyebrow': 'МОЙ ПРОФИЛЬ', 'profile.settings': 'Настроить', 'profile.summary': 'Локальный профиль на этом устройстве',
     premiere: 'ПРЕМЬЕРА', all: 'Все', 'toast.language': 'Язык интерфейса: {language}', 'toast.settings': 'Настройки профиля сохранены'
   },
   en: {
@@ -325,7 +325,7 @@ const locales = {
     'catalog.eyebrow': 'CATALOG', 'catalog.title': 'Find a story for your mood', 'catalog.description': 'Series, shows, and short videos.<span>Everything in its place.</span>',
     'foryou.eyebrow': 'PERSONAL FEED', 'foryou.title': 'For<br /><em>you.</em>', 'foryou.description': 'Keep watching without searching.<span>Scenes, teasers, and episodes picked for you.</span>',
     'downloads.eyebrow': 'OFFLINE', 'downloads.title': 'Downloads', 'downloads.description': 'Watch offline.<span>On the road, in the air, anywhere.</span>',
-    'profile.eyebrow': 'MY PROFILE', 'profile.settings': 'Settings', 'profile.summary': '5 series saved',
+    'profile.eyebrow': 'MY PROFILE', 'profile.settings': 'Settings', 'profile.summary': 'Local profile on this device',
     premiere: 'PREMIERE', all: 'All', 'toast.language': 'Interface language: {language}', 'toast.settings': 'Profile settings saved'
   },
   sah: {
@@ -335,7 +335,7 @@ const locales = {
   }
 };
 
-const defaultProfile = { name: 'Алексей', language: 'ru', avatar: '', autoplay: true, dataSaver: false };
+const defaultProfile = { name: 'Гость', language: 'ru', avatar: '', autoplay: true, dataSaver: false };
 const recommendationNode = document.querySelector('#recommendations');
 const catalogNode = document.querySelector('#catalog-grid');
 const chipsNode = document.querySelector('#genre-chips');
@@ -701,7 +701,10 @@ function handleAction(action, trigger) {
       showToast(t('toast.language').replace('{language}', languageLabel()));
       break;
     case 'subscription':
-      openAction('Sakha+ активна', 'Подписка действует до 14 августа 2026. Здесь можно будет изменить тариф, восстановить покупки и посмотреть платежи.', 'ПОДПИСКА');
+      openAction('SakhaTube Plus', 'Подписка ещё не запущена. Когда платежи Apple и Google будут подключены, здесь появятся тарифы, восстановление покупок и история платежей.', 'СКОРО');
+      break;
+    case 'account':
+      openAction('Вход и создание аккаунта', 'Сейчас профиль работает на этом устройстве. После подключения почтового сервиса здесь появятся безопасная регистрация, вход и синхронизация между устройствами.', 'АККАУНТ');
       break;
     case 'continue':
       openPlayer(shows[0].title, shows[0]);
