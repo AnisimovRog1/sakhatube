@@ -1,0 +1,15 @@
+.git
+.github
+.tools
+.env
+.env.*
+!.env.example
+node_modules
+media/source
+media/hls
+release
+test
+apps
+worker
+*.log
+.DS_Store
