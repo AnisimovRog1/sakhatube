@@ -46,6 +46,39 @@ test('health is public and content is protected', async (t) => {
   assert.match(privacy.body, /Политика конфиденциальности/);
 });
 
+test('viewer accounts use a scoped session and never expose password hashes', async (t) => {
+  const app = await createTestApp();
+  t.after(() => app.close());
+  const registration = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/register',
+    payload: { email: 'Viewer@Example.com', password: 'correct-horse-battery-staple', displayName: 'Зритель' }
+  });
+  assert.equal(registration.statusCode, 201);
+  const session = JSON.parse(registration.body);
+  assert.equal(session.viewer.email, 'viewer@example.com');
+  assert.equal('passwordHash' in session.viewer, false);
+  assert.equal(app.jwt.decode(session.accessToken).kind, 'viewer');
+  assert.equal(app.jwt.decode(session.accessToken).roles, undefined);
+
+  const profile = await app.inject({ method: 'GET', url: '/v1/auth/me', headers: { authorization: `Bearer ${session.accessToken}` } });
+  assert.equal(profile.statusCode, 200);
+  assert.equal(JSON.parse(profile.body).viewer.displayName, 'Зритель');
+
+  const admin = await app.inject({ method: 'GET', url: '/v1/admin/content', headers: { authorization: `Bearer ${session.accessToken}` } });
+  assert.equal(admin.statusCode, 403);
+
+  const wrongPassword = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'viewer@example.com', password: 'wrong-password-value' } });
+  const unknownEmail = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'unknown@example.com', password: 'wrong-password-value' } });
+  assert.equal(wrongPassword.statusCode, 401);
+  assert.equal(unknownEmail.statusCode, 401);
+  assert.deepEqual(JSON.parse(wrongPassword.body), JSON.parse(unknownEmail.body));
+
+  const login = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'VIEWER@example.com', password: 'correct-horse-battery-staple' } });
+  assert.equal(login.statusCode, 200);
+  assert.equal(JSON.parse(login.body).viewer.email, 'viewer@example.com');
+});
+
 test('editor can create content and arrange the home shelf', async (t) => {
   const app = await createTestApp();
   t.after(() => app.close());

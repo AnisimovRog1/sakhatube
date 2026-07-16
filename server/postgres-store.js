@@ -73,6 +73,17 @@ const mapPublicRequest = (row) => row && ({
   updatedAt: row.updated_at.toISOString()
 });
 
+const mapViewerAccount = (row) => row && ({
+  id: row.id,
+  email: row.email,
+  displayName: row.display_name,
+  passwordHash: row.password_hash,
+  status: row.status,
+  lastLoginAt: row.last_login_at ? row.last_login_at.toISOString() : null,
+  createdAt: row.created_at.toISOString(),
+  updatedAt: row.updated_at.toISOString()
+});
+
 async function migrate(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_items (
@@ -189,12 +200,25 @@ async function migrate(pool) {
     ALTER TABLE public_requests ADD COLUMN IF NOT EXISTS verification_token_hash TEXT;
     ALTER TABLE public_requests ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMPTZ;
     ALTER TABLE public_requests ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS viewer_accounts (
+      id UUID PRIMARY KEY,
+      email TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'deleted')),
+      last_login_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      CONSTRAINT viewer_accounts_email_lowercase CHECK (email = lower(email)),
+      CONSTRAINT viewer_accounts_email_unique UNIQUE (email)
+    );
     CREATE INDEX IF NOT EXISTS comments_status_idx ON comments(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS playback_events_content_idx ON playback_events(content_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS content_scheduled_idx ON content_items(status, scheduled_at) WHERE status = 'scheduled';
     CREATE INDEX IF NOT EXISTS media_assets_content_idx ON media_assets(content_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS media_assets_status_idx ON media_assets(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS public_requests_queue_idx ON public_requests(type, status, created_at ASC);
+    CREATE INDEX IF NOT EXISTS viewer_accounts_status_idx ON viewer_accounts(status, created_at DESC);
   `);
 }
 
@@ -389,6 +413,45 @@ export async function createPostgresStore(connectionString, seedData) {
       values.push(now(), id);
       const { rows } = await pool.query(`UPDATE public_requests SET ${sets.join(', ')}, updated_at = $${values.length - 1} WHERE id = $${values.length} RETURNING *`, values);
       return mapPublicRequest(rows[0]);
+    },
+    async createViewerAccount(data) {
+      const record = {
+        id: randomUUID(),
+        status: 'active',
+        lastLoginAt: null,
+        createdAt: now(),
+        updatedAt: now(),
+        ...data
+      };
+      const { rows } = await pool.query(
+        `INSERT INTO viewer_accounts (id, email, display_name, password_hash, status, last_login_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [record.id, record.email, record.displayName, record.passwordHash, record.status, record.lastLoginAt, record.createdAt, record.updatedAt]
+      );
+      return mapViewerAccount(rows[0]);
+    },
+    async getViewerAccount(id) {
+      const { rows } = await pool.query('SELECT * FROM viewer_accounts WHERE id = $1', [id]);
+      return mapViewerAccount(rows[0]);
+    },
+    async getViewerAccountByEmail(email) {
+      const { rows } = await pool.query('SELECT * FROM viewer_accounts WHERE email = $1', [email]);
+      return mapViewerAccount(rows[0]);
+    },
+    async updateViewerAccount(id, patch) {
+      const fields = {
+        displayName: 'display_name',
+        passwordHash: 'password_hash',
+        status: 'status',
+        lastLoginAt: 'last_login_at'
+      };
+      const entries = Object.entries(patch).filter(([key]) => fields[key]);
+      if (!entries.length) return this.getViewerAccount(id);
+      const values = entries.map(([, value]) => value);
+      const sets = entries.map(([key], index) => `${fields[key]} = $${index + 1}`);
+      values.push(now(), id);
+      const { rows } = await pool.query(`UPDATE viewer_accounts SET ${sets.join(', ')}, updated_at = $${values.length - 1} WHERE id = $${values.length} RETURNING *`, values);
+      return mapViewerAccount(rows[0]);
     },
     async overview() {
       const [summary, quality, top] = await Promise.all([

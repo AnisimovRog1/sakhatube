@@ -1,4 +1,5 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cors from '@fastify/cors';
@@ -29,6 +30,13 @@ const sourceVideoTypes = new Map([
 const maxSourceVideoBytes = 50 * 1024 * 1024 * 1024;
 const multipartPartSize = 16 * 1024 * 1024;
 const multipartPartPageSize = 100;
+const scrypt = promisify(scryptCallback);
+const viewerTokenTtlSeconds = 60 * 60 * 24 * 14;
+const passwordScrypt = { N: 16_384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
+// This hash is used only when a login email is absent.  Performing the same
+// scrypt operation for both paths keeps the login endpoint from becoming an
+// account-enumeration timing oracle.
+const passwordDummyHash = 'scrypt$16384$8$1$c2FraGF0dWJlLWxvZ2luLWR1bW15LXNhbHQ$y2VCxWcPcvWNPgcA-ds8RhUGvt4qMTLWN9ietO4IciGLP9_-HI0-vytUfqc7xZuyz5OJJO7mOUtPGOLoV43y0A';
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -80,6 +88,7 @@ export function createMemoryStore(seed = defaultSeed) {
     ...seed,
     media: seed.media ?? [],
     publicRequests: seed.publicRequests ?? [],
+    viewerAccounts: seed.viewerAccounts ?? [],
     content: seed.content.map((item) => ({
       scheduledAt: null,
       publishedAt: null,
@@ -98,6 +107,14 @@ export function createMemoryStore(seed = defaultSeed) {
 
   function findPublicRequest(id) {
     return state.publicRequests.find((item) => item.id === id);
+  }
+
+  function findViewerAccountById(id) {
+    return state.viewerAccounts.find((item) => item.id === id);
+  }
+
+  function findViewerAccountByEmail(email) {
+    return state.viewerAccounts.find((item) => item.email === email);
   }
 
   return {
@@ -171,6 +188,24 @@ export function createMemoryStore(seed = defaultSeed) {
     getPublicRequest(id) { const item = findPublicRequest(id); return item && clone(item); },
     updatePublicRequest(id, patch) {
       const item = findPublicRequest(id);
+      if (!item) return null;
+      Object.assign(item, patch, { updatedAt: now() });
+      return clone(item);
+    },
+    createViewerAccount(data) {
+      if (findViewerAccountByEmail(data.email)) {
+        const error = new Error('VIEWER_EMAIL_EXISTS');
+        error.code = 'VIEWER_EMAIL_EXISTS';
+        throw error;
+      }
+      const record = { id: randomUUID(), status: 'active', createdAt: now(), updatedAt: now(), ...data };
+      state.viewerAccounts.unshift(record);
+      return clone(record);
+    },
+    getViewerAccount(id) { const item = findViewerAccountById(id); return item && clone(item); },
+    getViewerAccountByEmail(email) { const item = findViewerAccountByEmail(email); return item && clone(item); },
+    updateViewerAccount(id, patch) {
+      const item = findViewerAccountById(id);
       if (!item) return null;
       Object.assign(item, patch, { updatedAt: now() });
       return clone(item);
@@ -278,6 +313,15 @@ const publicRequestAction = z.object({
   note: z.string().trim().max(1_000).optional()
 }).strict();
 const deletionVerificationInput = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный код подтверждения') }).strict();
+const viewerRegistrationInput = z.object({
+  email: z.string().trim().email().max(254),
+  password: z.string().min(12, 'Пароль должен содержать минимум 12 символов').max(128),
+  displayName: z.string().trim().min(2).max(60).optional()
+}).strict();
+const viewerLoginInput = z.object({
+  email: z.string().trim().email().max(254),
+  password: z.string().min(1).max(128)
+}).strict();
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
   sessionId: z.string().min(16).max(128),
@@ -352,6 +396,48 @@ function deletionTokenHash(token, secret) {
 function safeEqualText(a, b) {
   if (!a || !b || a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+function encodePasswordHash(salt, derived) {
+  return `scrypt$${passwordScrypt.N}$${passwordScrypt.r}$${passwordScrypt.p}$${salt}$${derived.toString('base64url')}`;
+}
+
+async function hashPassword(password) {
+  const salt = randomBytes(16).toString('base64url');
+  const derived = await scrypt(password, salt, 64, passwordScrypt);
+  return encodePasswordHash(salt, derived);
+}
+
+async function verifyPassword(password, encoded) {
+  const parts = typeof encoded === 'string' ? encoded.split('$') : [];
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  const [,, rString, pString, salt, expectedString] = parts;
+  const N = Number(parts[1]);
+  const r = Number(rString);
+  const p = Number(pString);
+  // Stored parameters are deliberately fixed. Never permit an attacker to
+  // supply a very expensive hash through a compromised database record.
+  if (N !== passwordScrypt.N || r !== passwordScrypt.r || p !== passwordScrypt.p || !salt || !expectedString) return false;
+  let expected;
+  try {
+    expected = Buffer.from(expectedString, 'base64url');
+  } catch {
+    return false;
+  }
+  if (expected.length !== 64) return false;
+  const derived = await scrypt(password, salt, 64, passwordScrypt);
+  return timingSafeEqual(derived, expected);
+}
+
+function viewerAccountPublic(account) {
+  if (!account) return null;
+  return {
+    id: account.id,
+    email: account.email,
+    displayName: account.displayName,
+    status: account.status,
+    createdAt: account.createdAt
+  };
 }
 
 function publicRequestForStaff(item) {
@@ -472,8 +558,15 @@ export function buildApp(options = {}) {
   app.register(multipart, { limits: { files: 1, fileSize: 15 * 1024 * 1024 } });
 
   app.decorate('authenticate', async (request) => request.jwtVerify());
+  app.decorate('requireViewer', async (request, reply) => {
+    await request.jwtVerify();
+    if (request.user?.kind !== 'viewer' || !request.user?.sub) {
+      return reply.code(403).send({ error: 'VIEWER_SESSION_REQUIRED', message: 'Требуется сессия зрителя' });
+    }
+  });
   app.decorate('allowRoles', (allowed) => async (request, reply) => {
     await request.jwtVerify();
+    if (request.user?.kind === 'viewer') return reply.code(403).send({ error: 'FORBIDDEN', message: 'Недостаточно прав для этого действия' });
     const userRoles = Array.isArray(request.user.roles) ? request.user.roles : [];
     if (!allowed.some((role) => userRoles.includes(role))) reply.code(403).send({ error: 'FORBIDDEN', message: 'Недостаточно прав для этого действия' });
   });
@@ -574,6 +667,56 @@ export function buildApp(options = {}) {
     const body = parseOrReply(z.object({ subject: z.string().min(1).max(80), roles: z.array(z.enum(roles)).min(1).max(roles.length) }), request.body, reply);
     if (!body) return;
     return { accessToken: app.jwt.sign({ sub: body.subject, roles: body.roles }), expiresIn: 900 };
+  });
+
+  const viewerSession = (account) => ({
+    accessToken: app.jwt.sign({ sub: account.id, kind: 'viewer' }, { expiresIn: viewerTokenTtlSeconds }),
+    tokenType: 'Bearer',
+    expiresIn: viewerTokenTtlSeconds,
+    viewer: viewerAccountPublic(account)
+  });
+
+  app.post('/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
+    const body = parseOrReply(viewerRegistrationInput, request.body, reply);
+    if (!body) return;
+    const email = body.email.toLowerCase();
+    const existing = await store.getViewerAccountByEmail(email);
+    if (existing) return reply.code(409).send({ error: 'ACCOUNT_EXISTS', message: 'Этот адрес уже зарегистрирован. Войди в аккаунт.' });
+    const account = {
+      email,
+      displayName: body.displayName?.trim() || email.split('@')[0],
+      passwordHash: await hashPassword(body.password),
+      lastLoginAt: now()
+    };
+    try {
+      const created = await store.createViewerAccount(account);
+      await audit(request, 'viewer.register', 'viewer_account', created.id, null, { status: created.status }, { id: created.id, roles: ['viewer'] });
+      return reply.code(201).send(viewerSession(created));
+    } catch (error) {
+      if (error.code === 'VIEWER_EMAIL_EXISTS' || error.code === '23505') {
+        return reply.code(409).send({ error: 'ACCOUNT_EXISTS', message: 'Этот адрес уже зарегистрирован. Войди в аккаунт.' });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/v1/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const body = parseOrReply(viewerLoginInput, request.body, reply);
+    if (!body) return;
+    const account = await store.getViewerAccountByEmail(body.email.toLowerCase());
+    const passwordValid = await verifyPassword(body.password, account?.passwordHash ?? passwordDummyHash);
+    if (!account || account.status !== 'active' || !passwordValid) {
+      return reply.code(401).send({ error: 'INVALID_CREDENTIALS', message: 'Неверный email или пароль' });
+    }
+    const updated = await store.updateViewerAccount(account.id, { lastLoginAt: now() });
+    await audit(request, 'viewer.login', 'viewer_account', account.id, null, { status: 'success' }, { id: account.id, roles: ['viewer'] });
+    return viewerSession(updated ?? account);
+  });
+
+  app.get('/v1/auth/me', { preHandler: app.requireViewer }, async (request, reply) => {
+    const account = await store.getViewerAccount(request.user.sub);
+    if (!account || account.status !== 'active') return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Сессия недействительна' });
+    return { viewer: viewerAccountPublic(account) };
   });
 
   app.get('/v1/admin/overview', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'moderator', 'analyst']) }, async () => store.overview());
