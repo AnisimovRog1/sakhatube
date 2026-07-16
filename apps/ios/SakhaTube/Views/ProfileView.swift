@@ -2,6 +2,7 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+@MainActor
 struct ProfileView: View {
     @EnvironmentObject private var viewerSession: ViewerSessionStore
     @State private var selectedPhoto: PhotosPickerItem?
@@ -12,6 +13,7 @@ struct ProfileView: View {
     @State private var isShowingSubscription = false
 
     var body: some View {
+        let currentAvatar = avatar
         NavigationStack {
             List {
                 Section {
@@ -19,8 +21,8 @@ struct ProfileView: View {
                         PhotosPicker(selection: $selectedPhoto, matching: .images) {
                             ZStack(alignment: .bottomTrailing) {
                                 Group {
-                                    if let avatar {
-                                        Image(uiImage: avatar)
+                                    if let currentAvatar {
+                                        Image(uiImage: currentAvatar)
                                             .resizable()
                                             .scaledToFill()
                                     } else {
