@@ -622,13 +622,20 @@ test('viewer blocks hide approved comment authors only for the blocker and can b
   assert.equal(JSON.parse(viewerFeedAfter.body).items.some((item) => item.id === comment.id), true);
 });
 
-test('playback event is validated and accepted without exposing admin access', async (t) => {
-  const app = await createTestApp();
+test('playback event is validated and first-frame retries are idempotent', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({ store });
   t.after(() => app.close());
   const invalid = await app.inject({ method: 'POST', url: '/v1/events/playback', payload: { contentId: 'midnight', event: 'first_frame' } });
   assert.equal(invalid.statusCode, 400);
-  const accepted = await app.inject({ method: 'POST', url: '/v1/events/playback', payload: { contentId: 'midnight', sessionId: 'abcdef0123456789', event: 'first_frame', positionMs: 0 } });
+  const payload = { contentId: 'midnight', sessionId: 'abcdef0123456789', event: 'first_frame', positionMs: 0 };
+  const accepted = await app.inject({ method: 'POST', url: '/v1/events/playback', payload });
   assert.equal(accepted.statusCode, 202);
+  assert.equal(JSON.parse(accepted.body).recorded, true);
+  const replay = await app.inject({ method: 'POST', url: '/v1/events/playback', payload });
+  assert.equal(replay.statusCode, 202);
+  assert.equal(JSON.parse(replay.body).recorded, false);
+  assert.equal(store.overview().firstFrameEvents, 1);
 });
 
 test('deletion requests require a one-time verification before staff can complete them', async (t) => {

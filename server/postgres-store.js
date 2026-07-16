@@ -193,6 +193,16 @@ async function migrate(pool) {
       error_code TEXT,
       received_at TIMESTAMPTZ NOT NULL
     );
+    -- playback_events is an append-only telemetry log. Keep the one metric
+    -- used as a view milestone in a separate, conflict-safe ledger so player
+    -- retries cannot increment it twice. This avoids adding a unique index to
+    -- historic telemetry, which may already contain legitimate old duplicates.
+    CREATE TABLE IF NOT EXISTS playback_first_frames (
+      content_id TEXT NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL,
+      received_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (content_id, session_id)
+    );
     CREATE TABLE IF NOT EXISTS media_assets (
       id UUID PRIMARY KEY,
       kind TEXT NOT NULL,
@@ -643,11 +653,42 @@ export async function createPostgresStore(connectionString, seedData) {
       return { id: rows[0].id, blockerId: rows[0].blocker_id, blockedId: rows[0].blocked_id, createdAt: rows[0].created_at.toISOString() };
     },
     async addPlayback(event) {
-      await pool.query(
-        `INSERT INTO playback_events (id, content_id, viewer_id, session_id, event, position_ms, error_code, received_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [randomUUID(), event.contentId, event.viewerId, event.sessionId, event.event, event.positionMs ?? null, event.errorCode ?? null, now()]
-      );
+      const receivedAt = now();
+      if (event.event !== 'first_frame') {
+        await pool.query(
+          `INSERT INTO playback_events (id, content_id, viewer_id, session_id, event, position_ms, error_code, received_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [randomUUID(), event.contentId, event.viewerId, event.sessionId, event.event, event.positionMs ?? null, event.errorCode ?? null, receivedAt]
+        );
+        return true;
+      }
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const firstFrame = await client.query(
+          `INSERT INTO playback_first_frames (content_id, session_id, received_at)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (content_id, session_id) DO NOTHING
+           RETURNING content_id`,
+          [event.contentId, event.sessionId, receivedAt]
+        );
+        if (!firstFrame.rows[0]) {
+          await client.query('COMMIT');
+          return false;
+        }
+        await client.query(
+          `INSERT INTO playback_events (id, content_id, viewer_id, session_id, event, position_ms, error_code, received_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [randomUUID(), event.contentId, event.viewerId, event.sessionId, event.event, event.positionMs ?? null, event.errorCode ?? null, receivedAt]
+        );
+        await client.query('COMMIT');
+        return true;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     },
     async createPublicRequest(data) {
       const record = {

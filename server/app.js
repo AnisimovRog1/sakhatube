@@ -282,7 +282,18 @@ export function createMemoryStore(seed = defaultSeed) {
       if (index < 0) return null;
       return clone(state.viewerBlocks.splice(index, 1)[0]);
     },
-    addPlayback(event) { state.playback.push({ id: randomUUID(), receivedAt: now(), ...event }); },
+    // A player can emit `first_frame` more than once while reconnecting or
+    // restoring a backgrounded tab. Count that milestone once per playback
+    // session, otherwise the public analytics can be inflated accidentally.
+    // Other events intentionally remain append-only: pause/buffer telemetry is
+    // meaningful as a sequence.
+    addPlayback(event) {
+      if (event.event === 'first_frame' && state.playback.some((item) => item.contentId === event.contentId && item.sessionId === event.sessionId && item.event === 'first_frame')) {
+        return false;
+      }
+      state.playback.push({ id: randomUUID(), receivedAt: now(), ...event });
+      return true;
+    },
     createPublicRequest(data) {
       const record = {
         id: randomUUID(),
@@ -2176,8 +2187,10 @@ export function buildApp(options = {}) {
     const body = parseOrReply(playbackInput, request.body, reply);
     if (!body) return;
     if (!await store.getContent(body.contentId)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
-    await store.addPlayback({ ...body, viewerId: request.user?.sub ?? null });
-    return reply.code(202).send({ accepted: true });
+    const recorded = await store.addPlayback({ ...body, viewerId: request.user?.sub ?? null });
+    // Keep the transport idempotent for clients: a retry receives success, but
+    // a duplicate first-frame event does not change analytics.
+    return reply.code(202).send({ accepted: true, recorded: recorded !== false });
   });
 
   // Studio sees processing state but never receives an object-storage key,
