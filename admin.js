@@ -1115,6 +1115,7 @@ async function updateContentLifecycle(id, action) {
   if (!isApiMode()) return;
   const item = contentById(id);
   if (!item) return;
+  let request;
   const requests = {
     'submit-review': { path: 'submit-review', body: {}, success: 'Материал отправлен на проверку.' },
     'publish-content': { path: 'publish', body: {}, success: 'Материал опубликован.' }
@@ -1125,7 +1126,7 @@ async function updateContentLifecycle(id, action) {
     if (reference.trim().length < 3) { showToast('Укажи номер проверки минимум из 3 символов.'); return; }
     request = { path: 'verify-rights', body: { reference: reference.trim() }, success: 'Права подтверждены. Теперь материал можно публиковать.' };
   }
-  let request = requests[action];
+  if (action !== 'verify-rights') request = requests[action];
   if (action === 'unpublish-content') {
     const reason = window.prompt('Почему снимаем материал с показа? Эта причина останется в аудите.');
     if (reason === null) return;

@@ -345,6 +345,11 @@ const playerMeta = document.querySelector('#player-meta');
 const playerVideo = document.querySelector('#player-video');
 const playerPoster = document.querySelector('#player-poster');
 const playerEmptyCopy = document.querySelector('#player-empty-copy');
+const playerStage = document.querySelector('#player-stage');
+const playerControls = document.querySelector('#player-controls');
+const playerToggle = document.querySelector('#player-toggle');
+const playerMute = document.querySelector('#player-mute');
+const playerFullscreen = document.querySelector('#player-fullscreen');
 const notificationsDialog = document.querySelector('#notifications-dialog');
 const settingsDialog = document.querySelector('#settings-dialog');
 const actionDialog = document.querySelector('#action-dialog');
@@ -363,6 +368,18 @@ let toastTimer;
 let carouselTimer;
 let shortTouchStartY = null;
 let shortWheelTotal = 0;
+
+const playerIcons = {
+  play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 9 6-9 6Z" fill="currentColor" stroke="none"/></svg>',
+  pause: '<svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6v12M16 6v12"/></svg>',
+  soundOn: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l4 3V7l-4 3H4Zm11.5-.5a4 4 0 0 1 0 5m2.7-7.3a7 7 0 0 1 0 9.6"/></svg>',
+  soundOff: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l4 3V7l-4 3H4ZM16 9l4 6m0-6-4 6"/></svg>'
+};
+
+function setPlayerControlIcon(button, icon, label) {
+  button.innerHTML = playerIcons[icon];
+  button.setAttribute('aria-label', label);
+}
 let lastShortChangeAt = 0;
 let shortCleanTimer;
 let profile = loadProfile();
@@ -583,7 +600,7 @@ function stopPlayer() {
   playerVideo.load();
   playerVideo.hidden = true;
   playerPoster.hidden = false;
-  document.querySelector('#player-controls').hidden = true;
+  playerControls.hidden = true;
 }
 
 function openPlayer(title, source = {}) {
@@ -603,11 +620,10 @@ function openPlayer(title, source = {}) {
     playerPoster.hidden = false;
     playerEmptyCopy.textContent = 'Подготавливаем видео…';
     playerVideo.muted = true;
-    document.querySelector('#player-mute').textContent = '⌁';
-    document.querySelector('#player-mute').setAttribute('aria-label', 'Включить звук');
+    setPlayerControlIcon(playerMute, 'soundOff', 'Включить звук');
     playerVideo.src = playbackUrl;
     playerVideo.hidden = false;
-    document.querySelector('#player-controls').hidden = false;
+    playerControls.hidden = false;
     openDialog(player);
     playerTrackingStop = attachPlaybackTracking(playerVideo, source.contentId);
     void playerVideo.play().catch(() => {});
@@ -824,25 +840,47 @@ player.addEventListener('close', stopPlayer);
 document.querySelector('#player-poster-play').addEventListener('click', () => {
   if (playerVideo.src) void playerVideo.play().catch(() => {});
 });
-document.querySelector('#player-toggle').addEventListener('click', () => {
+playerToggle.addEventListener('click', () => {
   if (playerVideo.paused) void playerVideo.play().catch(() => {});
   else playerVideo.pause();
 });
-document.querySelector('#player-mute').addEventListener('click', () => {
+playerMute.addEventListener('click', () => {
   playerVideo.muted = !playerVideo.muted;
-  document.querySelector('#player-mute').textContent = playerVideo.muted ? '⌁' : '◖))';
+  setPlayerControlIcon(playerMute, playerVideo.muted ? 'soundOff' : 'soundOn', playerVideo.muted ? 'Включить звук' : 'Выключить звук');
 });
 document.querySelector('#player-progress').addEventListener('input', (event) => {
   if (Number.isFinite(playerVideo.duration)) playerVideo.currentTime = playerVideo.duration * (Number(event.target.value) / 100);
 });
-document.querySelector('#player-fullscreen').addEventListener('click', () => {
-  const stage = document.querySelector('.player-stage');
-  if (document.fullscreenElement) document.exitFullscreen?.();
-  else stage.requestFullscreen?.();
+playerFullscreen.addEventListener('click', () => {
+  if (document.fullscreenElement) {
+    void document.exitFullscreen?.();
+    return;
+  }
+  // Safari on iPhone does not expose fullscreen for arbitrary elements;
+  // entering it through the video element is the native, reliable path.
+  if (typeof playerStage.requestFullscreen === 'function') {
+    void playerStage.requestFullscreen();
+  } else if (typeof playerVideo.webkitEnterFullscreen === 'function') {
+    playerVideo.webkitEnterFullscreen();
+  } else {
+    showToast('Плеер уже открыт на весь экран');
+  }
 });
-playerVideo.addEventListener('play', () => { document.querySelector('#player-toggle').textContent = '❚❚'; document.querySelector('#player-toggle').setAttribute('aria-label', 'Пауза'); });
-playerVideo.addEventListener('playing', () => { playerPoster.hidden = true; });
-playerVideo.addEventListener('pause', () => { document.querySelector('#player-toggle').textContent = '▶'; document.querySelector('#player-toggle').setAttribute('aria-label', 'Продолжить'); });
+playerVideo.addEventListener('play', () => setPlayerControlIcon(playerToggle, 'pause', 'Пауза'));
+playerVideo.addEventListener('loadeddata', () => {
+  // Do not reveal an empty black frame while a mobile browser is still decoding.
+  if (playerVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) playerPoster.hidden = true;
+});
+playerVideo.addEventListener('pause', () => setPlayerControlIcon(playerToggle, 'play', 'Продолжить'));
+playerVideo.addEventListener('error', () => {
+  playerPoster.hidden = false;
+  playerEmptyCopy.textContent = 'Не удалось загрузить видео. Проверь соединение и попробуй ещё раз.';
+  playerControls.hidden = true;
+});
+playerVideo.addEventListener('click', () => {
+  if (playerVideo.paused) void playerVideo.play().catch(() => {});
+  else playerVideo.pause();
+});
 playerVideo.addEventListener('timeupdate', () => {
   const duration = playerVideo.duration || 0;
   const current = playerVideo.currentTime || 0;

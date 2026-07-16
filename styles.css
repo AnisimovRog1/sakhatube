@@ -227,13 +227,18 @@ em { color: #dce9ff; font-style: normal; }
 .player-video[hidden] { display: none; }
 .player-poster { display: grid; place-content: center; gap: 13px; background: radial-gradient(circle at 64% 25%, rgba(118,173,255,.32), transparent 20%), linear-gradient(145deg, #202a39, #0c0e13 67%); color: var(--muted); text-align: center; }
 .player-poster[hidden] { display: none!important; }
-.player-play { display: grid; width: 62px; height: 62px; place-items: center; margin: auto; border-radius: 50%; background: var(--primary); color: var(--primary-ink); }
-.close-player { position: absolute; z-index: 2; top: 13px; right: 13px; width: 34px; height: 34px; border: 0; border-radius: 50%; background: rgba(0,0,0,.42); color: #fff; font-size: 24px; }
-.player-controls { position: absolute; z-index: 3; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns:32px auto minmax(0,1fr) 42px 32px; align-items: center; gap: 11px; padding: 30px 18px 16px; background:linear-gradient(transparent,rgba(0,0,0,.86)); color:#fff; font-size:12px; }
+.player-play { display: grid; width: 62px; height: 62px; place-items: center; margin: auto; border-radius: 50%; background: var(--primary); color: var(--primary-ink); box-shadow: 0 12px 30px rgba(84,145,255,.3); }
+.player-play svg { width: 25px; height: 25px; margin-left: 2px; fill: currentColor; stroke: none; }
+.close-player { position: absolute; z-index: 5; top: 13px; right: 13px; display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid rgba(255,255,255,.15); border-radius: 50%; background: rgba(5,7,10,.7); box-shadow: 0 5px 18px rgba(0,0,0,.22); color: #fff; backdrop-filter: blur(12px); }
+.close-player svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-width: 2.5; }
+.player-controls { position: absolute; z-index: 4; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns:38px auto minmax(0,1fr) 38px 38px; align-items: center; gap: 10px; padding: 48px 18px 16px; background:linear-gradient(transparent,rgba(0,0,0,.9)); color:#fff; font-size:12px; transition: opacity .18s ease, transform .18s ease; }
 .player-controls[hidden] { display:none; }
-.player-controls button { display:grid; width:32px; height:32px; place-items:center; border:0; border-radius:50%; background:rgba(255,255,255,.12); color:#fff; font-size:14px; }
-.player-controls input { width:100%; accent-color:var(--primary); }
-.player-controls #player-mute { width:42px; border-radius:16px; font-size:10px; }
+.player-controls button { display:grid; width:38px; height:38px; place-items:center; border:1px solid rgba(255,255,255,.14); border-radius:50%; background:rgba(20,23,29,.68); color:#fff; box-shadow: 0 4px 13px rgba(0,0,0,.2); }
+.player-controls button:active, .close-player:active { transform: scale(.94); }
+.player-controls svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-linecap:round; stroke-linejoin:round; stroke-width:2.1; }
+.player-controls .icon-pause { stroke-width:2.8; }
+.player-controls input { width:100%; height:20px; margin:0; accent-color:var(--primary); cursor:pointer; }
+.player-controls #player-mute { font-size:10px; }
 .player-info { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 18px; }
 .player-info .eyebrow { margin-bottom: 7px; }
 .player-info h2 { margin: 0; font-size: 20px; }
@@ -410,8 +415,11 @@ em { color: #dce9ff; font-style: normal; }
   .player-info .eyebrow { font-size: 10px; }
   .player-info h2 { overflow: hidden; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
   .player-info .button { display: none; }
-  .player-controls { padding-right: 18px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); padding-left: 18px; }
-  .close-player { top: calc(14px + env(safe-area-inset-top)); right: 14px; width: 40px; height: 40px; background: rgba(0,0,0,.58); }
+  .player-controls { grid-template-columns: 42px auto minmax(0,1fr) 42px 42px; gap: 9px; padding: 54px 16px calc(14px + env(safe-area-inset-bottom)); }
+  .player-controls button { width: 42px; height: 42px; background: rgba(16,18,24,.8); }
+  .player-controls #player-time { font-variant-numeric: tabular-nums; font-weight: 750; }
+  .close-player { top: calc(14px + env(safe-area-inset-top)); right: 14px; width: 42px; height: 42px; background: rgba(5,7,10,.72); }
+  .player-play { width: 68px; height: 68px; }
   .app-dialog { width: 100vw; max-width: 100vw; margin: auto 0 0; border-right: 0; border-bottom: 0; border-left: 0; border-radius: 18px 18px 0 0; }
   .dialog-header { padding: 18px 16px 14px; }
   .field-label { padding-right: 16px; padding-left: 16px; }
