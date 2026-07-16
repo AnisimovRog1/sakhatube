@@ -6,7 +6,9 @@ import SwiftUI
 struct PlayerView: View {
     let item: CatalogItem
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var viewerSession: ViewerSessionStore
     @StateObject private var playback = ProtectedPlaybackController()
+    @State private var isShowingComments = false
 
     var body: some View {
         NavigationStack {
@@ -26,6 +28,16 @@ struct PlayerView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(AppTheme.primary)
                         }
+
+                        Button {
+                            isShowingComments = true
+                        } label: {
+                            Label("Комментарии", systemImage: "text.bubble")
+                                .font(.headline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(AppTheme.primary)
 
                         Divider().overlay(AppTheme.divider)
                         Text("Эпизоды").font(.headline.weight(.bold))
@@ -49,6 +61,10 @@ struct PlayerView: View {
         }
         .task { await playback.start(item: item) }
         .onDisappear { playback.stop() }
+        .sheet(isPresented: $isShowingComments) {
+            CommentsView(contentId: item.id)
+                .environmentObject(viewerSession)
+        }
     }
 
     @ViewBuilder

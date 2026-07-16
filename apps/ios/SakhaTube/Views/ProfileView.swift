@@ -9,6 +9,7 @@ struct ProfileView: View {
     @State private var preferredLanguage = "Русский"
     @State private var isShowingAccount = false
     @State private var isShowingDeletion = false
+    @State private var isShowingSubscription = false
 
     var body: some View {
         NavigationStack {
@@ -71,7 +72,8 @@ struct ProfileView: View {
                             Task { await viewerSession.signOutEverywhereForThisDevice() }
                         }
                     }
-                    Text("Подписки и покупки появятся только после подключения безопасной оплаты через App Store.")
+                    Button("SakhaTube Plus") { isShowingSubscription = true }
+                    Text("Покупки открывают доступ только после проверки на сервере.")
                         .font(.footnote)
                         .foregroundStyle(AppTheme.secondaryText)
                 }
@@ -127,6 +129,7 @@ struct ProfileView: View {
                     DeletionRequestView(viewer: viewer)
                 }
             }
+            .sheet(isPresented: $isShowingSubscription) { SubscriptionView() }
             .task(id: selectedPhoto) {
                 guard let selectedPhoto,
                       let data = try? await selectedPhoto.loadTransferable(type: Data.self),

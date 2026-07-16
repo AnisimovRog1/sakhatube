@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -32,6 +34,9 @@ import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -82,6 +87,7 @@ import com.sakhatube.android.data.CatalogItem
 import com.sakhatube.android.data.CatalogUiState
 import com.sakhatube.android.data.AuthUiState
 import com.sakhatube.android.data.DeletionUiState
+import com.sakhatube.android.data.ViewerComment
 
 private enum class Destination(val title: String) {
     Home("Главная"),
@@ -95,6 +101,7 @@ fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel(), authViewModel: AuthV
     var destination by remember { mutableStateOf(Destination.Home) }
     var selectedContent by remember { mutableStateOf<CatalogItem?>(null) }
     val playbackViewModel: PlaybackViewModel = viewModel()
+    val commentsViewModel: CommentsViewModel = viewModel()
 
     Scaffold(
         topBar = {
@@ -126,6 +133,8 @@ fun SakhaTubeApp(viewModel: CatalogViewModel = viewModel(), authViewModel: AuthV
             PlaybackScreen(
                 item = selected,
                 viewModel = playbackViewModel,
+                commentsViewModel = commentsViewModel,
+                onSignIn = { selectedContent = null; destination = Destination.Profile },
                 onClose = { selectedContent = null },
                 modifier = Modifier.padding(padding)
             )
@@ -249,6 +258,8 @@ private fun CatalogScreen(
 private fun PlaybackScreen(
     item: CatalogItem,
     viewModel: PlaybackViewModel,
+    commentsViewModel: CommentsViewModel,
+    onSignIn: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -269,6 +280,8 @@ private fun PlaybackScreen(
             onEvent = { event, positionMs, errorCode ->
                 viewModel.report(item.id, currentState.session.sessionId, event, positionMs, errorCode)
             },
+            commentsViewModel = commentsViewModel,
+            onSignIn = onSignIn,
             modifier = modifier
         )
         is PlaybackUiState.Paywall -> PlaybackStatus(
@@ -300,6 +313,8 @@ private fun SecureHlsPlayer(
     item: CatalogItem,
     session: com.sakhatube.android.data.PlaybackSession,
     onEvent: (event: String, positionMs: Long?, errorCode: String?) -> Unit,
+    commentsViewModel: CommentsViewModel,
+    onSignIn: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -332,7 +347,7 @@ private fun SecureHlsPlayer(
         }
     }
     Column(
-        modifier = modifier.fillMaxSize().padding(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         AndroidView(
@@ -343,6 +358,68 @@ private fun SecureHlsPlayer(
         Text(item.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(item.synopsis, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("Защищённое воспроизведение", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        CommentsSection(item.id, commentsViewModel, onSignIn)
+    }
+}
+
+@Composable
+private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onSignIn: () -> Unit) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    var text by remember(contentId) { mutableStateOf("") }
+    var reportTarget by remember { mutableStateOf<ViewerComment?>(null) }
+    LaunchedEffect(contentId) { viewModel.load(contentId) }
+
+    if (reportTarget != null) {
+        AlertDialog(
+            onDismissRequest = { reportTarget = null },
+            title = { Text("Пожаловаться?") },
+            text = { Text("Жалоба будет отправлена модераторам. Мы не сообщим автору, кто её отправил.") },
+            confirmButton = { TextButton(onClick = { viewModel.report(reportTarget!!.id); reportTarget = null }) { Text("Отправить") } },
+            dismissButton = { TextButton(onClick = { reportTarget = null }) { Text("Отмена") } }
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Outlined.Forum, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(8.dp))
+            Text("Комментарии", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        }
+        if (viewModel.signedIn()) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it.take(1_000) },
+                label = { Text("Написать комментарий") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2,
+                maxLines = 4
+            )
+            Button(onClick = { viewModel.post(contentId, text); text = "" }, enabled = text.trim().isNotEmpty()) { Text("Отправить") }
+        } else {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Войди, чтобы писать комментарии и отправлять жалобы.", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = onSignIn) { Text("Войти") }
+                }
+            }
+        }
+        state.notice?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
+        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+        if (state.loading) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+        else if (state.items.isEmpty()) Text("Пока нет комментариев. Будь первым.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else state.items.forEach { comment ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(comment.authorName, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        if (comment.status != null) Text("На модерации", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        else if (viewModel.signedIn()) IconButton(onClick = { reportTarget = comment }, modifier = Modifier.size(36.dp)) { Icon(Icons.Outlined.Flag, contentDescription = "Пожаловаться") }
+                    }
+                    Text(comment.text)
+                    if (comment.status != null) TextButton(onClick = { viewModel.delete(comment.id) }) { Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Удалить") }
+                }
+            }
+        }
     }
 }
 

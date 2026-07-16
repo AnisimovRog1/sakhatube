@@ -156,6 +156,30 @@ actor APIClient {
         )
     }
 
+    // MARK: - Viewer comments
+
+    func comments(contentId: String, limit: Int = 50) async throws -> CommentListResponse {
+        var components = URLComponents(url: AppConfiguration.apiBaseURL.appending(path: "v1/content/\(contentId)/comments"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "limit", value: String(min(max(limit, 1), 50)))]
+        guard let url = components?.url else { throw APIClientError.invalidResponse }
+        return try await request(url)
+    }
+
+    func createComment(contentId: String, text: String, accessToken: String) async throws -> CommentCreateResponse {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/content/\(contentId)/comments")
+        return try await request(url, method: "POST", body: CommentCreateRequest(text: text), bearerToken: accessToken)
+    }
+
+    func reportComment(id: String, reason: CommentReportReason, accessToken: String) async throws {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/comments/\(id)/report")
+        try await requestNoContent(url, method: "POST", body: CommentReportRequest(reason: reason), bearerToken: accessToken)
+    }
+
+    func deleteComment(id: String, accessToken: String) async throws {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/comments/\(id)/delete")
+        try await requestNoContent(url, method: "POST", bearerToken: accessToken)
+    }
+
     private func request<Response: Decodable>(_ url: URL) async throws -> Response {
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
@@ -174,6 +198,22 @@ actor APIClient {
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await execute(request)
+    }
+
+    private func request<Request: Encodable, Response: Decodable>(
+        _ url: URL,
+        method: String,
+        body: Request,
+        bearerToken: String
+    ) async throws -> Response {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(body)
         return try await execute(request)
     }
@@ -203,6 +243,19 @@ actor APIClient {
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw APIClientError.invalidResponse }
+        guard (200..<300).contains(httpResponse.statusCode) else { throw APIClientError.httpStatus(httpResponse.statusCode) }
+    }
+
+    private func requestNoContent<Body: Encodable>(_ url: URL, method: String, body: Body, bearerToken: String) async throws {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(body)
         let (_, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else { throw APIClientError.invalidResponse }
@@ -250,6 +303,44 @@ struct DeletionRequestResponse: Decodable, Sendable {
     let status: String
     let verificationRequired: Bool
 }
+
+struct CommentListResponse: Decodable, Sendable {
+    let items: [ViewerCommentDTO]
+}
+
+struct CommentCreateResponse: Decodable, Sendable {
+    let item: ViewerCommentDTO
+    let message: String
+}
+
+struct ViewerCommentDTO: Decodable, Identifiable, Sendable, Equatable {
+    let id: String
+    let contentId: String
+    let authorName: String
+    let text: String
+    let status: String?
+    let createdAt: String
+    let updatedAt: String
+}
+
+enum CommentReportReason: String, Encodable, CaseIterable, Identifiable, Sendable {
+    case spam, abuse, hate, sexual, copyright, other
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .spam: return "Спам"
+        case .abuse: return "Оскорбление"
+        case .hate: return "Язык ненависти"
+        case .sexual: return "Неприемлемый контент"
+        case .copyright: return "Нарушение прав"
+        case .other: return "Другое"
+        }
+    }
+}
+
+private struct CommentCreateRequest: Encodable, Sendable { let text: String }
+private struct CommentReportRequest: Encodable, Sendable { let reason: CommentReportReason }
 
 struct ViewerRegistrationResponse: Decodable, Sendable {
     let status: String

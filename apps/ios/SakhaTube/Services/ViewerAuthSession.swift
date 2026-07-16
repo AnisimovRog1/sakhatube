@@ -64,6 +64,10 @@ final class ViewerSessionStore: ObservableObject {
         return viewer
     }
 
+    /// Only UI components that issue a request on behalf of the signed-in
+    /// viewer may read this short-lived token. It is never persisted here.
+    var accessTokenForAuthenticatedRequest: String? { accessToken }
+
     func register(email: String, username: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse {
         isWorking = true
         defer { isWorking = false }

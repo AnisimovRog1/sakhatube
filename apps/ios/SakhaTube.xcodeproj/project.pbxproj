@@ -26,6 +26,9 @@
 		A5B1C3D4E5F60718293A4C01 /* FirebaseAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B1C3D4E5F60718293A4C02 /* FirebaseAppDelegate.swift */; };
 		A5B1C3D4E5F60718293A4C03 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = A5B1C3D4E5F60718293A4C05 /* FirebaseCore */; };
 		A5B1C3D4E5F60718293A4C04 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = A5B1C3D4E5F60718293A4C06 /* FirebaseAuth */; };
+		B10000000000000000000001 /* Storefront.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* Storefront.swift */; };
+		B10000000000000000000003 /* SubscriptionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* SubscriptionView.swift */; };
+		A5B1C3D4E5F60718293A4C30 /* CommentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B1C3D4E5F60718293A4C31 /* CommentsView.swift */; };
 		F33352DB3E90CDDCBB13E3FA /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B89A87071A0B60629452B65 /* PlayerView.swift */; };
 /* End PBXBuildFile section */
 
@@ -50,6 +53,9 @@
 		A5B1C3D4E5F60718293A4B5D /* ViewerAuthSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewerAuthSession.swift; sourceTree = "<group>"; };
 		A5B1C3D4E5F60718293A4B5F /* ViewerAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewerAuthView.swift; sourceTree = "<group>"; };
 		A5B1C3D4E5F60718293A4C02 /* FirebaseAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebaseAppDelegate.swift; sourceTree = "<group>"; };
+		B10000000000000000000002 /* Storefront.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storefront.swift; sourceTree = "<group>"; };
+		B10000000000000000000004 /* SubscriptionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionView.swift; sourceTree = "<group>"; };
+		A5B1C3D4E5F60718293A4C31 /* CommentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -83,12 +89,14 @@
 			children = (
 				F436E9C7DA0B10C03240F8BF /* AppRootView.swift */,
 				A5B1C3D4E5F60718293A4B5F /* ViewerAuthView.swift */,
+				A5B1C3D4E5F60718293A4C31 /* CommentsView.swift */,
 				A8B09D3723C36CC1E5081116 /* CatalogView.swift */,
 				D94672074CB926135DE7EF40 /* ForYouView.swift */,
 				A696357A5C6035E4007B7058 /* HomeView.swift */,
 				A1303DC7758F3D6808DD7604 /* LibraryView.swift */,
 				0B89A87071A0B60629452B65 /* PlayerView.swift */,
 				BA2E940D4EE24680EC8A9805 /* ProfileView.swift */,
+				B10000000000000000000004 /* SubscriptionView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -131,6 +139,7 @@
 				3C3F9DE6E286462ABA5C8D1B /* APIClient.swift */,
 				A5B1C3D4E5F60718293A4B5D /* ViewerAuthSession.swift */,
 				A5B1C3D4E5F60718293A4C02 /* FirebaseAppDelegate.swift */,
+				B10000000000000000000002 /* Storefront.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -240,6 +249,9 @@
 				F33352DB3E90CDDCBB13E3FA /* PlayerView.swift in Sources */,
 				192A8055920B3DFF7035A783 /* PosterArtwork.swift in Sources */,
 				2E8D7FABE07BF04522A0F00B /* ProfileView.swift in Sources */,
+				A5B1C3D4E5F60718293A4C30 /* CommentsView.swift in Sources */,
+				B10000000000000000000001 /* Storefront.swift in Sources */,
+				B10000000000000000000003 /* SubscriptionView.swift in Sources */,
 				82D23F1BCC34A0FD7D2E1271 /* SakhaTubeApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -276,6 +288,7 @@
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				SAKHATUBE_SUBSCRIPTION_PRODUCT_IDS = "";
 			};
 			name = Debug;
 		};
@@ -356,6 +369,7 @@
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				SAKHATUBE_SUBSCRIPTION_PRODUCT_IDS = "";
 			};
 			name = Release;
 		};
