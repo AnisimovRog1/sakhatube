@@ -17,7 +17,7 @@ async function verifiedViewer(app, { email, displayName }) {
   const registration = await app.inject({
     method: 'POST',
     url: '/v1/auth/register',
-    payload: { email, password: 'correct-horse-battery-staple', displayName }
+    payload: { email, username: `user-${email.split('@')[0]}`, password: 'correct-horse-battery-staple', displayName }
   });
   assert.equal(registration.statusCode, 202);
   const pending = JSON.parse(registration.body).developmentVerification;
@@ -68,7 +68,7 @@ test('viewer accounts require one-time email verification before issuing a scope
   const registration = await app.inject({
     method: 'POST',
     url: '/v1/auth/register',
-    payload: { email: 'Viewer@Example.com', password: 'correct-horse-battery-staple', displayName: 'Зритель' }
+    payload: { email: 'Viewer@Example.com', username: 'viewer-login', password: 'correct-horse-battery-staple', displayName: 'Зритель' }
   });
   assert.equal(registration.statusCode, 202);
   const pending = JSON.parse(registration.body);
@@ -93,6 +93,8 @@ test('viewer accounts require one-time email verification before issuing a scope
   assert.equal(verified.statusCode, 200);
   const session = JSON.parse(verified.body);
   assert.equal(session.viewer.email, 'viewer@example.com');
+  assert.match(session.viewer.id, /^ST-[A-F0-9]{12}$/);
+  assert.equal(session.viewer.username, 'viewer-login');
   assert.equal('passwordHash' in session.viewer, false);
   assert.equal(app.jwt.decode(session.accessToken).kind, 'viewer');
   assert.equal(typeof app.jwt.decode(session.accessToken).sid, 'string');
@@ -108,9 +110,38 @@ test('viewer accounts require one-time email verification before issuing a scope
   const replay = await app.inject({ method: 'POST', url: '/v1/auth/verify-email', payload: { accountId: pending.developmentVerification.accountId, token: pending.developmentVerification.token } });
   assert.equal(replay.statusCode, 400);
 
-  const login = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'VIEWER@example.com', password: 'correct-horse-battery-staple' } });
+  const login = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { login: 'VIEWER-LOGIN', password: 'correct-horse-battery-staple' } });
   assert.equal(login.statusCode, 200);
   assert.equal(JSON.parse(login.body).viewer.email, 'viewer@example.com');
+});
+
+test('viewer login is unique, case-insensitive, and the public ID does not change between sessions', async (t) => {
+  const app = await createTestApp();
+  t.after(() => app.close());
+  const registration = await app.inject({
+    method: 'POST', url: '/v1/auth/register',
+    payload: { email: 'login@example.com', username: 'My.Login', password: 'correct-horse-battery-staple', displayName: 'Логин' }
+  });
+  const pending = JSON.parse(registration.body).developmentVerification;
+  const verified = await app.inject({ method: 'POST', url: '/v1/auth/verify-email', payload: { accountId: pending.accountId, token: pending.token } });
+  const first = JSON.parse(verified.body).viewer;
+  assert.equal(first.username, 'my.login');
+  assert.match(first.id, /^ST-[A-F0-9]{12}$/);
+
+  const repeatedName = await app.inject({
+    method: 'POST', url: '/v1/auth/register',
+    payload: { email: 'another@example.com', username: 'MY.LOGIN', password: 'correct-horse-battery-staple', displayName: 'Другой' }
+  });
+  // Registration does not reveal whether a login is already occupied.
+  assert.equal(repeatedName.statusCode, 202);
+  assert.equal(JSON.parse(repeatedName.body).developmentVerification, undefined);
+
+  const login = await app.inject({
+    method: 'POST', url: '/v1/auth/login',
+    payload: { login: 'MY.LOGIN', password: 'correct-horse-battery-staple' }
+  });
+  assert.equal(login.statusCode, 200);
+  assert.equal(JSON.parse(login.body).viewer.id, first.id);
 });
 
 test('viewer refresh tokens rotate once and logout revokes the linked access session', async (t) => {

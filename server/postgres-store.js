@@ -86,7 +86,9 @@ const mapPublicRequest = (row) => row && ({
 
 const mapViewerAccount = (row) => row && ({
   id: row.id,
+  publicId: row.public_id,
   email: row.email,
+  username: row.username,
   displayName: row.display_name,
   passwordHash: row.password_hash,
   status: row.status,
@@ -257,7 +259,9 @@ async function migrate(pool) {
     ALTER TABLE public_requests ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
     CREATE TABLE IF NOT EXISTS viewer_accounts (
       id UUID PRIMARY KEY,
+      public_id TEXT,
       email TEXT NOT NULL,
+      username TEXT,
       display_name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending_verification' CHECK (status IN ('pending_verification', 'active', 'disabled', 'deleted')),
@@ -275,6 +279,18 @@ async function migrate(pool) {
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS verification_token_hash TEXT;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMPTZ;
     ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+    ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS public_id TEXT;
+    ALTER TABLE viewer_accounts ADD COLUMN IF NOT EXISTS username TEXT;
+    UPDATE viewer_accounts SET public_id = 'ST-' || upper(substr(replace(id::text, '-', ''), 1, 12)) WHERE public_id IS NULL;
+    UPDATE viewer_accounts SET username = 'viewer-' || lower(substr(replace(id::text, '-', ''), 1, 10)) WHERE username IS NULL;
+    ALTER TABLE viewer_accounts ALTER COLUMN public_id SET NOT NULL;
+    ALTER TABLE viewer_accounts ALTER COLUMN username SET NOT NULL;
+    ALTER TABLE viewer_accounts DROP CONSTRAINT IF EXISTS viewer_accounts_public_id_unique;
+    ALTER TABLE viewer_accounts ADD CONSTRAINT viewer_accounts_public_id_unique UNIQUE (public_id);
+    ALTER TABLE viewer_accounts DROP CONSTRAINT IF EXISTS viewer_accounts_username_unique;
+    ALTER TABLE viewer_accounts ADD CONSTRAINT viewer_accounts_username_unique UNIQUE (username);
+    ALTER TABLE viewer_accounts DROP CONSTRAINT IF EXISTS viewer_accounts_username_lowercase;
+    ALTER TABLE viewer_accounts ADD CONSTRAINT viewer_accounts_username_lowercase CHECK (username = lower(username));
     CREATE TABLE IF NOT EXISTS viewer_sessions (
       id UUID PRIMARY KEY,
       account_id UUID NOT NULL REFERENCES viewer_accounts(id) ON DELETE CASCADE,
@@ -641,9 +657,9 @@ export async function createPostgresStore(connectionString, seedData) {
         ...data
       };
       const { rows } = await pool.query(
-        `INSERT INTO viewer_accounts (id, email, display_name, password_hash, status, verification_token_hash, verification_expires_at, email_verified_at, last_login_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-        [record.id, record.email, record.displayName, record.passwordHash, record.status, record.verificationTokenHash, record.verificationExpiresAt, record.emailVerifiedAt, record.lastLoginAt, record.createdAt, record.updatedAt]
+        `INSERT INTO viewer_accounts (id, public_id, email, username, display_name, password_hash, status, verification_token_hash, verification_expires_at, email_verified_at, last_login_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+        [record.id, record.publicId, record.email, record.username, record.displayName, record.passwordHash, record.status, record.verificationTokenHash, record.verificationExpiresAt, record.emailVerifiedAt, record.lastLoginAt, record.createdAt, record.updatedAt]
       );
       return mapViewerAccount(rows[0]);
     },
@@ -653,6 +669,10 @@ export async function createPostgresStore(connectionString, seedData) {
     },
     async getViewerAccountByEmail(email) {
       const { rows } = await pool.query('SELECT * FROM viewer_accounts WHERE email = $1', [email]);
+      return mapViewerAccount(rows[0]);
+    },
+    async getViewerAccountByUsername(username) {
+      const { rows } = await pool.query('SELECT * FROM viewer_accounts WHERE username = $1', [username]);
       return mapViewerAccount(rows[0]);
     },
     async updateViewerAccount(id, patch) {

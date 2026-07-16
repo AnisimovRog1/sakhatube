@@ -96,8 +96,8 @@
           <div class="profile-page">
             <header class="profile-identity">
               <button class="profile-avatar profile-avatar-large" data-profile-initial data-action="profile-settings" type="button" aria-label="Изменить фото профиля">А</button>
-              <div class="profile-identity-copy"><p class="eyebrow">ВАШ ПРОФИЛЬ</p><h1 data-profile-name>Гость</h1><p data-profile-summary>Войдите, чтобы синхронизировать избранное</p></div>
-              <button class="profile-login" data-action="account" type="button">Войти</button>
+              <div class="profile-identity-copy"><p class="eyebrow">ВАШ ПРОФИЛЬ</p><h1 data-profile-name>Гость</h1><p data-profile-summary>Войдите, чтобы синхронизировать избранное</p><p class="profile-user-id" data-profile-user-id hidden></p></div>
+              <button class="profile-login" data-action="account" type="button" data-account-button>Войти</button>
             </header>
 
             <button class="premium-card" data-action="subscription" type="button" aria-label="Узнать о Sakha Plus">
@@ -150,6 +150,20 @@
         <label class="setting-switch"><span><strong>Автовоспроизведение</strong><small>Следующая серия включается автоматически</small></span><input id="autoplay-input" type="checkbox" checked /><i></i></label>
         <label class="setting-switch"><span><strong>Экономия трафика</strong><small>Начинать с меньшего качества при слабой сети</small></span><input id="data-saver-input" type="checkbox" /><i></i></label>
         <div class="dialog-actions"><button class="button button-ghost" data-close-dialog="settings-dialog" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div>
+      </form>
+    </dialog>
+    <dialog class="app-dialog account-dialog" id="account-dialog" aria-labelledby="account-title">
+      <div class="dialog-header"><div><p class="eyebrow">АККАУНТ SAKHATUBE</p><h2 id="account-title">Войти</h2></div><button class="dialog-close" data-close-dialog="account-dialog" type="button" aria-label="Закрыть">×</button></div>
+      <div class="account-tabs" role="tablist" aria-label="Вход или регистрация"><button class="is-active" data-account-mode="login" type="button" role="tab" aria-selected="true">Войти</button><button data-account-mode="register" type="button" role="tab" aria-selected="false">Создать аккаунт</button></div>
+      <form id="account-form" novalidate>
+        <label class="field-label account-login-field">Логин или e-mail<input id="account-login" name="login" autocomplete="username" required placeholder="your_login" /></label>
+        <label class="field-label account-register-field" hidden>Имя в профиле<input id="account-display-name" name="displayName" maxlength="28" autocomplete="nickname" placeholder="Как вас показывать" /></label>
+        <label class="field-label account-register-field" hidden>Логин<input id="account-username" name="username" minlength="3" maxlength="32" autocomplete="username" placeholder="your_login" /></label>
+        <label class="field-label account-register-field" hidden>E-mail для восстановления<input id="account-email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" /></label>
+        <label class="field-label">Пароль<input id="account-password" name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="128" placeholder="Минимум 12 символов" /></label>
+        <p class="account-hint" id="account-hint">Введите логин и пароль, чтобы войти.</p>
+        <p class="account-error" id="account-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button class="button button-ghost" data-close-dialog="account-dialog" type="button">Отмена</button><button class="button button-primary" id="account-submit" type="submit">Войти</button></div>
       </form>
     </dialog>
     <dialog class="app-dialog" id="action-dialog" aria-labelledby="action-title">

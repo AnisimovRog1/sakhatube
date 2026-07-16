@@ -205,7 +205,8 @@ em { color: #dce9ff; font-style: normal; }
 .profile-identity-copy { min-width: 0; }
 .profile-identity .eyebrow { margin-bottom: 5px; }
 .profile-identity h1 { margin: 0 0 5px; font-size: clamp(30px, 4vw, 45px); letter-spacing: -.065em; line-height: .96; }
-.profile-identity p:last-child { margin-bottom: 0; overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-identity [data-profile-summary] { margin-bottom: 0; overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-identity .profile-user-id { display: inline-flex; width: fit-content; max-width: 100%; margin-top: 8px; padding: 4px 8px; overflow: hidden; border: 1px solid rgba(118,173,255,.25); border-radius: 999px; background: rgba(118,173,255,.08); color: #a9c8ff; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 750; letter-spacing: .035em; text-overflow: ellipsis; white-space: nowrap; }
 .profile-login { min-width: 104px; min-height: 44px; margin-left: auto; padding: 0 17px; border: 0; border-radius: 999px; background: #f6f8fc; color: #171b24; font-size: 14px; font-weight: 800; box-shadow: 0 9px 22px rgba(0,0,0,.22); transition: transform .18s ease, background .18s ease; }
 .profile-login:hover { background: #fff; transform: translateY(-1px); }
 .premium-card { position: relative; display: grid; gap: 19px; width: 100%; min-height: 275px; padding: 27px 30px 25px; overflow: hidden; border: 1px solid rgba(153,193,255,.44); border-radius: 22px; background: linear-gradient(112deg, #153878 0%, #345fc4 48%, #1d7b9b 100%); color: #fff; text-align: left; isolation: isolate; box-shadow: 0 22px 48px rgba(9,33,82,.25); transition: transform .2s ease, box-shadow .2s ease; }
@@ -285,6 +286,13 @@ em { color: #dce9ff; font-style: normal; }
 .setting-switch input:checked + i { background: var(--primary); }
 .setting-switch input:checked + i::after { transform: translateX(17px); }
 .dialog-copy { margin: 0; padding: 20px; color: #cbd2dd; font-size: 14px; line-height: 1.55; }
+.account-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 16px 20px 0; padding: 4px; border-radius: 12px; background: #14171d; }
+.account-tabs button { min-height: 36px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 800; }
+.account-tabs button.is-active { background: #2a364b; color: #eaf2ff; box-shadow: 0 3px 12px rgba(0,0,0,.22); }
+.account-hint, .account-error { margin: 14px 20px 0; font-size: 12px; line-height: 1.45; }
+.account-hint { color: var(--muted); }
+.account-error { padding: 10px 12px; border: 1px solid rgba(255,125,125,.28); border-radius: 10px; background: rgba(159,46,46,.16); color: #ffbebd; }
+.account-dialog .dialog-actions { padding-top: 16px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 18px 20px 20px; }
 .toast { position: fixed; z-index: 30; right: 18px; bottom: 22px; max-width: min(360px, calc(100vw - 36px)); padding: 12px 15px; border: 1px solid #3a4657; border-radius: 11px; background: #1e2b3d; color: #eaf2ff; font-size: 13px; font-weight: 700; opacity: 0; pointer-events: none; transform: translateY(8px); transition: opacity .2s ease, transform .2s ease; }
 .toast.is-visible { opacity: 1; transform: none; }
@@ -406,7 +414,8 @@ em { color: #dce9ff; font-style: normal; }
   .profile-identity { gap: 12px; padding: 8px 0 25px; }
   .profile-avatar-large { width: 61px; height: 61px; font-size: 23px; }
   .profile-identity h1 { font-size: 30px; }
-  .profile-identity p:last-child { max-width: 175px; font-size: 11px; }
+  .profile-identity [data-profile-summary] { max-width: 175px; font-size: 11px; }
+  .profile-identity .profile-user-id { max-width: 175px; margin-top: 6px; font-size: 9px; }
   .profile-login { min-width: 78px; min-height: 39px; padding: 0 13px; font-size: 12px; }
   .premium-card { min-height: 264px; padding: 22px 20px 20px; border-radius: 18px; }
   .premium-card strong { font-size: 30px; }

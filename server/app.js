@@ -135,6 +135,10 @@ export function createMemoryStore(seed = defaultSeed) {
     return state.viewerAccounts.find((item) => item.email === email);
   }
 
+  function findViewerAccountByUsername(username) {
+    return state.viewerAccounts.find((item) => item.username === username);
+  }
+
   function findViewerSessionByTokenHash(tokenHash) {
     return state.viewerSessions.find((item) => item.refreshTokenHash === tokenHash);
   }
@@ -261,6 +265,11 @@ export function createMemoryStore(seed = defaultSeed) {
         error.code = 'VIEWER_EMAIL_EXISTS';
         throw error;
       }
+      if (findViewerAccountByUsername(data.username)) {
+        const error = new Error('VIEWER_USERNAME_EXISTS');
+        error.code = 'VIEWER_USERNAME_EXISTS';
+        throw error;
+      }
       const record = {
         id: randomUUID(),
         status: 'pending_verification',
@@ -276,6 +285,7 @@ export function createMemoryStore(seed = defaultSeed) {
     },
     getViewerAccount(id) { const item = findViewerAccountById(id); return item && clone(item); },
     getViewerAccountByEmail(email) { const item = findViewerAccountByEmail(email); return item && clone(item); },
+    getViewerAccountByUsername(username) { const item = findViewerAccountByUsername(username); return item && clone(item); },
     updateViewerAccount(id, patch) {
       const item = findViewerAccountById(id);
       if (!item) return null;
@@ -482,12 +492,18 @@ const deletionVerificationInput = z.object({ token: z.string().regex(/^[A-Za-z0-
 const viewerRegistrationInput = z.object({
   email: z.string().trim().email().max(254),
   password: z.string().min(12, 'Пароль должен содержать минимум 12 символов').max(128),
+  // Логин — отдельное, постоянное имя для входа. E-mail никогда не показываем
+  // другим зрителям и он остаётся способом восстановления доступа.
+  username: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/, 'Логин: 3–32 символа, латиница, цифры, точка, дефис или подчёркивание').optional(),
   displayName: z.string().trim().min(2).max(60).optional()
 }).strict();
 const viewerLoginInput = z.object({
-  email: z.string().trim().email().max(254),
+  login: z.string().trim().min(3).max(254).optional(),
+  // Временная обратная совместимость для ранних клиентов. Новые клиенты
+  // отправляют login (имя пользователя или e-mail).
+  email: z.string().trim().email().max(254).optional(),
   password: z.string().min(1).max(128)
-}).strict();
+}).strict().refine((value) => Boolean(value.login || value.email), { message: 'Укажи логин или e-mail', path: ['login'] });
 const viewerEmailVerificationInput = z.object({
   accountId: z.string().uuid(),
   token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный код подтверждения')
@@ -659,12 +675,27 @@ async function verifyPassword(password, encoded) {
 function viewerAccountPublic(account) {
   if (!account) return null;
   return {
-    id: account.id,
+    // UUID остаётся внутренним ключом: в токенах, сессиях и связях БД. Клиент
+    // получает только неизменяемый публичный ID, который безопасно показывать.
+    id: account.publicId,
+    username: account.username,
     email: account.email,
     displayName: account.displayName,
     status: account.status,
     createdAt: account.createdAt
   };
+}
+
+function makePublicViewerId() {
+  return `ST-${randomBytes(6).toString('hex').toUpperCase()}`;
+}
+
+function normalizeUsername(value) {
+  return value.trim().toLowerCase();
+}
+
+function fallbackUsername() {
+  return `viewer-${randomBytes(5).toString('hex')}`;
 }
 
 function publicComment(comment) {
@@ -1056,8 +1087,11 @@ export function buildApp(options = {}) {
           emailVerifiedAt: null
         });
       } else {
+        const username = body.username ? normalizeUsername(body.username) : fallbackUsername();
         account = await store.createViewerAccount({
           email,
+          username,
+          publicId: makePublicViewerId(),
           displayName: body.displayName?.trim() || email.split('@')[0],
           passwordHash,
           lastLoginAt: null,
@@ -1076,7 +1110,7 @@ export function buildApp(options = {}) {
       if (!config.production && config.allowDevTokens) response.developmentVerification = { accountId: account.id, token, verifyPath: '/v1/auth/verify-email', expiresAt: verificationExpiresAt };
       return reply.code(202).send(response);
     } catch (error) {
-      if (error.code === 'VIEWER_EMAIL_EXISTS' || error.code === '23505') {
+      if (error.code === 'VIEWER_EMAIL_EXISTS' || error.code === 'VIEWER_USERNAME_EXISTS' || error.code === '23505') {
         return genericResponse();
       }
       request.log.error({ err: error, email }, 'Viewer email verification delivery failed');
@@ -1106,10 +1140,13 @@ export function buildApp(options = {}) {
   app.post('/v1/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const body = parseOrReply(viewerLoginInput, request.body, reply);
     if (!body) return;
-    const account = await store.getViewerAccountByEmail(body.email.toLowerCase());
+    const login = (body.login ?? body.email).trim();
+    const account = login.includes('@')
+      ? await store.getViewerAccountByEmail(login.toLowerCase())
+      : await store.getViewerAccountByUsername(normalizeUsername(login));
     const passwordValid = await verifyPassword(body.password, account?.passwordHash ?? passwordDummyHash);
     if (!account || account.status !== 'active' || !passwordValid) {
-      return reply.code(401).send({ error: 'INVALID_CREDENTIALS', message: 'Неверный email или пароль' });
+      return reply.code(401).send({ error: 'INVALID_CREDENTIALS', message: 'Неверный логин или пароль' });
     }
     const updated = await store.updateViewerAccount(account.id, { lastLoginAt: now() });
     await audit(request, 'viewer.login', 'viewer_account', account.id, null, { status: 'success' }, { id: account.id, roles: ['viewer'] });

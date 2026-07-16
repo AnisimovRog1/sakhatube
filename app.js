@@ -353,7 +353,9 @@ const playerFullscreen = document.querySelector('#player-fullscreen');
 const notificationsDialog = document.querySelector('#notifications-dialog');
 const settingsDialog = document.querySelector('#settings-dialog');
 const actionDialog = document.querySelector('#action-dialog');
+const accountDialog = document.querySelector('#account-dialog');
 const settingsForm = document.querySelector('#settings-form');
+const accountForm = document.querySelector('#account-form');
 const toast = document.querySelector('#toast');
 const carouselViewport = document.querySelector('#carousel-viewport');
 const carouselNode = document.querySelector('#premiere-carousel');
@@ -383,7 +385,32 @@ function setPlayerControlIcon(button, icon, label) {
 let lastShortChangeAt = 0;
 let shortCleanTimer;
 let profile = loadProfile();
+let viewerAuth = loadViewerAuth();
 let pendingAvatar;
+
+function loadViewerAuth() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('sakhatube-viewer-auth') || 'null');
+    if (!saved?.accessToken || !saved?.refreshToken || !saved?.viewer?.id) return null;
+    return saved;
+  } catch {
+    return null;
+  }
+}
+
+function saveViewerAuth(next) {
+  viewerAuth = next?.accessToken && next?.refreshToken && next?.viewer?.id ? next : null;
+  try {
+    if (viewerAuth) localStorage.setItem('sakhatube-viewer-auth', JSON.stringify(viewerAuth));
+    else localStorage.removeItem('sakhatube-viewer-auth');
+  } catch {
+    // The interface remains usable when private browsing blocks local storage.
+  }
+}
+
+function viewerDisplayId(id) {
+  return `ID · ${String(id).toUpperCase()}`;
+}
 
 function loadProfile() {
   try {
@@ -509,7 +536,7 @@ function renderGenres() {
 }
 
 function renderProfile() {
-  const displayName = profile.name.trim() || defaultProfile.name;
+  const displayName = viewerAuth?.viewer?.displayName || profile.name.trim() || defaultProfile.name;
   const initial = [...displayName][0].toLocaleUpperCase();
   document.querySelectorAll('[data-profile-name]').forEach((node) => { node.textContent = displayName; });
   document.querySelectorAll('[data-profile-initial], .avatar-button').forEach((node) => {
@@ -518,7 +545,17 @@ function renderProfile() {
     node.style.backgroundImage = hasImage ? `url("${profile.avatar}")` : '';
     node.classList.toggle('has-image', hasImage);
   });
-  document.querySelectorAll('[data-profile-summary]').forEach((node) => { node.textContent = `${languageLabel()} · ${t('profile.summary')}`; });
+  document.querySelectorAll('[data-profile-summary]').forEach((node) => {
+    node.textContent = viewerAuth?.viewer?.username ? `@${viewerAuth.viewer.username}` : `${languageLabel()} · ${t('profile.summary')}`;
+  });
+  document.querySelectorAll('[data-profile-user-id]').forEach((node) => {
+    const id = viewerAuth?.viewer?.id;
+    node.hidden = !id;
+    node.textContent = id ? viewerDisplayId(id) : '';
+  });
+  document.querySelectorAll('[data-account-button]').forEach((node) => {
+    node.textContent = viewerAuth?.viewer ? 'Аккаунт' : 'Войти';
+  });
   document.querySelector('.language-button').textContent = 'РУ · EN · САХА';
 }
 
@@ -668,6 +705,85 @@ function openSettings() {
   openDialog(settingsDialog);
 }
 
+function setAccountMode(mode) {
+  const register = mode === 'register';
+  accountDialog.dataset.mode = register ? 'register' : 'login';
+  accountDialog.querySelectorAll('[data-account-mode]').forEach((button) => {
+    const active = button.dataset.accountMode === mode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  accountDialog.querySelectorAll('.account-register-field').forEach((field) => { field.hidden = !register; });
+  accountDialog.querySelectorAll('.account-login-field').forEach((field) => { field.hidden = register; });
+  document.querySelector('#account-title').textContent = register ? 'Создать аккаунт' : 'Войти';
+  document.querySelector('#account-submit').textContent = register ? 'Создать аккаунт' : 'Войти';
+  document.querySelector('#account-password').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
+  document.querySelector('#account-hint').textContent = register
+    ? 'Придумайте логин и пароль. E-mail нужен только для подтверждения и восстановления. Постоянный ID появится после подтверждения аккаунта.'
+    : 'Введите логин и пароль. Для ранних аккаунтов работает также e-mail.';
+  const error = document.querySelector('#account-error');
+  error.hidden = true;
+  error.textContent = '';
+}
+
+function openAccountDialog() {
+  if (viewerAuth?.viewer) {
+    openAction('Вы уже вошли', `@${viewerAuth.viewer.username || viewerAuth.viewer.email}\n${viewerDisplayId(viewerAuth.viewer.id)}`, 'АККАУНТ');
+    return;
+  }
+  accountForm.reset();
+  setAccountMode('login');
+  openDialog(accountDialog);
+}
+
+async function submitAccount(event) {
+  event.preventDefault();
+  const mode = accountDialog.dataset.mode || 'login';
+  const login = document.querySelector('#account-login').value.trim();
+  const username = document.querySelector('#account-username').value.trim();
+  const email = document.querySelector('#account-email').value.trim().toLowerCase();
+  const password = document.querySelector('#account-password').value;
+  const displayName = document.querySelector('#account-display-name').value.trim();
+  const error = document.querySelector('#account-error');
+  const submit = document.querySelector('#account-submit');
+  error.hidden = true;
+  error.textContent = '';
+  if (!password || (mode === 'register' && (!username || !email || password.length < 12)) || (mode === 'login' && !login)) {
+    error.textContent = mode === 'register' ? 'Укажите логин, e-mail и пароль минимум из 12 символов.' : 'Укажите логин и пароль.';
+    error.hidden = false;
+    return;
+  }
+  submit.disabled = true;
+  submit.textContent = mode === 'register' ? 'Создаём…' : 'Входим…';
+  try {
+    const response = await fetch(`/v1/auth/${mode === 'register' ? 'register' : 'login'}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(mode === 'register' ? { email, username, password, displayName: displayName || undefined } : { login, password })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || 'Не удалось выполнить запрос. Попробуйте ещё раз.');
+    if (mode === 'register') {
+      document.querySelector('#account-password').value = '';
+      error.textContent = payload.message || 'Проверьте e-mail и подтвердите аккаунт. После этого можно войти.';
+      error.hidden = false;
+      return;
+    }
+    saveViewerAuth(payload);
+    profile = { ...profile, name: payload.viewer.displayName || profile.name };
+    saveProfile();
+    renderProfile();
+    closeDialog(accountDialog);
+    showToast(`Вы вошли. ${viewerDisplayId(payload.viewer.id)}`);
+  } catch (requestError) {
+    error.textContent = requestError.message || 'Не удалось выполнить запрос. Попробуйте ещё раз.';
+    error.hidden = false;
+  } finally {
+    submit.disabled = false;
+    submit.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
+  }
+}
+
 function openAction(title, copy, eyebrow = 'SAKHATUBE') {
   document.querySelector('#action-eyebrow').textContent = eyebrow;
   document.querySelector('#action-title').textContent = title;
@@ -704,7 +820,7 @@ function handleAction(action, trigger) {
       openAction('SakhaTube Plus', 'Подписка ещё не запущена. Когда платежи Apple и Google будут подключены, здесь появятся тарифы, восстановление покупок и история платежей.', 'СКОРО');
       break;
     case 'account':
-      openAction('Вход и создание аккаунта', 'Сейчас профиль работает на этом устройстве. После подключения почтового сервиса здесь появятся безопасная регистрация, вход и синхронизация между устройствами.', 'АККАУНТ');
+      openAccountDialog();
       break;
     case 'continue':
       openPlayer(shows[0].title, shows[0]);
@@ -973,6 +1089,10 @@ settingsForm.addEventListener('submit', (event) => {
   applyLocale();
   closeDialog(settingsDialog);
   showToast(t('toast.settings'));
+});
+accountForm.addEventListener('submit', submitAccount);
+accountDialog.querySelectorAll('[data-account-mode]').forEach((button) => {
+  button.addEventListener('click', () => setAccountMode(button.dataset.accountMode));
 });
 document.querySelector('#global-search').addEventListener('input', (event) => {
   const query = event.target.value.trim().toLocaleLowerCase();
