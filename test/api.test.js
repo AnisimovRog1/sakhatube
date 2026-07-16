@@ -144,6 +144,78 @@ test('viewer login is unique, case-insensitive, and the public ID does not chang
   assert.equal(JSON.parse(login.body).viewer.id, first.id);
 });
 
+test('verified Firebase identity exchanges for a SakhaTube session and keeps the public ID stable', async (t) => {
+  const firebaseVerifier = async (token) => {
+    if (token === 'valid-firebase-token'.padEnd(120, '.')) return { uid: 'firebase-user-42', email: 'firebase@example.com', email_verified: true, name: 'Firebase Viewer' };
+    throw Object.assign(new Error('bad token'), { code: 'auth/id-token-expired' });
+  };
+  const app = await createTestApp({ firebaseVerifier });
+  t.after(() => app.close());
+  const idToken = 'valid-firebase-token'.padEnd(120, '.');
+  const first = await app.inject({ method: 'POST', url: '/v1/auth/firebase/exchange', payload: { idToken, username: 'firebase.viewer' } });
+  assert.equal(first.statusCode, 200);
+  const firstSession = JSON.parse(first.body);
+  assert.equal(firstSession.viewer.username, 'firebase.viewer');
+  assert.match(firstSession.viewer.id, /^ST-[A-F0-9]{12}$/);
+
+  const second = await app.inject({ method: 'POST', url: '/v1/auth/firebase/exchange', payload: { idToken } });
+  assert.equal(second.statusCode, 200);
+  assert.equal(JSON.parse(second.body).viewer.id, firstSession.viewer.id);
+
+  const rejected = await app.inject({ method: 'POST', url: '/v1/auth/firebase/exchange', payload: { idToken: 'bad-firebase-token'.padEnd(120, '.') } });
+  assert.equal(rejected.statusCode, 401);
+});
+
+test('Firebase exchange links a verified existing account without replacing its username or public ID', async (t) => {
+  const firebaseVerifier = async () => ({ uid: 'firebase-linked-user', email: 'linked@example.com', email_verified: true });
+  const app = await createTestApp({ firebaseVerifier });
+  t.after(() => app.close());
+  const registration = await app.inject({
+    method: 'POST', url: '/v1/auth/register',
+    payload: { email: 'linked@example.com', username: 'original.login', password: 'correct-horse-battery-staple', displayName: 'Оригинал' }
+  });
+  const pending = JSON.parse(registration.body).developmentVerification;
+  const verified = await app.inject({ method: 'POST', url: '/v1/auth/verify-email', payload: { accountId: pending.accountId, token: pending.token } });
+  const before = JSON.parse(verified.body).viewer;
+  const linked = await app.inject({ method: 'POST', url: '/v1/auth/firebase/exchange', payload: { idToken: 'linked-firebase-token'.padEnd(120, '.') } });
+  assert.equal(linked.statusCode, 200);
+  const after = JSON.parse(linked.body).viewer;
+  assert.equal(after.id, before.id);
+  assert.equal(after.username, 'original.login');
+});
+
+test('Firebase pending registration reserves a username but cannot issue an app session before Firebase e-mail verification', async (t) => {
+  const pendingToken = 'firebase-pending-token'.padEnd(120, '.');
+  const verifiedToken = 'firebase-now-verified-token'.padEnd(120, '.');
+  const firebaseVerifier = async (token) => {
+    if (token === pendingToken) return { uid: 'firebase-pending-user', email: 'pending.firebase@example.com', email_verified: false, name: 'Pending Viewer' };
+    if (token === verifiedToken) return { uid: 'firebase-pending-user', email: 'pending.firebase@example.com', email_verified: true, name: 'Pending Viewer' };
+    throw Object.assign(new Error('bad token'), { code: 'auth/id-token-expired' });
+  };
+  const app = await createTestApp({ firebaseVerifier });
+  t.after(() => app.close());
+  const pending = await app.inject({
+    method: 'POST', url: '/v1/auth/firebase/register-pending',
+    payload: { idToken: pendingToken, username: 'reserved.login', displayName: 'Резерв' }
+  });
+  assert.equal(pending.statusCode, 201);
+  const reserved = JSON.parse(pending.body);
+  assert.equal(reserved.status, 'email_verification_required');
+  assert.equal(reserved.username, 'reserved.login');
+  assert.match(reserved.publicId, /^ST-[A-F0-9]{12}$/);
+  assert.equal('accessToken' in reserved, false);
+
+  const premature = await app.inject({ method: 'POST', url: '/v1/auth/firebase/exchange', payload: { idToken: pendingToken } });
+  assert.equal(premature.statusCode, 401);
+  assert.equal(JSON.parse(premature.body).error, 'FIREBASE_EMAIL_UNVERIFIED');
+
+  const verified = await app.inject({ method: 'POST', url: '/v1/auth/firebase/exchange', payload: { idToken: verifiedToken } });
+  assert.equal(verified.statusCode, 200);
+  const activated = JSON.parse(verified.body);
+  assert.equal(activated.viewer.id, reserved.publicId);
+  assert.equal(activated.viewer.username, 'reserved.login');
+});
+
 test('viewer refresh tokens rotate once and logout revokes the linked access session', async (t) => {
   const store = createMemoryStore();
   const app = await createTestApp({ store });

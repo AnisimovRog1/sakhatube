@@ -1,7 +1,10 @@
 package com.sakhatube.android.data
 
-import android.net.Uri
 import com.sakhatube.android.BuildConfig
+import com.google.android.gms.tasks.Tasks
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.UserProfileChangeRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -14,33 +17,24 @@ class AuthRepository(
     private val sessionStore: ViewerSessionStore = InMemoryViewerSessionStore()
 ) {
     suspend fun register(email: String, username: String, password: CharArray, displayName: String?): String = withContext(Dispatchers.IO) {
-        val body = JSONObject().apply {
-            put("email", email.trim())
+        val result = Tasks.await(FirebaseAuth.getInstance().createUserWithEmailAndPassword(email.trim(), password.concatToString()))
+        val user = result.user ?: throw IOException("Firebase не вернул аккаунт.")
+        Tasks.await(user.updateProfile(UserProfileChangeRequest.Builder().setDisplayName(displayName?.trim().takeUnless { it.isNullOrEmpty() } ?: username.trim()).build()))
+        val idToken = Tasks.await(user.getIdToken(true)).token ?: throw IOException("Firebase не выдал ID-токен.")
+        request("/v1/auth/firebase/register-pending", "POST", JSONObject().apply {
+            put("idToken", idToken)
             put("username", username.trim())
-            put("password", password.concatToString())
             displayName?.trim()?.takeIf { it.isNotEmpty() }?.let { put("displayName", it) }
-        }
-        request("/v1/auth/register", "POST", body, expectedCodes = setOf(202)).optString(
-            "message",
-            "Проверь почту и подтверди адрес."
-        )
+        })
+        profileDrafts().edit().putString("username.${user.uid}", username.trim()).putString("displayName.${user.uid}", displayName?.trim()).apply()
+        Tasks.await(user.sendEmailVerification())
+        FirebaseAuth.getInstance().signOut()
+        "Мы отправили письмо для подтверждения e-mail. Подтверди адрес и затем войди."
     }
 
-    suspend fun login(login: String, password: CharArray): ViewerSession = withContext(Dispatchers.IO) {
-        val response = request("/v1/auth/login", "POST", JSONObject().apply {
-            put("login", login.trim())
-            put("password", password.concatToString())
-        })
-        response.toSession().also(sessionStore::save)
-    }
-
-    suspend fun verifyEmail(verificationLink: String): ViewerSession = withContext(Dispatchers.IO) {
-        val link = parseVerificationLink(verificationLink)
-        val response = request("/v1/auth/verify-email", "POST", JSONObject().apply {
-            put("accountId", link.accountId)
-            put("token", link.token)
-        })
-        response.toSession().also(sessionStore::save)
+    suspend fun login(email: String, password: CharArray): ViewerSession = withContext(Dispatchers.IO) {
+        val result = Tasks.await(FirebaseAuth.getInstance().signInWithEmailAndPassword(email.trim(), password.concatToString()))
+        exchangeVerifiedFirebaseUser(result.user ?: throw IOException("Firebase не вернул аккаунт."))
     }
 
     suspend fun restoreCurrentViewer(): ViewerAccount? = withContext(Dispatchers.IO) {
@@ -66,7 +60,35 @@ class AuthRepository(
         "Письмо отправлено. Перейди по одноразовой ссылке из e-mail — только тогда запрос будет передан в обработку."
     }
 
-    fun signOut() = sessionStore.clear()
+    fun signOut() {
+        sessionStore.clear()
+        FirebaseAuth.getInstance().signOut()
+    }
+
+    private fun exchangeVerifiedFirebaseUser(user: com.google.firebase.auth.FirebaseUser): ViewerSession {
+        Tasks.await(user.reload())
+        val refreshed = FirebaseAuth.getInstance().currentUser ?: throw IOException("Не удалось обновить аккаунт Firebase.")
+        if (!refreshed.isEmailVerified) {
+            Tasks.await(refreshed.sendEmailVerification())
+            throw IOException("Подтверди e-mail по ссылке из письма, затем войди снова.")
+        }
+        val idToken = Tasks.await(refreshed.getIdToken(true)).token ?: throw IOException("Firebase не выдал ID-токен.")
+        val drafts = profileDrafts()
+        val username = drafts.getString("username.${refreshed.uid}", null)
+        val displayName = drafts.getString("displayName.${refreshed.uid}", null)
+        val response = request("/v1/auth/firebase/exchange", "POST", JSONObject().apply {
+            put("idToken", idToken)
+            username?.let { put("username", it) }
+            displayName?.let { put("displayName", it) }
+        })
+        return response.toSession().also {
+            sessionStore.save(it)
+            drafts.edit().remove("username.${refreshed.uid}").remove("displayName.${refreshed.uid}").apply()
+        }
+    }
+
+    private fun profileDrafts() = FirebaseApp.getInstance().applicationContext
+        .getSharedPreferences("sakhatube.firebase.profile-drafts", android.content.Context.MODE_PRIVATE)
 
     private fun request(
         path: String,
@@ -109,18 +131,6 @@ class AuthRepository(
             connection.disconnect()
         }
     }
-}
-
-private data class VerificationLink(val accountId: String, val token: String)
-
-private fun parseVerificationLink(raw: String): VerificationLink {
-    val uri = Uri.parse(raw.trim())
-    val accountId = uri.getQueryParameter("account")?.trim().orEmpty()
-    val token = uri.getQueryParameter("token")?.trim().orEmpty()
-    if (uri.scheme != "https" || uri.path != "/verify-email" || accountId.isEmpty() || !token.matches(Regex("[A-Za-z0-9_-]{43}"))) {
-        throw IOException("Вставь полную ссылку из письма подтверждения.")
-    }
-    return VerificationLink(accountId, token)
 }
 
 private fun JSONObject.toSession(): ViewerSession {

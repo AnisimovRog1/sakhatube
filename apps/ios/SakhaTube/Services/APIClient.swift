@@ -83,26 +83,25 @@ actor APIClient {
 
     // MARK: - Viewer account API
 
-    /// Passwords are supplied only for this HTTPS request and are never persisted
-    /// by the client. The server deliberately returns a generic registration
-    /// response to avoid revealing whether an email already has an account.
-    func registerViewer(email: String, username: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse {
-        let url = AppConfiguration.apiBaseURL.appending(path: "v1/auth/register")
+    /// Firebase verifies the e-mail/password credential. SakhaTube verifies the
+    /// resulting ID token server-side and returns its own app session and public
+    /// profile, never accepting a Firebase UID as an app authorization token.
+    func exchangeFirebaseIDToken(_ idToken: String, username: String?, displayName: String?) async throws -> ViewerSessionResponse {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/auth/firebase/exchange")
         return try await request(
             url,
             method: "POST",
-            body: ViewerRegistrationRequest(email: email, username: username, password: password, displayName: displayName)
+            body: FirebaseTokenExchangeRequest(idToken: idToken, username: username, displayName: displayName)
         )
     }
 
-    func verifyViewerEmail(accountId: String, token: String) async throws -> ViewerSessionResponse {
-        let url = AppConfiguration.apiBaseURL.appending(path: "v1/auth/verify-email")
-        return try await request(url, method: "POST", body: ViewerEmailVerificationRequest(accountId: accountId, token: token))
-    }
-
-    func loginViewer(login: String, password: String) async throws -> ViewerSessionResponse {
-        let url = AppConfiguration.apiBaseURL.appending(path: "v1/auth/login")
-        return try await request(url, method: "POST", body: ViewerLoginRequest(login: login, password: password))
+    func registerPendingFirebaseUser(idToken: String, username: String, displayName: String?) async throws {
+        let url = AppConfiguration.apiBaseURL.appending(path: "v1/auth/firebase/register-pending")
+        try await requestNoContent(
+            url,
+            method: "POST",
+            body: FirebaseTokenExchangeRequest(idToken: idToken, username: username, displayName: displayName)
+        )
     }
 
     func viewerMe(accessToken: String) async throws -> ViewerMeResponse {
@@ -198,6 +197,18 @@ actor APIClient {
         guard (200..<300).contains(httpResponse.statusCode) else { throw APIClientError.httpStatus(httpResponse.statusCode) }
     }
 
+    private func requestNoContent<Body: Encodable>(_ url: URL, method: String, body: Body) async throws {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw APIClientError.invalidResponse }
+        guard (200..<300).contains(httpResponse.statusCode) else { throw APIClientError.httpStatus(httpResponse.statusCode) }
+    }
+
     private func execute<Response: Decodable>(_ request: URLRequest) async throws -> Response {
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -217,21 +228,10 @@ actor APIClient {
 
 // MARK: - Viewer account transport
 
-private struct ViewerRegistrationRequest: Encodable, Sendable {
-    let email: String
-    let username: String
-    let password: String
+private struct FirebaseTokenExchangeRequest: Encodable, Sendable {
+    let idToken: String
+    let username: String?
     let displayName: String?
-}
-
-private struct ViewerEmailVerificationRequest: Encodable, Sendable {
-    let accountId: String
-    let token: String
-}
-
-private struct ViewerLoginRequest: Encodable, Sendable {
-    let login: String
-    let password: String
 }
 
 private struct ViewerRefreshRequest: Encodable, Sendable {

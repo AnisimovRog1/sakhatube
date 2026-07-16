@@ -16,12 +16,21 @@ settings:
       SAKHATUBE_API_BASE_URL: "http://127.0.0.1:3000"
     Release:
       SAKHATUBE_API_BASE_URL: "https://sakhatube-production.up.railway.app"
+packages:
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: "12.14.0"
 targets:
   SakhaTube:
     type: application
     platform: iOS
     sources:
       - path: SakhaTube
+    dependencies:
+      - package: Firebase
+        product: FirebaseCore
+      - package: Firebase
+        product: FirebaseAuth
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sakhatube.app

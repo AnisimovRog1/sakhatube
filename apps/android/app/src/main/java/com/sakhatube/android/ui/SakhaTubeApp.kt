@@ -512,10 +512,8 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
     var isShowingDeletion by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
-    var login by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
-    var verificationLink by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(ProfileMode.SignIn) }
     val legalLinks = listOf(
         "Политика конфиденциальности" to BuildConfig.PRIVACY_POLICY_URL,
@@ -545,29 +543,21 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
                     mode = mode,
                     email = email,
                     username = username,
-                    login = login,
                     password = password,
                     displayName = displayName,
-                    verificationLink = verificationLink,
                     state = authState,
                     onModeChange = { mode = it; authViewModel.dismissError() },
                     onEmailChange = { email = it },
                     onUsernameChange = { username = it },
-                    onLoginChange = { login = it },
                     onPasswordChange = { password = it },
                     onDisplayNameChange = { displayName = it },
-                    onVerificationLinkChange = { verificationLink = it },
                     onRegister = {
                         authViewModel.register(email, username, password.toCharArray(), displayName)
                         password = ""
                     },
                     onLogin = {
-                        authViewModel.login(login, password.toCharArray())
+                        authViewModel.login(email, password.toCharArray())
                         password = ""
-                    },
-                    onVerify = {
-                        authViewModel.verifyEmail(verificationLink)
-                        verificationLink = ""
                     }
                 )
             }
@@ -614,7 +604,7 @@ private fun ProfileScreen(authViewModel: AuthViewModel, modifier: Modifier = Mod
     }
 }
 
-private enum class ProfileMode { SignIn, Register, Verify }
+private enum class ProfileMode { SignIn, Register }
 
 @Composable
 private fun SignedInProfileCard(
@@ -707,30 +697,24 @@ private fun AuthCard(
     mode: ProfileMode,
     email: String,
     username: String,
-    login: String,
     password: String,
     displayName: String,
-    verificationLink: String,
     state: AuthUiState,
     onModeChange: (ProfileMode) -> Unit,
     onEmailChange: (String) -> Unit,
     onUsernameChange: (String) -> Unit,
-    onLoginChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onDisplayNameChange: (String) -> Unit,
-    onVerificationLinkChange: (String) -> Unit,
     onRegister: () -> Unit,
-    onLogin: () -> Unit,
-    onVerify: () -> Unit
+    onLogin: () -> Unit
 ) {
-    val pending = state is AuthUiState.Registering || state is AuthUiState.SigningIn || state is AuthUiState.VerifyingEmail
+    val pending = state is AuthUiState.Registering || state is AuthUiState.SigningIn
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 when (mode) {
                     ProfileMode.SignIn -> "Войти в SakhaTube"
                     ProfileMode.Register -> "Создать аккаунт"
-                    ProfileMode.Verify -> "Подтвердить e-mail"
                 },
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
@@ -742,16 +726,12 @@ private fun AuthCard(
                         AppField("Логин", username, onUsernameChange, enabled = !pending)
                         AppField("E-mail", email, onEmailChange, enabled = !pending, keyboardType = KeyboardType.Email)
                     } else {
-                        AppField("Логин или e-mail", login, onLoginChange, enabled = !pending)
+                        AppField("E-mail", email, onEmailChange, enabled = !pending, keyboardType = KeyboardType.Email)
                     }
                     AppField("Пароль", password, onPasswordChange, enabled = !pending, password = true)
                     if (mode == ProfileMode.Register) {
                         Text("Минимум 12 символов. Пароль не сохраняется на устройстве.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                }
-                ProfileMode.Verify -> {
-                    AppField("Полная ссылка из письма", verificationLink, onVerificationLinkChange, enabled = !pending, keyboardType = KeyboardType.Uri)
-                    Text("Открой письмо SakhaTube и вставь полную ссылку. Она одноразовая.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             when (state) {
@@ -763,21 +743,18 @@ private fun AuthCard(
                 onClick = when (mode) {
                     ProfileMode.SignIn -> onLogin
                     ProfileMode.Register -> onRegister
-                    ProfileMode.Verify -> onVerify
                 },
                 enabled = !pending && when (mode) {
-                    ProfileMode.SignIn -> login.isNotBlank() && password.isNotBlank()
+                    ProfileMode.SignIn -> email.isNotBlank() && password.isNotBlank()
                     ProfileMode.Register -> email.isNotBlank() && username.trim().length >= 3 && password.length >= 12 && displayName.trim().length >= 2
-                    ProfileMode.Verify -> verificationLink.isNotBlank()
                 }
             ) {
                 if (pending) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                else Text(when (mode) { ProfileMode.SignIn -> "Войти"; ProfileMode.Register -> "Отправить письмо"; ProfileMode.Verify -> "Подтвердить" })
+                else Text(when (mode) { ProfileMode.SignIn -> "Войти"; ProfileMode.Register -> "Отправить письмо" })
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (mode != ProfileMode.SignIn) Button(onClick = { onModeChange(ProfileMode.SignIn) }, enabled = !pending) { Text("Вход") }
                 if (mode != ProfileMode.Register) Button(onClick = { onModeChange(ProfileMode.Register) }, enabled = !pending) { Text("Регистрация") }
-                if (mode != ProfileMode.Verify) Button(onClick = { onModeChange(ProfileMode.Verify) }, enabled = !pending) { Text("Подтвердить") }
             }
         }
     }

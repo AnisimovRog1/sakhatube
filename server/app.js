@@ -139,6 +139,10 @@ export function createMemoryStore(seed = defaultSeed) {
     return state.viewerAccounts.find((item) => item.username === username);
   }
 
+  function findViewerAccountByFirebaseUid(firebaseUid) {
+    return state.viewerAccounts.find((item) => item.firebaseUid === firebaseUid);
+  }
+
   function findViewerSessionByTokenHash(tokenHash) {
     return state.viewerSessions.find((item) => item.refreshTokenHash === tokenHash);
   }
@@ -286,6 +290,7 @@ export function createMemoryStore(seed = defaultSeed) {
     getViewerAccount(id) { const item = findViewerAccountById(id); return item && clone(item); },
     getViewerAccountByEmail(email) { const item = findViewerAccountByEmail(email); return item && clone(item); },
     getViewerAccountByUsername(username) { const item = findViewerAccountByUsername(username); return item && clone(item); },
+    getViewerAccountByFirebaseUid(firebaseUid) { const item = findViewerAccountByFirebaseUid(firebaseUid); return item && clone(item); },
     updateViewerAccount(id, patch) {
       const item = findViewerAccountById(id);
       if (!item) return null;
@@ -511,6 +516,11 @@ const viewerEmailVerificationInput = z.object({
 const viewerRefreshInput = z.object({
   refreshToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный токен обновления')
 }).strict();
+const firebaseExchangeInput = z.object({
+  idToken: z.string().trim().min(100).max(16_384),
+  username: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/, 'Логин: 3–32 символа, латиница, цифры, точка, дефис или подчёркивание').optional(),
+  displayName: z.string().trim().min(2).max(60).optional()
+}).strict();
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
   sessionId: z.string().min(16).max(128),
@@ -598,6 +608,9 @@ function configFrom(overrides = {}) {
   const mailer = overrides.mailer ?? null;
   const mediaWorkerToken = overrides.mediaWorkerToken ?? process.env.MEDIA_WORKER_TOKEN ?? '';
   const mediaWorkerEnabled = overrides.mediaWorkerEnabled ?? process.env.MEDIA_WORKER_ENABLED === 'true';
+  const firebaseProjectId = overrides.firebaseProjectId ?? process.env.FIREBASE_PROJECT_ID ?? '';
+  const firebaseServiceAccountJson = overrides.firebaseServiceAccountJson ?? process.env.FIREBASE_SERVICE_ACCOUNT_JSON ?? '';
+  const firebaseVerifier = overrides.firebaseVerifier ?? null;
   const media = overrides.media ?? {
     endpoint: process.env.S3_ENDPOINT,
     accessKeyId: process.env.S3_ACCESS_KEY_ID,
@@ -614,7 +627,35 @@ function configFrom(overrides = {}) {
   if (production && emailVerificationSecret.length < 32) throw new Error('EMAIL_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
   if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
   if (production && mediaWorkerEnabled && mediaWorkerToken.length < 32) throw new Error('MEDIA_WORKER_TOKEN должен содержать не менее 32 символов в production');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled };
+  if ((firebaseProjectId && !firebaseServiceAccountJson) || (!firebaseProjectId && firebaseServiceAccountJson)) throw new Error('Для Firebase укажи и FIREBASE_PROJECT_ID, и FIREBASE_SERVICE_ACCOUNT_JSON');
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseVerifier };
+}
+
+function firebaseVerifierFrom(config) {
+  if (config.firebaseVerifier) return config.firebaseVerifier;
+  if (!config.firebaseProjectId) return null;
+  let verifier;
+  return async (idToken) => {
+    if (!verifier) {
+      let serviceAccount;
+      try {
+        serviceAccount = JSON.parse(config.firebaseServiceAccountJson);
+      } catch {
+        throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON должен быть корректным JSON');
+      }
+      // The Admin SDK verifies signature, issuer, audience and token expiry
+      // against Firebase's certificates. The service-account JSON is supplied
+      // only through Railway environment variables, never source control.
+      const [{ cert, getApps, initializeApp }, { getAuth }] = await Promise.all([
+        import('firebase-admin/app'),
+        import('firebase-admin/auth')
+      ]);
+      const app = getApps().find((item) => item.options.projectId === config.firebaseProjectId)
+        ?? initializeApp({ credential: cert(serviceAccount), projectId: config.firebaseProjectId }, `sakhatube-${config.firebaseProjectId}`);
+      verifier = (token) => getAuth(app).verifyIdToken(token, true);
+    }
+    return verifier(idToken);
+  };
 }
 
 function deletionTokenHash(token, secret) {
@@ -823,6 +864,7 @@ function publicContent(item) {
 
 export function buildApp(options = {}) {
   const config = configFrom(options);
+  const verifyFirebaseIdToken = firebaseVerifierFrom(config);
   const publicationGate = {
     allowDemoRights: !config.production,
     allowPaidAccess: !config.production || config.billing.canGrantEntitlements
@@ -1150,6 +1192,138 @@ export function buildApp(options = {}) {
     }
     const updated = await store.updateViewerAccount(account.id, { lastLoginAt: now() });
     await audit(request, 'viewer.login', 'viewer_account', account.id, null, { status: 'success' }, { id: account.id, roles: ['viewer'] });
+    return viewerSession(updated ?? account, request);
+  });
+
+  app.post('/v1/auth/firebase/register-pending', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const body = parseOrReply(firebaseExchangeInput, request.body, reply);
+    if (!body) return;
+    if (!verifyFirebaseIdToken) return reply.code(503).send({ error: 'FIREBASE_AUTH_UNAVAILABLE', message: 'Вход через Firebase ещё не настроен.' });
+    let claims;
+    try {
+      claims = await verifyFirebaseIdToken(body.idToken);
+    } catch (error) {
+      request.log.info({ code: error?.code }, 'Firebase ID token rejected during pending registration');
+      return reply.code(401).send({ error: 'INVALID_FIREBASE_TOKEN', message: 'Сессия Firebase недействительна. Войди заново.' });
+    }
+    const firebaseUid = typeof claims?.uid === 'string' ? claims.uid : typeof claims?.sub === 'string' ? claims.sub : '';
+    const email = typeof claims?.email === 'string' ? claims.email.trim().toLowerCase() : '';
+    if (!firebaseUid || firebaseUid.length > 128 || !z.string().email().safeParse(email).success) {
+      return reply.code(401).send({ error: 'INVALID_FIREBASE_PROFILE', message: 'Firebase не передал корректный e-mail.' });
+    }
+    const linked = await store.getViewerAccountByFirebaseUid(firebaseUid);
+    if (linked) {
+      if (linked.status === 'disabled' || linked.status === 'deleted') return reply.code(403).send({ error: 'ACCOUNT_UNAVAILABLE', message: 'Этот аккаунт недоступен.' });
+      return reply.code(200).send({
+        status: linked.status === 'active' ? 'active' : 'email_verification_required',
+        username: linked.username,
+        publicId: linked.publicId,
+        message: linked.status === 'active' ? 'Аккаунт уже подтверждён. Продолжи вход.' : 'Подтверди e-mail в Firebase, затем продолжи вход.'
+      });
+    }
+    // Before Firebase confirms ownership of an e-mail, never attach its UID to
+    // an existing password account with the same address. That link is made
+    // only by the verified exchange endpoint.
+    if (await store.getViewerAccountByEmail(email)) {
+      return reply.code(409).send({ error: 'EMAIL_IN_USE', message: 'Для этого e-mail уже есть аккаунт. Подтверди e-mail в Firebase и войди через Firebase.' });
+    }
+    const username = body.username ? normalizeUsername(body.username) : null;
+    if (!username) return reply.code(400).send({ error: 'USERNAME_REQUIRED', message: 'Выбери логин для SakhaTube.' });
+    try {
+      const account = await store.createViewerAccount({
+        email,
+        username,
+        publicId: makePublicViewerId(),
+        firebaseUid,
+        displayName: body.displayName?.trim() || (typeof claims.name === 'string' ? claims.name.slice(0, 60) : username),
+        passwordHash: await hashPassword(randomBytes(32).toString('base64url')),
+        lastLoginAt: null,
+        status: 'pending_verification',
+        verificationTokenHash: null,
+        verificationExpiresAt: null,
+        emailVerifiedAt: null
+      });
+      await audit(request, 'viewer.firebase_registration_pending', 'viewer_account', account.id, null, { status: account.status }, { id: account.id, roles: ['viewer'] });
+      return reply.code(201).send({
+        status: 'email_verification_required',
+        username: account.username,
+        publicId: account.publicId,
+        message: 'Логин закреплён. Подтверди e-mail в Firebase, затем продолжи вход.'
+      });
+    } catch (error) {
+      if (error.code === 'VIEWER_USERNAME_EXISTS' || error.code === '23505') return reply.code(409).send({ error: 'USERNAME_TAKEN', message: 'Этот логин уже занят.' });
+      throw error;
+    }
+  });
+
+  app.post('/v1/auth/firebase/exchange', { config: { rateLimit: { max: 20, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const body = parseOrReply(firebaseExchangeInput, request.body, reply);
+    if (!body) return;
+    if (!verifyFirebaseIdToken) return reply.code(503).send({ error: 'FIREBASE_AUTH_UNAVAILABLE', message: 'Вход через Firebase ещё не настроен.' });
+    let claims;
+    try {
+      claims = await verifyFirebaseIdToken(body.idToken);
+    } catch (error) {
+      request.log.info({ code: error?.code }, 'Firebase ID token rejected');
+      return reply.code(401).send({ error: 'INVALID_FIREBASE_TOKEN', message: 'Сессия Firebase недействительна. Войди заново.' });
+    }
+    const firebaseUid = typeof claims?.uid === 'string' ? claims.uid : typeof claims?.sub === 'string' ? claims.sub : '';
+    const email = typeof claims?.email === 'string' ? claims.email.trim().toLowerCase() : '';
+    if (!firebaseUid || firebaseUid.length > 128 || !z.string().email().safeParse(email).success || claims.email_verified !== true) {
+      return reply.code(401).send({ error: 'FIREBASE_EMAIL_UNVERIFIED', message: 'В Firebase нужен подтверждённый e-mail.' });
+    }
+    let account = await store.getViewerAccountByFirebaseUid(firebaseUid);
+    if (account) {
+      if (account.status === 'pending_verification') {
+        account = await store.updateViewerAccount(account.id, {
+          status: 'active',
+          emailVerifiedAt: account.emailVerifiedAt ?? now(),
+          verificationTokenHash: null,
+          verificationExpiresAt: null
+        });
+      } else if (account.status !== 'active') {
+        return reply.code(403).send({ error: 'ACCOUNT_UNAVAILABLE', message: 'Этот аккаунт недоступен.' });
+      }
+    } else {
+      // A verified Firebase e-mail can safely join an earlier SakhaTube
+      // account. Its username and public ST-ID stay unchanged.
+      const existing = await store.getViewerAccountByEmail(email);
+      if (existing) {
+        if (existing.status === 'disabled' || existing.status === 'deleted') return reply.code(403).send({ error: 'ACCOUNT_UNAVAILABLE', message: 'Этот аккаунт недоступен.' });
+        account = await store.updateViewerAccount(existing.id, {
+          firebaseUid,
+          status: 'active',
+          emailVerifiedAt: existing.emailVerifiedAt ?? now(),
+          verificationTokenHash: null,
+          verificationExpiresAt: null
+        });
+      } else {
+        const username = body.username ? normalizeUsername(body.username) : fallbackUsername();
+        try {
+          account = await store.createViewerAccount({
+            email,
+            username,
+            publicId: makePublicViewerId(),
+            firebaseUid,
+            displayName: body.displayName?.trim() || (typeof claims.name === 'string' ? claims.name.slice(0, 60) : email.split('@')[0]),
+            // Firebase owns this credential. A random non-user-supplied hash
+            // prevents password login until an explicit password-set flow is
+            // implemented, while retaining the existing non-null schema.
+            passwordHash: await hashPassword(randomBytes(32).toString('base64url')),
+            lastLoginAt: null,
+            status: 'active',
+            verificationTokenHash: null,
+            verificationExpiresAt: null,
+            emailVerifiedAt: now()
+          });
+        } catch (error) {
+          if (error.code === 'VIEWER_USERNAME_EXISTS' || error.code === '23505') return reply.code(409).send({ error: 'USERNAME_TAKEN', message: 'Этот логин уже занят.' });
+          throw error;
+        }
+      }
+    }
+    const updated = await store.updateViewerAccount(account.id, { lastLoginAt: now() });
+    await audit(request, 'viewer.firebase_exchange', 'viewer_account', account.id, null, { status: 'success' }, { id: account.id, roles: ['viewer'] });
     return viewerSession(updated ?? account, request);
   });
 

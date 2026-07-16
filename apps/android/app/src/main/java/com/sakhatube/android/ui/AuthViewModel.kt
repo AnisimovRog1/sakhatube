@@ -25,15 +25,10 @@ class AuthViewModel(
         try { repository.register(email, username, password, displayName) } finally { password.fill('\u0000') }
     }
 
-    fun login(login: String, password: CharArray) = runAuth(
+    fun login(email: String, password: CharArray) = runAuth(
         inProgress = AuthUiState.SigningIn,
         success = { AuthUiState.SignedIn(it.viewer) }
-    ) { try { repository.login(login, password) } finally { password.fill('\u0000') } }
-
-    fun verifyEmail(verificationLink: String) = runAuth(
-        inProgress = AuthUiState.VerifyingEmail,
-        success = { AuthUiState.SignedIn(it.viewer) }
-    ) { repository.verifyEmail(verificationLink) }
+    ) { try { repository.login(email, password) } finally { password.fill('\u0000') } }
 
     fun dismissError() { _state.value = AuthUiState.Guest }
     fun signOut() { repository.signOut(); _state.value = AuthUiState.Guest }

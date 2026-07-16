@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct SakhaTubeApp: App {
+    @UIApplicationDelegateAdaptor(FirebaseAppDelegate.self) private var firebaseAppDelegate
     @StateObject private var session = AppSession()
     @StateObject private var viewerSession = ViewerSessionStore()
     @StateObject private var catalog: CatalogStore

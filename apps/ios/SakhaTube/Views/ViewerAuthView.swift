@@ -7,17 +7,14 @@ struct ViewerAuthView: View {
     @State private var mode: Mode = .signIn
     @State private var email = ""
     @State private var username = ""
-    @State private var login = ""
     @State private var password = ""
     @State private var displayName = ""
-    @State private var verificationLink = ""
     @State private var message: String?
     @State private var errorMessage: String?
 
     private enum Mode: String, CaseIterable, Identifiable {
         case signIn = "Войти"
         case signUp = "Создать аккаунт"
-        case verify = "Подтвердить"
         var id: String { rawValue }
     }
 
@@ -38,17 +35,6 @@ struct ViewerAuthView: View {
                 case .signUp:
                     signUpFields
                     submitButton("Отправить письмо") { await signUp() }
-                case .verify:
-                    Section("Ссылка из письма") {
-                        TextField("https://…/verify-email?account=…", text: $verificationLink, axis: .vertical)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                    }
-                    Text("Открой письмо и вставь сюда полную ссылку подтверждения. Она одноразовая.")
-                        .font(.footnote)
-                        .foregroundStyle(AppTheme.secondaryText)
-                    submitButton("Подтвердить email") { await verify() }
                 }
 
                 if let message {
@@ -73,9 +59,10 @@ struct ViewerAuthView: View {
 
     private var signInFields: some View {
         Section {
-            TextField("Логин или e-mail", text: $login)
+            TextField("E-mail", text: $email)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .keyboardType(.emailAddress)
                 .textContentType(.username)
             SecureField("Пароль", text: $password)
                 .textContentType(.password)
@@ -115,7 +102,7 @@ struct ViewerAuthView: View {
     private func signIn() async {
         resetFeedback()
         do {
-            try await viewerSession.login(login: login, password: password)
+            try await viewerSession.login(email: email, password: password)
             dismiss()
         } catch { errorMessage = error.userFacingAuthMessage }
     }
@@ -125,15 +112,7 @@ struct ViewerAuthView: View {
         do {
             let response = try await viewerSession.register(email: email, username: username, password: password, displayName: displayName.nilIfBlank)
             message = response.message
-            mode = .verify
-        } catch { errorMessage = error.userFacingAuthMessage }
-    }
-
-    private func verify() async {
-        resetFeedback()
-        do {
-            try await viewerSession.verifyEmail(link: verificationLink)
-            dismiss()
+            mode = .signIn
         } catch { errorMessage = error.userFacingAuthMessage }
     }
 

@@ -1,13 +1,14 @@
 import Foundation
+import FirebaseAuth
+import FirebaseCore
 import Security
 
 /// Minimal boundary for the public viewer auth API. It makes token renewal an
 /// additive server feature: the app does not invent refresh tokens or pretend
 /// that an expired access token is a persistent sign-in.
 protocol ViewerAuthServing: Sendable {
-    func registerViewer(email: String, username: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse
-    func verifyViewerEmail(accountId: String, token: String) async throws -> ViewerSessionResponse
-    func loginViewer(login: String, password: String) async throws -> ViewerSessionResponse
+    func exchangeFirebaseIDToken(_ idToken: String, username: String?, displayName: String?) async throws -> ViewerSessionResponse
+    func registerPendingFirebaseUser(idToken: String, username: String, displayName: String?) async throws
     func viewerMe(accessToken: String) async throws -> ViewerMeResponse
 }
 
@@ -32,6 +33,7 @@ typealias ViewerRefreshResponse = ViewerSessionResponse
 
 enum ViewerSessionContract {
     static let requiredEndpoints = [
+        "POST /v1/auth/firebase/exchange { idToken } -> SakhaTube session + public viewer profile",
         "POST /v1/auth/refresh { refreshToken } -> { accessToken, refreshToken, expiresIn, viewer }",
         "POST /v1/auth/logout Authorization: Bearer <accessToken> -> 204",
         "GET /v1/auth/me Authorization: Bearer <accessToken> -> { viewer }"
@@ -65,22 +67,38 @@ final class ViewerSessionStore: ObservableObject {
     func register(email: String, username: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse {
         isWorking = true
         defer { isWorking = false }
-        return try await api.registerViewer(email: email, username: username, password: password, displayName: displayName)
+        try requireFirebaseConfiguration()
+        let result = try await Auth.auth().createUser(withEmail: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
+        let profile = result.user.createProfileChangeRequest()
+        profile.displayName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank ?? username
+        try await profile.commitChanges()
+        let idToken = try await result.user.getIDToken(forcingRefresh: true)
+        try await api.registerPendingFirebaseUser(idToken: idToken, username: username, displayName: displayName)
+        FirebaseProfileDrafts.save(uid: result.user.uid, username: username, displayName: displayName)
+        try await result.user.sendEmailVerification()
+        try Auth.auth().signOut()
+        return ViewerRegistrationResponse(
+            status: "verification_required",
+            message: "Мы отправили письмо для подтверждения e-mail. Подтверди адрес и затем войди."
+        )
     }
 
-    func verifyEmail(link: String) async throws {
-        let verification = try ViewerVerificationLink(link)
+    func login(email: String, password: String) async throws {
         isWorking = true
         defer { isWorking = false }
-        let session = try await api.verifyViewerEmail(accountId: verification.accountId, token: verification.token)
+        try requireFirebaseConfiguration()
+        let result = try await Auth.auth().signIn(withEmail: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
+        try await result.user.reload()
+        guard let user = Auth.auth().currentUser else { throw FirebaseViewerAuthError.missingUser }
+        guard user.isEmailVerified else {
+            try? await user.sendEmailVerification()
+            throw FirebaseViewerAuthError.emailNotVerified
+        }
+        let idToken = try await user.getIDToken(forcingRefresh: true)
+        let draft = FirebaseProfileDrafts.load(uid: user.uid)
+        let session = try await api.exchangeFirebaseIDToken(idToken, username: draft?.username, displayName: draft?.displayName)
         accept(session)
-    }
-
-    func login(login: String, password: String) async throws {
-        isWorking = true
-        defer { isWorking = false }
-        let session = try await api.loginViewer(login: login, password: password)
-        accept(session)
+        FirebaseProfileDrafts.remove(uid: user.uid)
     }
 
     /// Rotates the stored refresh token on every restoration. If the server
@@ -100,6 +118,7 @@ final class ViewerSessionStore: ObservableObject {
     func signOut() {
         accessToken = nil
         refreshTokens.remove()
+        try? Auth.auth().signOut()
         state = .guest
     }
 
@@ -132,33 +151,54 @@ final class ViewerSessionStore: ObservableObject {
     }
 }
 
-struct ViewerVerificationLink {
-    let accountId: String
-    let token: String
-
-    init(_ rawValue: String) throws {
-        guard let components = URLComponents(string: rawValue),
-              components.scheme == "https",
-              components.path == "/verify-email",
-              let accountId = components.queryItems?.first(where: { $0.name == "account" })?.value,
-              let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
-              !accountId.isEmpty,
-              !token.isEmpty else {
-            throw ViewerAuthInputError.invalidVerificationLink
-        }
-        self.accountId = accountId
-        self.token = token
+private extension ViewerSessionStore {
+    func requireFirebaseConfiguration() throws {
+        guard FirebaseApp.app() != nil else { throw FirebaseViewerAuthError.notConfigured }
     }
 }
 
-enum ViewerAuthInputError: LocalizedError {
-    case invalidVerificationLink
+private enum FirebaseViewerAuthError: LocalizedError {
+    case notConfigured
+    case missingUser
+    case emailNotVerified
 
     var errorDescription: String? {
         switch self {
-        case .invalidVerificationLink:
-            return "Вставь полную ссылку из письма подтверждения."
+        case .notConfigured: return "Вход временно недоступен: Firebase ещё не настроен."
+        case .missingUser: return "Не удалось получить аккаунт после входа. Попробуй ещё раз."
+        case .emailNotVerified: return "Подтверди e-mail по ссылке из письма, затем войди снова."
         }
+    }
+}
+
+private struct FirebaseProfileDraft: Codable {
+    let username: String
+    let displayName: String?
+}
+
+private enum FirebaseProfileDrafts {
+    private static let keyPrefix = "firebase-profile-draft."
+
+    static func save(uid: String, username: String, displayName: String?) {
+        let draft = FirebaseProfileDraft(username: username, displayName: displayName)
+        guard let data = try? JSONEncoder().encode(draft) else { return }
+        UserDefaults.standard.set(data, forKey: keyPrefix + uid)
+    }
+
+    static func load(uid: String) -> FirebaseProfileDraft? {
+        guard let data = UserDefaults.standard.data(forKey: keyPrefix + uid) else { return nil }
+        return try? JSONDecoder().decode(FirebaseProfileDraft.self, from: data)
+    }
+
+    static func remove(uid: String) {
+        UserDefaults.standard.removeObject(forKey: keyPrefix + uid)
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

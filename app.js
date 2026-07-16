@@ -707,6 +707,7 @@ function openSettings() {
 
 function setAccountMode(mode) {
   const register = mode === 'register';
+  const firebaseEnabled = window.SakhaTubeFirebaseAuth?.enabled === true;
   accountDialog.dataset.mode = register ? 'register' : 'login';
   accountDialog.querySelectorAll('[data-account-mode]').forEach((button) => {
     const active = button.dataset.accountMode === mode;
@@ -715,10 +716,16 @@ function setAccountMode(mode) {
   });
   accountDialog.querySelectorAll('.account-register-field').forEach((field) => { field.hidden = !register; });
   accountDialog.querySelectorAll('.account-login-field').forEach((field) => { field.hidden = register; });
+  const loginLabel = document.querySelector('.account-login-field');
+  if (loginLabel?.firstChild) loginLabel.firstChild.textContent = firebaseEnabled ? 'E-mail для входа' : 'Логин или e-mail';
+  const usernameField = document.querySelector('#account-username')?.closest('label');
+  if (usernameField) usernameField.hidden = !register;
   document.querySelector('#account-title').textContent = register ? 'Создать аккаунт' : 'Войти';
   document.querySelector('#account-submit').textContent = register ? 'Создать аккаунт' : 'Войти';
   document.querySelector('#account-password').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
-  document.querySelector('#account-hint').textContent = register
+  document.querySelector('#account-hint').textContent = firebaseEnabled
+    ? (register ? 'Придумайте логин, укажите e-mail и пароль. Сначала подтвердите e-mail — ID появится после входа.' : 'Введите e-mail и пароль Firebase.')
+    : register
     ? 'Придумайте логин и пароль. E-mail нужен только для подтверждения и восстановления. Постоянный ID появится после подтверждения аккаунта.'
     : 'Введите логин и пароль. Для ранних аккаунтов работает также e-mail.';
   const error = document.querySelector('#account-error');
@@ -744,25 +751,61 @@ async function submitAccount(event) {
   const email = document.querySelector('#account-email').value.trim().toLowerCase();
   const password = document.querySelector('#account-password').value;
   const displayName = document.querySelector('#account-display-name').value.trim();
+  const firebaseEnabled = window.SakhaTubeFirebaseAuth?.enabled === true;
   const error = document.querySelector('#account-error');
   const submit = document.querySelector('#account-submit');
   error.hidden = true;
   error.textContent = '';
   if (!password || (mode === 'register' && (!username || !email || password.length < 12)) || (mode === 'login' && !login)) {
-    error.textContent = mode === 'register' ? 'Укажите логин, e-mail и пароль минимум из 12 символов.' : 'Укажите логин и пароль.';
+    error.textContent = mode === 'register'
+      ? 'Укажите логин, e-mail и пароль минимум из 12 символов.'
+      : (firebaseEnabled ? 'Укажите e-mail и пароль.' : 'Укажите логин и пароль.');
     error.hidden = false;
     return;
   }
   submit.disabled = true;
   submit.textContent = mode === 'register' ? 'Создаём…' : 'Входим…';
   try {
-    const response = await fetch(`/v1/auth/${mode === 'register' ? 'register' : 'login'}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(mode === 'register' ? { email, username, password, displayName: displayName || undefined } : { login, password })
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.message || 'Не удалось выполнить запрос. Попробуйте ещё раз.');
+    const firebaseAuth = window.SakhaTubeFirebaseAuth;
+    const useFirebase = firebaseEnabled;
+    let payload;
+    if (useFirebase) {
+      const identity = mode === 'register'
+        ? await firebaseAuth.register({ email, password, displayName: displayName || username })
+        : await firebaseAuth.login({ email: login, password });
+      if (mode === 'register') {
+        try {
+          const pending = await fetch('/v1/auth/firebase/register-pending', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ idToken: identity.idToken, username, displayName: displayName || username })
+          });
+          const pendingPayload = await pending.json().catch(() => ({}));
+          if (!pending.ok) throw new Error(pendingPayload.message || 'Не удалось подготовить аккаунт. Попробуйте ещё раз.');
+          payload = pendingPayload;
+        } finally {
+          // Registration is deliberately not a login. The user confirms the
+          // e-mail, then signs in to receive a SakhaTube session.
+          await firebaseAuth.logout();
+        }
+      } else {
+        const exchange = await fetch('/v1/auth/firebase/exchange', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ idToken: identity.idToken })
+        });
+        payload = await exchange.json().catch(() => ({}));
+        if (!exchange.ok) throw new Error(payload.message || 'Не удалось войти. Подтвердите e-mail и попробуйте ещё раз.');
+      }
+    } else {
+      const response = await fetch(`/v1/auth/${mode === 'register' ? 'register' : 'login'}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(mode === 'register' ? { email, username, password, displayName: displayName || undefined } : { login, password })
+      });
+      payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.message || 'Не удалось выполнить запрос. Попробуйте ещё раз.');
+    }
     if (mode === 'register') {
       document.querySelector('#account-password').value = '';
       error.textContent = payload.message || 'Проверьте e-mail и подтвердите аккаунт. После этого можно войти.';
@@ -774,13 +817,37 @@ async function submitAccount(event) {
     saveProfile();
     renderProfile();
     closeDialog(accountDialog);
-    showToast(`Вы вошли. ${viewerDisplayId(payload.viewer.id)}`);
+    showToast(mode === 'register'
+      ? `Аккаунт создан. ${viewerDisplayId(payload.viewer.id)}`
+      : `Вы вошли. ${viewerDisplayId(payload.viewer.id)}`);
   } catch (requestError) {
     error.textContent = requestError.message || 'Не удалось выполнить запрос. Попробуйте ещё раз.';
     error.hidden = false;
   } finally {
     submit.disabled = false;
     submit.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
+  }
+}
+
+async function restoreFirebaseViewer() {
+  const firebaseAuth = window.SakhaTubeFirebaseAuth;
+  if (!firebaseAuth?.enabled) return;
+  try {
+    const identity = await firebaseAuth.restore();
+    if (!identity?.emailVerified) return;
+    const exchange = await fetch('/v1/auth/firebase/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idToken: identity.idToken })
+    });
+    const restored = await exchange.json().catch(() => null);
+    if (!exchange.ok || !restored?.viewer) return;
+    saveViewerAuth(restored);
+    profile = { ...profile, name: restored.viewer.displayName || profile.name };
+    saveProfile();
+    renderProfile();
+  } catch {
+    // A Firebase network/configuration error must not block the local app.
   }
 }
 
@@ -882,6 +949,7 @@ applyLocale();
 renderShort();
 startCarousel();
 void loadPublicCatalog();
+void restoreFirebaseViewer();
 
 document.addEventListener('click', (event) => {
   const closeButton = event.target.closest('[data-close-dialog]');

@@ -2,6 +2,15 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.gms.google-services") apply false
+}
+
+// The Firebase configuration file is intentionally not committed. Keeping the
+// plugin conditional lets contributors build the open project before the
+// production Firebase app is created; it activates automatically after the
+// owner adds the official file at app/google-services.json.
+if (file("google-services.json").isFile) {
+    apply(plugin = "com.google.gms.google-services")
 }
 
 fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
@@ -77,6 +86,11 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
+
+    // Firebase Auth verifies the e-mail/password credential. SakhaTube still
+    // owns the viewer profile, public ST-ID and its own API session.
+    implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
+    implementation("com.google.firebase:firebase-auth")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
