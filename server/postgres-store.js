@@ -203,6 +203,16 @@ async function migrate(pool) {
       received_at TIMESTAMPTZ NOT NULL,
       PRIMARY KEY (content_id, session_id)
     );
+    -- Records a real grant issued by POST /v1/playback/sessions so
+    -- POST /v1/events/playback can reject events for a sessionId that was
+    -- never actually granted (forged/replayed playback telemetry).
+    CREATE TABLE IF NOT EXISTS playback_sessions (
+      id UUID PRIMARY KEY,
+      content_id TEXT NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+      rendition_id UUID NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS media_assets (
       id UUID PRIMARY KEY,
       kind TEXT NOT NULL,
@@ -689,6 +699,27 @@ export async function createPostgresStore(connectionString, seedData) {
       } finally {
         client.release();
       }
+    },
+    async createPlaybackSession({ id, contentId, renditionId, expiresAt }) {
+      const createdAt = now();
+      await pool.query(
+        `INSERT INTO playback_sessions (id, content_id, rendition_id, expires_at, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, contentId, renditionId, expiresAt, createdAt]
+      );
+      return { id, contentId, renditionId, expiresAt, createdAt };
+    },
+    async findPlaybackSession(id) {
+      const { rows } = await pool.query('SELECT * FROM playback_sessions WHERE id = $1', [id]);
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        contentId: row.content_id,
+        renditionId: row.rendition_id,
+        expiresAt: row.expires_at.toISOString(),
+        createdAt: row.created_at.toISOString()
+      };
     },
     async createPublicRequest(data) {
       const record = {

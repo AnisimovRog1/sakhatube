@@ -675,13 +675,39 @@ test('viewer blocks hide approved comment authors only for the blocker and can b
   assert.equal(JSON.parse(viewerFeedAfter.body).items.some((item) => item.id === comment.id), true);
 });
 
-test('playback event is validated and first-frame retries are idempotent', async (t) => {
+test('playback event is validated, requires a real session grant, and first-frame retries are idempotent', async (t) => {
   const store = createMemoryStore();
-  const app = await createTestApp({ store });
+  const mediaStore = { async get() { throw new Error('unused in this test'); } };
+  const app = await createTestApp({ store, mediaStore });
   t.after(() => app.close());
   const invalid = await app.inject({ method: 'POST', url: '/v1/events/playback', payload: { contentId: 'midnight', event: 'first_frame' } });
   assert.equal(invalid.statusCode, 400);
-  const payload = { contentId: 'midnight', sessionId: 'abcdef0123456789', event: 'first_frame', positionMs: 0 };
+
+  const forged = await app.inject({
+    method: 'POST', url: '/v1/events/playback',
+    payload: { contentId: 'signal', sessionId: 'forged0123456789', event: 'first_frame', positionMs: 0 }
+  });
+  assert.equal(forged.statusCode, 202);
+  assert.equal(JSON.parse(forged.body).recorded, false);
+  assert.equal(store.overview().firstFrameEvents, 0);
+
+  store.createMedia({
+    kind: 'hls', relation: 'rendition', status: 'ready', contentId: 'signal',
+    storageKey: 'renditions/signal-release/master.m3u8', fileName: 'master.m3u8',
+    contentType: 'application/vnd.apple.mpegurl', size: 123,
+    metadata: { playback: { hls: { state: 'ready', prefix: 'renditions/signal-release/', manifestKey: 'renditions/signal-release/master.m3u8', generatedAt: '2026-07-16T00:00:00.000Z' } } }
+  });
+  const granted = await app.inject({ method: 'POST', url: '/v1/playback/sessions', payload: { contentId: 'signal' } });
+  assert.equal(granted.statusCode, 201);
+  const { sessionId } = JSON.parse(granted.body);
+
+  const mismatchedContent = await app.inject({
+    method: 'POST', url: '/v1/events/playback',
+    payload: { contentId: 'midnight', sessionId, event: 'first_frame', positionMs: 0 }
+  });
+  assert.equal(JSON.parse(mismatchedContent.body).recorded, false);
+
+  const payload = { contentId: 'signal', sessionId, event: 'first_frame', positionMs: 0 };
   const accepted = await app.inject({ method: 'POST', url: '/v1/events/playback', payload });
   assert.equal(accepted.statusCode, 202);
   assert.equal(JSON.parse(accepted.body).recorded, true);

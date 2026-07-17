@@ -129,6 +129,7 @@ export function createMemoryStore(seed = defaultSeed) {
     viewerSessions: seed.viewerSessions ?? [],
     commentReports: seed.commentReports ?? [],
     viewerBlocks: seed.viewerBlocks ?? [],
+    playbackSessions: seed.playbackSessions ?? [],
     content: seed.content.map((item) => ({
       scheduledAt: null,
       publishedAt: null,
@@ -294,6 +295,15 @@ export function createMemoryStore(seed = defaultSeed) {
       }
       state.playback.push({ id: randomUUID(), receivedAt: now(), ...event });
       return true;
+    },
+    createPlaybackSession(data) {
+      const record = { ...data, createdAt: now() };
+      state.playbackSessions.push(record);
+      return clone(record);
+    },
+    findPlaybackSession(id) {
+      const record = state.playbackSessions.find((item) => item.id === id);
+      return record ? clone(record) : null;
     },
     createPublicRequest(data) {
       const record = {
@@ -2263,6 +2273,13 @@ export function buildApp(options = {}) {
     const body = parseOrReply(playbackInput, request.body, reply);
     if (!body) return;
     if (!await store.getContent(body.contentId)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    // A sessionId that was never granted by POST /v1/playback/sessions (or
+    // that belongs to a different content item) is either forged or stale —
+    // silently drop it rather than erroring, so this stays a fail-closed,
+    // non-informative response for anyone probing the endpoint.
+    const grant = await store.findPlaybackSession(body.sessionId);
+    const validGrant = grant && grant.contentId === body.contentId && new Date(grant.expiresAt).getTime() > Date.now();
+    if (!validGrant) return reply.code(202).send({ accepted: true, recorded: false });
     const recorded = await store.addPlayback({ ...body, viewerId: request.user?.sub ?? null });
     // Keep the transport idempotent for clients: a retry receives success, but
     // a duplicate first-frame event does not change analytics.
@@ -2389,6 +2406,12 @@ export function buildApp(options = {}) {
     }
     const sessionId = randomUUID();
     const token = app.jwt.sign({ kind: 'playback', cid: content.id, rid: rendition.id, sid: sessionId }, { expiresIn: 300 });
+    await store.createPlaybackSession({
+      id: sessionId,
+      contentId: content.id,
+      renditionId: rendition.id,
+      expiresAt: new Date(Date.now() + 300_000).toISOString()
+    });
     await audit(request, 'playback.session.grant', 'content', content.id, null, { access: 'free', renditionId: rendition.id, sessionId });
     return reply.code(201).send({
       sessionId,
