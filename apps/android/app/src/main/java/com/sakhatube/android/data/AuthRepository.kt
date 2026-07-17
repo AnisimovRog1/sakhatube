@@ -40,19 +40,38 @@ class AuthRepository(
         exchangeVerifiedFirebaseUser(result.user ?: throw IOException("Firebase не вернул аккаунт."))
     }
 
-    suspend fun restoreCurrentViewer(): ViewerAccount? = withContext(Dispatchers.IO) {
-        val session = sessionStore.current() ?: return@withContext null
+    /**
+     * Rotates the stored refresh token on every app start, mirroring
+     * ViewerSessionStore.restoreSession() on iOS — the 15-minute access token is
+     * never itself treated as a persistent login; the refresh token is. This
+     * keeps sessionStore.current() fresh for CommentsRepository/
+     * BillingVerificationTransport (which read it independently) for the
+     * remainder of this app process. It does NOT re-run mid-session: a session
+     * kept open continuously past the access token's 15-minute lifetime will
+     * still see those two repositories require a fresh sign-in until the next
+     * app start. Same limitation as the iOS client today — neither platform
+     * refreshes reactively yet.
+     * A reused or expired refresh token always means "sign in again" — the
+     * server has already revoked the whole session family in that case.
+     */
+    suspend fun refreshSession(): ViewerAccount? = withContext(Dispatchers.IO) {
+        val refreshToken = sessionStore.currentRefreshToken() ?: return@withContext null
         try {
-            val response = request("/v1/auth/me", "GET", null, bearerToken = session.accessToken)
-            response.optJSONObject("viewer")?.toViewer() ?: run {
-                sessionStore.clear()
-                null
-            }
+            val response = request("/v1/auth/refresh", "POST", JSONObject().put("refreshToken", refreshToken))
+            val session = response.toSession()
+            sessionStore.save(session)
+            session.viewer
+        } catch (error: ApiException) {
+            // The server looked at this specific token and said no (expired,
+            // already rotated, or the whole session family was revoked after a
+            // reuse was detected) — there is nothing left to retry.
+            if (error.statusCode == 401) sessionStore.clear()
+            null
         } catch (_: IOException) {
-            // A rejected/expired token must not remain on disk. Network failures
-            // also return the user to a safe signed-out state rather than keeping
-            // a potentially stale bearer token around.
-            sessionStore.clear()
+            // No response from the server at all (offline, timeout, DNS...).
+            // The refresh token itself was never judged invalid, so keep it —
+            // wiping it here would force a full re-login just because the
+            // network blipped during the one refresh attempt at app start.
             null
         }
     }
@@ -138,8 +157,10 @@ class AuthRepository(
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val json = stream?.bufferedReader()?.use { it.readText() }?.let(::JSONObject)
             if (status !in expectedCodes) {
-                throw IOException(json?.optString("message")?.takeIf { it.isNotBlank() }
-                    ?: "Не удалось выполнить запрос (код $status).")
+                throw ApiException(
+                    json?.optString("message")?.takeIf { it.isNotBlank() } ?: "Не удалось выполнить запрос (код $status).",
+                    statusCode = status
+                )
             }
             json ?: throw IOException("Сервис вернул пустой ответ.")
         } catch (error: IOException) {
@@ -152,11 +173,19 @@ class AuthRepository(
     }
 }
 
+/**
+ * Carries the HTTP status so callers can tell "the server explicitly rejected
+ * this" (e.g. 401 on a reused/expired refresh token) apart from a transient
+ * network failure, which both used to surface as a bare IOException.
+ */
+private class ApiException(message: String, val statusCode: Int) : IOException(message)
+
 private fun JSONObject.toSession(): ViewerSession {
     val token = optString("accessToken").trim()
+    val refreshToken = optString("refreshToken").trim()
     val viewer = optJSONObject("viewer")?.toViewer()
-    if (token.isEmpty() || viewer == null) throw IOException("Сервис не подтвердил сессию.")
-    return ViewerSession(token, optLong("expiresIn", 0L), viewer)
+    if (token.isEmpty() || refreshToken.isEmpty() || viewer == null) throw IOException("Сервис не подтвердил сессию.")
+    return ViewerSession(token, refreshToken, optLong("expiresIn", 0L), viewer)
 }
 
 private fun JSONObject.toViewer(): ViewerAccount? {

@@ -20,7 +20,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
-            repository.restoreCurrentViewer()?.let { viewer ->
+            repository.refreshSession()?.let { viewer ->
                 _state.value = AuthUiState.SignedIn(viewer)
             }
         }

@@ -34,12 +34,30 @@
 
 ## Сборка
 
-Нужны JDK 17 и Android SDK Platform 36. В проект уже добавлен Gradle Wrapper 8.11.1:
+Нужны JDK 17 и Android SDK Platform 36 + Build-Tools 36.0.0. В проект уже
+добавлен Gradle Wrapper 8.11.1. Если на машине их ещё нет (Android Studio не
+ставили) — можно поставить локально, без Homebrew/sudo, только под этот проект:
 
 ```bash
-cd apps/android
+# JDK 17 (Temurin), без системной установки
+curl -sL "https://api.adoptium.net/v3/binary/latest/17/ga/mac/aarch64/jdk/hotspot/normal/eclipse" \
+  -o /tmp/temurin17.tar.gz
+mkdir -p ../../.tools && tar xzf /tmp/temurin17.tar.gz -C ../../.tools
+export JAVA_HOME="$(pwd)/../../.tools/jdk-17*/Contents/Home"
+
+# Android SDK cmdline-tools + platform 36 + build-tools 36.0.0
+curl -sL "https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip" -o /tmp/cmdline-tools.zip
+mkdir -p ../../.tools/android-sdk/cmdline-tools && unzip -q /tmp/cmdline-tools.zip -d ../../.tools/android-sdk/cmdline-tools
+mv ../../.tools/android-sdk/cmdline-tools/cmdline-tools ../../.tools/android-sdk/cmdline-tools/latest
+export ANDROID_HOME="$(pwd)/../../.tools/android-sdk"
+yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
+  "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+echo "sdk.dir=$ANDROID_HOME" > local.properties
+
 ./gradlew :app:assembleDebug
 ```
+
+`../../.tools/` is gitignored — this never touches system Java/Android Studio.
 
 Файл для загрузки в Google Play создаётся так:
 
@@ -49,12 +67,48 @@ cd apps/android
 ```
 
 Перед `bundleRelease` добавьте официальный `app/google-services.json`: без него
-сборка намеренно остановится. Затем настройте release signing/Play App Signing,
-реальные ссылки документов и пройдите закрытое тестирование. Этот каркас не
+сборка намеренно остановится (проверено `preReleaseBuild`). Release signing
+(`app/build.gradle.kts`'s `signingConfigs`) is wired to `keystore/keystore.properties`,
+also checked by `preReleaseBuild`; see "Подпись релиза" below для генерации.
+Затем — реальные ссылки документов и закрытое тестирование. Этот каркас не
 является готовой к публикации подписочной видеоплатформой: до релиза ещё нужны
 Firebase Admin на сервере, проверка удаления аккаунта, HLS entitlement, Google
 Play Billing с серверной проверкой и UGC report/block, если запускаются
 комментарии.
+
+## Подпись релиза
+
+`keystore/` не коммитится (см. `.gitignore`). Сгенерировать upload-keystore один раз:
+
+```bash
+cd apps/android
+mkdir -p keystore
+keytool -genkeypair -v -keystore keystore/upload-keystore.jks -alias sakhatube-upload \
+  -keyalg RSA -keysize 2048 -validity 10000 \
+  -dname "CN=SakhaTube, OU=Engineering, O=SakhaTube, L=Yakutsk, ST=Sakha, C=RU"
+cat > keystore/keystore.properties <<EOF
+keystore.storePassword=<пароль, который ввёл keytool>
+keystore.keyPassword=<тот же пароль — PKCS12 не поддерживает разные>
+keystore.keyAlias=sakhatube-upload
+keystore.file=keystore/upload-keystore.jks
+EOF
+```
+
+⚠️ **Уже сгенерирован на машине Игоря** (`~/Documents/SakhaTube/apps/android/keystore/`,
+17.07.2026) — не существует больше нигде. Обязательно скопировать
+`upload-keystore.jks` и `keystore.properties` в менеджер паролей/защищённое
+облако до переустановки/потери этого Мака. При создании приложения в Play
+Console включить **Play App Signing** — тогда этот файл станет только upload
+key, и его потерю можно будет восстановить через поддержку Google; без Play
+App Signing потеря файла означает невозможность когда-либо обновить
+опубликованное приложение под тем же ID.
+
+Проверка, что сборка реально подписана нужным сертификатом:
+
+```bash
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs \
+  app/build/outputs/apk/release/app-release.apk
+```
 
 ## Google Play Billing
 

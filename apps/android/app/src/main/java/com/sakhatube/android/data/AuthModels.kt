@@ -19,6 +19,7 @@ data class ViewerAccount(
 
 data class ViewerSession(
     val accessToken: String,
+    val refreshToken: String,
     val expiresInSeconds: Long,
     val viewer: ViewerAccount
 )
@@ -42,14 +43,17 @@ sealed interface DeletionUiState {
 
 interface ViewerSessionStore {
     fun current(): ViewerSession?
+    /** Survives past the access token's expiry — see [AuthRepository.refreshSession]. */
+    fun currentRefreshToken(): String?
     fun save(session: ViewerSession)
     fun clear()
 }
 
 /**
- * Stores the short-lived SakhaTube access token with a key held in Android
- * Keystore. This is deliberately not a refresh-token store: when the 15-minute
- * viewer session expires, the app returns to the sign-in screen.
+ * Stores the short-lived SakhaTube access token and the longer-lived refresh
+ * token, both behind a key held in Android Keystore. The access token alone
+ * expires in 15 minutes; [AuthRepository.refreshSession] rotates it using the
+ * refresh token at every app launch, mirroring the iOS Keychain session store.
  */
 class EncryptedViewerSessionStore(context: Context) : ViewerSessionStore {
     private val preferences = EncryptedSharedPreferences.create(
@@ -64,21 +68,26 @@ class EncryptedViewerSessionStore(context: Context) : ViewerSessionStore {
 
     override fun current(): ViewerSession? {
         val expiresAt = preferences.getLong(KEY_EXPIRES_AT, 0L)
-        if (expiresAt <= System.currentTimeMillis()) {
-            clear()
-            return null
-        }
+        if (expiresAt <= System.currentTimeMillis()) return null
         val token = preferences.getString(KEY_ACCESS_TOKEN, null)?.trim().orEmpty()
+        val refreshToken = preferences.getString(KEY_REFRESH_TOKEN, null)?.trim().orEmpty()
         val id = preferences.getString(KEY_VIEWER_ID, null)?.trim().orEmpty()
         val email = preferences.getString(KEY_EMAIL, null)?.trim().orEmpty()
         val username = preferences.getString(KEY_USERNAME, null)?.trim().orEmpty()
         val displayName = preferences.getString(KEY_DISPLAY_NAME, null)?.trim().orEmpty()
-        if (token.isEmpty() || id.isEmpty() || email.isEmpty() || username.isEmpty() || displayName.isEmpty()) {
+        if (token.isEmpty() || refreshToken.isEmpty() || id.isEmpty() || email.isEmpty() || username.isEmpty() || displayName.isEmpty()) {
+            // Distinct from a merely time-expired access token (handled above,
+            // which deliberately keeps the refresh token): reaching here means
+            // whatever is stored is malformed or predates the refresh-token
+            // schema (e.g. an install from before this field existed). There is
+            // no way to recover a session from it, so purge rather than leave
+            // stale PII sitting in encrypted storage indefinitely.
             clear()
             return null
         }
         return ViewerSession(
             accessToken = token,
+            refreshToken = refreshToken,
             expiresInSeconds = ((expiresAt - System.currentTimeMillis()) / 1_000L).coerceAtLeast(1L),
             viewer = ViewerAccount(
                 id = id,
@@ -91,11 +100,17 @@ class EncryptedViewerSessionStore(context: Context) : ViewerSessionStore {
         )
     }
 
+    // Deliberately independent of the access token's expiry: this is the only
+    // credential AuthRepository.refreshSession() needs, and it must still be
+    // readable long after the 15-minute access token above has aged out.
+    override fun currentRefreshToken(): String? =
+        preferences.getString(KEY_REFRESH_TOKEN, null)?.trim()?.takeIf { it.isNotEmpty() }
+
     override fun save(session: ViewerSession) {
         // A server must always return a bounded lifetime. Persisting a missing
         // or non-positive expiry would accidentally turn a short token into a
         // permanent login.
-        if (session.expiresInSeconds <= 0L || session.accessToken.isBlank()) {
+        if (session.expiresInSeconds <= 0L || session.accessToken.isBlank() || session.refreshToken.isBlank()) {
             clear()
             return
         }
@@ -103,6 +118,7 @@ class EncryptedViewerSessionStore(context: Context) : ViewerSessionStore {
         val expiresAt = System.currentTimeMillis() + cappedLifetimeSeconds * 1_000L
         preferences.edit()
             .putString(KEY_ACCESS_TOKEN, session.accessToken)
+            .putString(KEY_REFRESH_TOKEN, session.refreshToken)
             .putLong(KEY_EXPIRES_AT, expiresAt)
             .putString(KEY_VIEWER_ID, session.viewer.id)
             .putString(KEY_EMAIL, session.viewer.email)
@@ -120,6 +136,7 @@ class EncryptedViewerSessionStore(context: Context) : ViewerSessionStore {
     private companion object {
         const val SESSION_FILE = "sakhatube.viewer-session.v1"
         const val KEY_ACCESS_TOKEN = "accessToken"
+        const val KEY_REFRESH_TOKEN = "refreshToken"
         const val KEY_EXPIRES_AT = "expiresAt"
         const val KEY_VIEWER_ID = "viewerId"
         const val KEY_EMAIL = "email"

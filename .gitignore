@@ -12,3 +12,10 @@ media/hls/
 # shared through Git forks, demo builds, or issue attachments.
 apps/android/app/google-services.json
 apps/ios/SakhaTube/GoogleService-Info.plist
+
+# The Play Store upload keystore and its passwords. Losing this file is
+# recoverable only if Play App Signing was enrolled at app creation (Google
+# then holds the real signing key and can reissue an upload key). Back up
+# keystore/upload-keystore.jks and keystore/keystore.properties somewhere
+# durable outside this repo — a password manager or encrypted cloud storage.
+apps/android/keystore/

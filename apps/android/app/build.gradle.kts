@@ -1,8 +1,21 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.gms.google-services") apply false
+}
+
+// The upload keystore is intentionally not committed (see keystore/ in
+// .gitignore). Signing activates only once a contributor/CI supplies
+// keystore/keystore.properties, mirroring the google-services.json pattern
+// below — debug builds and PR checks never need real signing credentials.
+val keystorePropertiesFile = rootProject.file("keystore/keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.isFile) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
 }
 
 // The Firebase configuration file is intentionally not committed. Keeping the
@@ -22,10 +35,19 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
         check(file("google-services.json").isFile) {
             "Missing app/google-services.json. Download the Android config for com.sakhatube.app from Firebase before building a release."
         }
+        check(keystorePropertiesFile.isFile) {
+            "Missing keystore/keystore.properties. Generate an upload keystore and keystore.properties (see apps/android/README.md) before building a release."
+        }
     }
 }
 
 fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
+// getProperty() on a missing/typo'd key returns null and would otherwise fail
+// signingConfigs configuration with an opaque NPE on every task, not just
+// release ones — surface a clear message pointing at the actual cause instead.
+fun requiredKeystoreProperty(key: String): String = keystoreProperties.getProperty(key)
+    ?: error("keystore/keystore.properties имеет неполную/ошибочную запись: отсутствует ключ \"$key\". См. apps/android/README.md «Подпись релиза».")
 
 val catalogBaseUrl = providers.gradleProperty("SAKHATUBE_CATALOG_BASE_URL")
     .orElse("https://sakhatube-production.up.railway.app")
@@ -65,6 +87,17 @@ android {
         buildConfigField("boolean", "PLAY_BILLING_SERVER_VERIFICATION_ENABLED", playBillingServerVerificationEnabled.get())
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.isFile) {
+            create("release") {
+                storeFile = rootProject.file(requiredKeystoreProperty("keystore.file"))
+                storePassword = requiredKeystoreProperty("keystore.storePassword")
+                keyAlias = requiredKeystoreProperty("keystore.keyAlias")
+                keyPassword = requiredKeystoreProperty("keystore.keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -72,6 +105,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 
