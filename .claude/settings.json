@@ -1,0 +1,53 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(npm start)",
+      "Bash(npm test)",
+      "Bash(npm view:*)",
+      "Bash(node --test:*)",
+      "Bash(git status)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git fetch:*)",
+      "Bash(git tag:*)",
+      "Bash(curl -s http://localhost:*)",
+      "Bash(curl -s -o /dev/null -w * http://localhost:*)",
+      "Bash(curl -s -o /dev/null -w * https://*.up.railway.app/*)",
+      "Bash(lsof -nP -iTCP:* -sTCP:LISTEN)",
+      "Bash(npx @railway/cli logs *)",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_wait_for",
+      "mcp__playwright__browser_snapshot",
+      "mcp__chrome-devtools__take_screenshot",
+      "mcp__chrome-devtools__navigate_page",
+      "mcp__chrome-devtools__emulate",
+      "mcp__chrome-devtools__new_page",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__list_pages",
+      "mcp__railway__whoami",
+      "mcp__railway__get_logs",
+      "mcp__railway__list_deployments",
+      "mcp__railway__list_projects",
+      "mcp__railway__list_services",
+      "mcp__railway__docs_search",
+      "mcp__railway__docs_fetch"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "obsidian",
+    "context7",
+    "playwright",
+    "chrome-devtools",
+    "railway"
+  ]
+}
