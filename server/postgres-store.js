@@ -710,6 +710,12 @@ export async function createPostgresStore(connectionString, seedData) {
       return { id, contentId, renditionId, expiresAt, createdAt };
     },
     async findPlaybackSession(id) {
+      // id is client-supplied (playbackInput only requires a 16-128 char
+      // string, not UUID shape) but the column is typed UUID — Postgres
+      // throws a type-cast error instead of matching zero rows for anything
+      // that isn't UUID-shaped, so reject that case before it ever reaches
+      // the query.
+      if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
       const { rows } = await pool.query('SELECT * FROM playback_sessions WHERE id = $1', [id]);
       const row = rows[0];
       if (!row) return null;
