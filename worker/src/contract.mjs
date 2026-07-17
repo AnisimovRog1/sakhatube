@@ -14,7 +14,11 @@ export function validateJob(input) {
   if (!input || typeof input !== 'object') throw new JobError('INVALID_JOB', 'Job must be an object');
   const { jobId, sourceAssetId, contentId, sourceKey, contentType, sizeBytes } = input;
   if (!isUuid(jobId) || !isUuid(sourceAssetId) || !isUuid(contentId)) throw new JobError('INVALID_JOB', 'IDs must be UUIDs');
-  if (typeof sourceKey !== 'string' || !/^incoming\/\d{4}-\d{2}-\d{2}\/[0-9a-f-]{36}\/source\.(mp4|mov|webm)$/i.test(sourceKey)) {
+  // Must accept every extension server/app.js's sourceVideoTypes can actually
+  // produce: m4v is a valid video/mp4 upload server-side (sourceVideoTypes
+  // maps 'video/mp4' to {mp4, m4v}), so rejecting it here means an upload the
+  // API already accepted can never finish processing.
+  if (typeof sourceKey !== 'string' || !/^incoming\/\d{4}-\d{2}-\d{2}\/[0-9a-f-]{36}\/source\.(mp4|m4v|mov|webm)$/i.test(sourceKey)) {
     throw new JobError('INVALID_SOURCE_KEY', 'Source must be an API-created incoming key');
   }
   if (!allowedSourceTypes.has(contentType)) throw new JobError('UNSUPPORTED_MEDIA_TYPE', 'Source MIME type is not allowed');

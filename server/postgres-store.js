@@ -609,7 +609,7 @@ export async function createPostgresStore(connectionString, seedData) {
       );
       return mapCommentReport(rows[0]);
     },
-    async listCommentReports({ status } = {}) {
+    async listCommentReports({ status = 'open' } = {}) {
       const { rows } = await pool.query(
         `SELECT * FROM comment_reports ${status ? 'WHERE status = $1' : ''} ORDER BY created_at DESC`,
         status ? [status] : []
@@ -806,6 +806,10 @@ export async function createPostgresStore(connectionString, seedData) {
           [deletedAt, id]
         );
         const removedReports = await client.query('DELETE FROM comment_reports WHERE reporter_id = $1', [id]);
+        // The account row below is anonymized in place, never actually
+        // deleted, so no FK cascade ever fires for it — this table needs its
+        // own explicit cleanup, matching the memory store's equivalent filter.
+        await client.query('DELETE FROM viewer_blocks WHERE blocker_id = $1 OR blocked_id = $1', [id]);
         const removedComments = await client.query(
           "UPDATE comments SET author_id = 'deleted-account', author_name = 'Удалённый пользователь', body = '', status = 'deleted', moderation_note = 'Удалено вместе с аккаунтом', updated_at = $1 WHERE author_id = $2",
           [deletedAt, id]
@@ -859,7 +863,12 @@ export async function createPostgresStore(connectionString, seedData) {
         const { rows } = await client.query('SELECT * FROM viewer_sessions WHERE refresh_token_hash = $1 FOR UPDATE', [tokenHash]);
         const current = mapViewerSession(rows[0]);
         if (!current) { await client.query('COMMIT'); return { status: 'invalid' }; }
-        if (current.revokedAt || new Date(current.expiresAt).getTime() <= Date.now()) { await client.query('COMMIT'); return { status: 'reused', accountId: current.accountId }; }
+        // See the identical comment in server/app.js's memory store: only an
+        // already-rotated token is a genuine reuse signal. A merely-expired,
+        // never-used token (a dormant device) must not trigger the same
+        // account-wide revocation or one idle device logs out every other one.
+        if (current.revokedAt) { await client.query('COMMIT'); return { status: 'reused', accountId: current.accountId }; }
+        if (new Date(current.expiresAt).getTime() <= Date.now()) { await client.query('COMMIT'); return { status: 'expired', accountId: current.accountId }; }
         const timestamp = now();
         await client.query('UPDATE viewer_sessions SET revoked_at = $1, revocation_reason = $2, rotated_at = $1, last_used_at = $1 WHERE id = $3', [timestamp, 'rotated', current.id]);
         const record = { id: randomUUID(), accountId: current.accountId, deviceName: null, createdAt: timestamp, lastUsedAt: timestamp, ...replacement };
@@ -939,10 +948,12 @@ export async function createPostgresStore(connectionString, seedData) {
       );
       return rows.map(mapMedia);
     },
-    async listMedia({ limit = 100 } = {}) {
+    async listMedia({ limit = 100, kind } = {}) {
+      // kind must filter before the limit is applied — see the identical
+      // comment in server/app.js's memory store for why.
       const { rows } = await pool.query(
-        'SELECT * FROM media_assets ORDER BY created_at DESC LIMIT $1',
-        [Math.max(1, Math.min(200, Number(limit) || 100))]
+        `SELECT * FROM media_assets ${kind ? 'WHERE kind = $2' : ''} ORDER BY created_at DESC LIMIT $1`,
+        kind ? [Math.max(1, Math.min(200, Number(limit) || 100)), kind] : [Math.max(1, Math.min(200, Number(limit) || 100))]
       );
       return rows.map(mapMedia);
     },

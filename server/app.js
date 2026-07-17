@@ -402,7 +402,14 @@ export function createMemoryStore(seed = defaultSeed) {
     consumeViewerSession(tokenHash, replacement) {
       const current = findViewerSessionByTokenHash(tokenHash);
       if (!current) return { status: 'invalid' };
-      if (current.revokedAt || new Date(current.expiresAt).getTime() <= Date.now()) return { status: 'reused', accountId: current.accountId };
+      // Only an already-rotated token being presented again is a genuine reuse
+      // signal (a stolen/replayed credential) — that warrants revoking every
+      // session on the account. A token that simply outlived its TTL without
+      // ever being used (a dormant device) is completely benign and must not
+      // be conflated with reuse, or one idle device silently logs out every
+      // other active device on the account.
+      if (current.revokedAt) return { status: 'reused', accountId: current.accountId };
+      if (new Date(current.expiresAt).getTime() <= Date.now()) return { status: 'expired', accountId: current.accountId };
       Object.assign(current, { revokedAt: now(), revocationReason: 'rotated', rotatedAt: now(), lastUsedAt: now() });
       const next = { id: randomUUID(), revokedAt: null, revocationReason: null, rotatedAt: null, createdAt: now(), lastUsedAt: now(), ...replacement, accountId: current.accountId };
       state.viewerSessions.unshift(next);
@@ -448,8 +455,13 @@ export function createMemoryStore(seed = defaultSeed) {
     listMediaForContent(contentId) {
       return state.media.filter((item) => item.contentId === contentId).map(clone);
     },
-    listMedia({ limit = 100 } = {}) {
-      return state.media.slice(0, Math.max(1, Math.min(200, limit))).map(clone);
+    listMedia({ limit = 100, kind } = {}) {
+      // kind must filter before the limit is applied: every processed video
+      // occupies two rows in this table (a video_source row and a separate
+      // hls/rendition row), so filtering after a fixed-size page silently
+      // crowds out older source uploads as the catalog grows.
+      const filtered = kind ? state.media.filter((item) => item.kind === kind) : state.media;
+      return filtered.slice(0, Math.max(1, Math.min(200, limit))).map(clone);
     },
     getMedia(id) { const item = findMedia(id); return item && clone(item); },
     updateMedia(id, patch) {
@@ -1211,7 +1223,13 @@ export function buildApp(options = {}) {
   });
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) return reply.code(400).send({ error: 'VALIDATION_ERROR', message: 'Проверьте введённые данные', fields: error.flatten() });
-    if (error.code === 'FST_JWT_AUTHORIZATION_TOKEN_INVALID' || error.code === 'FST_JWT_NO_AUTHORIZATION_IN_HEADER') return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Требуется действующая сессия' });
+    // Every @fastify/jwt failure code (invalid signature, expired, untrusted,
+    // missing header/cookie, malformed request) means the client's credential
+    // didn't verify — never a server bug. Only two of these seven codes were
+    // handled here before, so an ordinary expired access token (the single
+    // most common case, hit on every route roughly every 15 minutes per
+    // session) fell through to a 500 instead of a 401.
+    if (typeof error.code === 'string' && error.code.startsWith('FST_JWT_')) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Требуется действующая сессия' });
     request.log.error(error);
     return reply.code(500).send({ error: 'INTERNAL_ERROR', message: 'Внутренняя ошибка сервиса', requestId: request.id });
   });
@@ -2256,13 +2274,12 @@ export function buildApp(options = {}) {
   app.get('/v1/admin/assets', { preHandler: app.allowRoles(['superadmin', 'content_editor', 'legal_reviewer']) }, async (request, reply) => {
     const query = parseOrReply(mediaListQuery, request.query, reply);
     if (!query) return;
-    const assets = await store.listMedia?.({ limit: query.limit ?? 100 }) ?? [];
-    const sourceAssetIds = assets.filter((asset) => asset.kind === 'video_source').map((asset) => asset.id);
+    const assets = await store.listMedia?.({ limit: query.limit ?? 100, kind: 'video_source' }) ?? [];
+    const sourceAssetIds = assets.map((asset) => asset.id);
     const jobs = await store.listMediaJobs?.({ sourceAssetIds }) ?? [];
     const jobsBySource = new Map(jobs.map((job) => [job.sourceAssetId, job]));
     return {
       items: assets
-        .filter((asset) => asset.kind === 'video_source')
         .map((asset) => {
           const job = jobsBySource.get(asset.id);
           return {
@@ -2462,13 +2479,14 @@ export function buildApp(options = {}) {
     }
     const storageKey = `incoming/${new Date().toISOString().slice(0, 10)}/${assetId}/source.${extension}`;
     let upload;
+    let asset;
     try {
       upload = await mediaStore.createMultipartUpload({
         storageKey,
         contentType: body.contentType,
         metadata: { origin: 'sakhatube-studio', assetid: assetId }
       });
-      const asset = await store.createMedia({
+      asset = await store.createMedia({
         id: assetId,
         kind: 'video_source',
         relation: 'source',
@@ -2496,6 +2514,12 @@ export function buildApp(options = {}) {
     } catch (error) {
       if (upload?.uploadId) {
         try { await mediaStore.abortMultipartUpload({ storageKey, uploadId: upload.uploadId }); } catch (abortError) { request.log.error(abortError); }
+      }
+      // The DB row can already exist here (created, then part-URL presigning
+      // failed) — without this it's stuck at status 'uploading' forever with
+      // no reconciliation job able to find or clear it.
+      if (asset?.id) {
+        try { await store.updateMedia(asset.id, { status: 'aborted', abortedAt: now(), metadata: { ...asset.metadata, processingState: 'aborted' } }); } catch (updateError) { request.log.error(updateError); }
       }
       throw error;
     }
