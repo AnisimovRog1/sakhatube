@@ -13,7 +13,7 @@ import { z, ZodError } from 'zod';
 import { createMediaStore } from './media-store.js';
 import { createPostgresStore } from './postgres-store.js';
 
-const roles = ['superadmin', 'content_editor', 'legal_reviewer', 'moderator', 'support', 'analyst'];
+export const roles = ['superadmin', 'content_editor', 'legal_reviewer', 'moderator', 'support', 'analyst'];
 const contentKinds = ['series', 'episode', 'trailer', 'clip'];
 const accessKinds = ['free', 'subscription', 'purchase'];
 const ageRatings = ['0+', '6+', '12+', '16+', '18+'];
@@ -35,6 +35,7 @@ const mediaJobMaxAttempts = 3;
 const mediaJobLeaseMs = 15 * 60 * 1000;
 const scrypt = promisify(scryptCallback);
 const viewerAccessTokenTtlSeconds = 15 * 60;
+const staffAccessTokenTtlSeconds = 12 * 60 * 60;
 const viewerRefreshTokenTtlMsDefault = 14 * 24 * 60 * 60 * 1000;
 const emailVerificationTtlMsDefault = 24 * 60 * 60 * 1000;
 const billingContractVersion = '2026-07-16';
@@ -613,6 +614,10 @@ const viewerLoginInput = z.object({
   email: z.string().trim().email().max(254).optional(),
   password: z.string().min(1).max(128)
 }).strict().refine((value) => Boolean(value.login || value.email), { message: 'Укажи логин или e-mail', path: ['login'] });
+const staffLoginInput = z.object({
+  email: z.string().trim().email().max(254),
+  password: z.string().min(1).max(128)
+}).strict();
 const viewerEmailVerificationInput = z.object({
   accountId: z.string().uuid(),
   token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Некорректный код подтверждения')
@@ -646,6 +651,14 @@ const billingProductConfig = z.object({
   contentScope: z.string().trim().min(3).max(160),
   territories: z.array(z.string().trim().min(2).max(16)).min(1).max(250),
   active: z.boolean()
+}).strict();
+// STAFF_ACCOUNTS_JSON entries. passwordHash is generated offline with
+// `npm run staff:hash-password -- '<password>'` — plaintext staff passwords
+// are never stored in env vars or source.
+const staffAccountConfig = z.object({
+  email: z.string().trim().email().max(254),
+  passwordHash: z.string().regex(/^scrypt\$\d+\$\d+\$\d+\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/, 'passwordHash должен быть получен через npm run staff:hash-password'),
+  roles: z.array(z.enum(roles)).min(1).max(roles.length)
 }).strict();
 const playbackInput = z.object({
   contentId: z.string().min(1).max(80),
@@ -726,6 +739,25 @@ function parseBillingProductCatalog(rawCatalog) {
   return result.data;
 }
 
+function parseStaffAccounts(rawAccounts) {
+  if (!rawAccounts) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(rawAccounts);
+  } catch {
+    throw new Error('STAFF_ACCOUNTS_JSON должен быть корректным JSON');
+  }
+  const result = z.array(staffAccountConfig).max(50).safeParse(parsed);
+  if (!result.success) throw new Error('STAFF_ACCOUNTS_JSON содержит некорректную запись сотрудника');
+  const emails = new Set();
+  for (const account of result.data) {
+    const email = account.email.toLowerCase();
+    if (emails.has(email)) throw new Error('STAFF_ACCOUNTS_JSON содержит повторяющийся email');
+    emails.add(email);
+  }
+  return result.data;
+}
+
 function billingCredentialConfiguration({ appleIssuerId, appleKeyId, applePrivateKey, googleServiceAccountJson }) {
   const appleConfiguredParts = [appleIssuerId, appleKeyId, applePrivateKey].filter(Boolean).length;
   if (appleConfiguredParts > 0 && appleConfiguredParts !== 3) {
@@ -779,6 +811,7 @@ function configFrom(overrides = {}) {
     googleValidatorConfigured: billingCredentials.googleConfigured && Boolean(googlePlayPackageName)
   };
   const paymentsEnabled = !production && Boolean(paymentsRequested);
+  const staffAccounts = parseStaffAccounts(overrides.staffAccountsJson ?? process.env.STAFF_ACCOUNTS_JSON ?? '');
   const databaseUrl = overrides.databaseUrl ?? process.env.DATABASE_URL;
   const deletionVerificationSecret = overrides.deletionVerificationSecret ?? process.env.DELETION_VERIFICATION_SECRET ?? jwtSecret;
   const deletionVerificationTtlMs = overrides.deletionVerificationTtlMs ?? Number(process.env.DELETION_VERIFICATION_TTL_MS || 24 * 60 * 60 * 1000);
@@ -818,7 +851,7 @@ function configFrom(overrides = {}) {
   if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
   if (production && mediaWorkerEnabled && mediaWorkerToken.length < 32) throw new Error('MEDIA_WORKER_TOKEN должен содержать не менее 32 символов в production');
   if ((firebaseProjectId && !firebaseServiceAccountJson) || (!firebaseProjectId && firebaseServiceAccountJson)) throw new Error('Для Firebase укажи и FIREBASE_PROJECT_ID, и FIREBASE_SERVICE_ACCOUNT_JSON');
-  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, billingProducts, appleAppBundleId, googlePlayPackageName, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseWebApiKey, firebaseAuthDomain, firebaseWebAppId, firebaseVerifier, firebaseUserDeleter };
+  return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, billingProducts, appleAppBundleId, googlePlayPackageName, staffAccounts, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseWebApiKey, firebaseAuthDomain, firebaseWebAppId, firebaseVerifier, firebaseUserDeleter };
 }
 
 function firebaseAdminAuthFrom(config) {
@@ -899,7 +932,7 @@ function encodePasswordHash(salt, derived) {
   return `scrypt$${passwordScrypt.N}$${passwordScrypt.r}$${passwordScrypt.p}$${salt}$${derived.toString('base64url')}`;
 }
 
-async function hashPassword(password) {
+export async function hashPassword(password) {
   const salt = randomBytes(16).toString('base64url');
   const derived = await scrypt(password, salt, 64, passwordScrypt);
   return encodePasswordHash(salt, derived);
@@ -1308,7 +1341,7 @@ export function buildApp(options = {}) {
     };
   };
 
-  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', payments: config.paymentsEnabled ? 'development-only' : 'disabled', billing: { contractVersion: config.billing.contractVersion, status: config.billing.status, serverValidation: config.billing.serverValidation, entitlementGrants: config.billing.entitlementGrants, productsConfigured: config.billing.productsConfigured, appleValidatorConfigured: config.billing.appleValidatorConfigured, googleValidatorConfigured: config.billing.googleValidatorConfigured }, time: now() }));
+  app.get('/health', async () => ({ ok: true, mode: config.production ? 'production' : 'development', persistence: config.databaseUrl ? 'postgresql' : 'preview-memory', media: mediaStore ? 'railway-bucket' : 'preview-local', payments: config.paymentsEnabled ? 'development-only' : 'disabled', staff: { loginConfigured: config.staffAccounts.length > 0, accountsConfigured: config.staffAccounts.length, devTokenEnabled: config.allowDevTokens }, billing: { contractVersion: config.billing.contractVersion, status: config.billing.status, serverValidation: config.billing.serverValidation, entitlementGrants: config.billing.entitlementGrants, productsConfigured: config.billing.productsConfigured, appleValidatorConfigured: config.billing.appleValidatorConfigured, googleValidatorConfigured: config.billing.googleValidatorConfigured }, time: now() }));
 
   // Local-only bootstrap. A production Studio must delegate identity to an OIDC provider.
   app.post('/v1/dev/token', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -1316,6 +1349,25 @@ export function buildApp(options = {}) {
     const body = parseOrReply(z.object({ subject: z.string().min(1).max(80), roles: z.array(z.enum(roles)).min(1).max(roles.length) }), request.body, reply);
     if (!body) return;
     return { accessToken: app.jwt.sign({ sub: body.subject, roles: body.roles }), expiresIn: 900 };
+  });
+
+  // Minimal production identity for Studio staff. Accounts come from
+  // STAFF_ACCOUNTS_JSON (email + scrypt passwordHash + roles) — no plaintext
+  // password is ever stored. This intentionally does not replace the OIDC/MFA
+  // flow the roadmap calls for; it exists so Studio is reachable at all until
+  // that lands.
+  app.post('/v1/staff/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const body = parseOrReply(staffLoginInput, request.body, reply);
+    if (!body) return;
+    const email = body.email.trim().toLowerCase();
+    const account = config.staffAccounts.find((item) => item.email.toLowerCase() === email);
+    const passwordValid = await verifyPassword(body.password, account?.passwordHash ?? passwordDummyHash);
+    if (!account || !passwordValid) {
+      return reply.code(401).send({ error: 'INVALID_CREDENTIALS', message: 'Неверный email или пароль' });
+    }
+    const accessToken = app.jwt.sign({ sub: account.email, roles: account.roles }, { expiresIn: staffAccessTokenTtlSeconds });
+    await audit(request, 'staff.login', 'staff_session', account.email, null, { status: 'success', roles: account.roles }, { id: account.email, roles: account.roles });
+    return { accessToken, expiresIn: staffAccessTokenTtlSeconds, roles: account.roles };
   });
 
   const viewerSession = async (account, request) => {

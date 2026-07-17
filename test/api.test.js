@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
-import { buildApp, createMemoryStore } from '../server/app.js';
+import { buildApp, createMemoryStore, hashPassword } from '../server/app.js';
 
 async function createTestApp(options = {}) {
   const app = buildApp({ jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters', allowDevTokens: true, ...options });
@@ -124,6 +124,54 @@ test('viewer accounts require one-time email verification before issuing a scope
   const login = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { login: 'VIEWER-LOGIN', password: 'correct-horse-battery-staple' } });
   assert.equal(login.statusCode, 200);
   assert.equal(JSON.parse(login.body).viewer.email, 'viewer@example.com');
+});
+
+test('staff login issues a role-scoped token for a configured account and rejects everyone else identically', async (t) => {
+  const passwordHash = await hashPassword('correct-horse-battery-staple');
+  const app = await createTestApp({
+    staffAccountsJson: JSON.stringify([{ email: 'editor@sakhatube.ru', passwordHash, roles: ['content_editor'] }])
+  });
+  t.after(() => app.close());
+
+  const health = await app.inject({ method: 'GET', url: '/health' });
+  assert.equal(JSON.parse(health.body).staff.accountsConfigured, 1);
+
+  const wrongPassword = await app.inject({ method: 'POST', url: '/v1/staff/login', payload: { email: 'editor@sakhatube.ru', password: 'wrong-password-value' } });
+  const unknownEmail = await app.inject({ method: 'POST', url: '/v1/staff/login', payload: { email: 'nobody@sakhatube.ru', password: 'wrong-password-value' } });
+  assert.equal(wrongPassword.statusCode, 401);
+  assert.equal(unknownEmail.statusCode, 401);
+  assert.deepEqual(JSON.parse(wrongPassword.body), JSON.parse(unknownEmail.body));
+
+  const login = await app.inject({ method: 'POST', url: '/v1/staff/login', payload: { email: 'EDITOR@sakhatube.ru', password: 'correct-horse-battery-staple' } });
+  assert.equal(login.statusCode, 200);
+  const session = JSON.parse(login.body);
+  assert.equal(typeof session.accessToken, 'string');
+  assert.deepEqual(session.roles, ['content_editor']);
+  const decoded = app.jwt.decode(session.accessToken);
+  assert.equal(decoded.sub, 'editor@sakhatube.ru');
+  assert.deepEqual(decoded.roles, ['content_editor']);
+  assert.equal(decoded.kind, undefined);
+
+  const contentAccess = await app.inject({ method: 'GET', url: '/v1/admin/content', headers: { authorization: `Bearer ${session.accessToken}` } });
+  assert.equal(contentAccess.statusCode, 200);
+});
+
+test('STAFF_ACCOUNTS_JSON is rejected at startup when malformed or when a hash was not produced by npm run staff:hash-password', () => {
+  assert.throws(() => buildApp({
+    jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters',
+    staffAccountsJson: 'not-json'
+  }), /STAFF_ACCOUNTS_JSON/);
+  assert.throws(() => buildApp({
+    jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters',
+    staffAccountsJson: JSON.stringify([{ email: 'a@b.com', passwordHash: 'not-a-scrypt-hash', roles: ['superadmin'] }])
+  }), /STAFF_ACCOUNTS_JSON/);
+  assert.throws(() => buildApp({
+    jwtSecret: 'a-test-secret-that-is-longer-than-thirty-two-characters',
+    staffAccountsJson: JSON.stringify([
+      { email: 'dup@sakhatube.ru', passwordHash: 'scrypt$16384$8$1$c2FsdA$aGFzaA', roles: ['superadmin'] },
+      { email: 'DUP@sakhatube.ru', passwordHash: 'scrypt$16384$8$1$c2FsdA$aGFzaA', roles: ['moderator'] }
+    ])
+  }), /STAFF_ACCOUNTS_JSON/);
 });
 
 test('viewer login is unique, case-insensitive, and the public ID does not change between sessions', async (t) => {

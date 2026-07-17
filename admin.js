@@ -1263,6 +1263,44 @@ async function connectToApi() {
   }
 }
 
+async function loginToApi() {
+  const emailField = document.querySelector('#staff-login-email');
+  const passwordField = document.querySelector('#staff-login-password');
+  const email = emailField.value.trim();
+  const password = passwordField.value;
+  if (!email || !password) { setConnectionError('Укажи email и пароль сотрудника.'); return; }
+  const submit = document.querySelector('[data-action="staff-login"]');
+  const original = submit.textContent;
+  submit.disabled = true;
+  submit.textContent = 'Входим…';
+  setConnectionError('');
+  try {
+    let response;
+    try {
+      response = await fetch('/v1/staff/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+    } catch {
+      throw new Error('Нет связи с Studio API. Проверь интернет или адрес SakhaTube.');
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || 'Неверный email или пароль.');
+    setAccessToken(payload.accessToken);
+    const connected = await loadRemoteStudio({ silent: true });
+    if (!connected) { setConnectionError('Вход выполнен, но Studio API не отвечает. Попробуй ещё раз.'); return; }
+    passwordField.value = '';
+    closeDialog(connectionDialog);
+    showToast('Добро пожаловать в Studio.');
+  } catch (error) {
+    setConnectionError(error.message || 'Не удалось войти.');
+  } finally {
+    submit.disabled = false;
+    submit.textContent = original;
+  }
+}
+
 function disconnectApi() {
   if (activeUpload || abortingUpload) { showToast('Сначала заверши текущую операцию с загрузкой.'); return; }
   clearAccessToken();
@@ -1280,10 +1318,13 @@ async function handleAction(name, action) {
   const { id } = action.dataset;
   if (name === 'connect-api') {
     document.querySelector('#studio-access-token').value = '';
+    document.querySelector('#staff-login-email').value = '';
+    document.querySelector('#staff-login-password').value = '';
     setConnectionError('');
     openDialog(connectionDialog);
-    window.setTimeout(() => document.querySelector('#studio-access-token').focus(), 0);
+    window.setTimeout(() => document.querySelector('#staff-login-email').focus(), 0);
   }
+  if (name === 'staff-login') await loginToApi();
   if (name === 'disconnect-api') disconnectApi();
   if (name === 'new-series') openContentDialog();
   if (name === 'new-banner') openBannerDialog();
@@ -1337,7 +1378,15 @@ document.addEventListener('click', (event) => {
 
 document.querySelector('#confirm-delete').addEventListener('click', () => { void archiveOrDeleteContent(); });
 contentForm.addEventListener('submit', (event) => { event.preventDefault(); void saveContentFromForm(); });
-connectionForm.addEventListener('submit', (event) => { event.preventDefault(); void connectToApi(); });
+connectionForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  // Both the email/password fields and the manual-token field live in this
+  // one form so Enter submits either — route to whichever the staffer is
+  // actually filling in, instead of always reading the (likely empty) token.
+  const hasLoginInput = document.querySelector('#staff-login-email').value.trim() || document.querySelector('#staff-login-password').value;
+  if (hasLoginInput) void loginToApi();
+  else void connectToApi();
+});
 
 bannerForm.addEventListener('submit', (event) => {
   event.preventDefault();
