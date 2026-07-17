@@ -2,6 +2,14 @@
   "name": "sakhatube-media-worker",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test test/*.test.mjs", "start": "node src/runner.mjs" },
-  "engines": { "node": ">=22" }
+  "scripts": { "test": "node --test test/*.test.mjs", "start": "node src/service.mjs" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1086.0",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0"
+  }
 }

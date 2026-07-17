@@ -31,6 +31,7 @@ jobs:
       - run: node --check server/app.js
       - run: node --check server/postgres-store.js
       - run: node --check legal/legal.js
+      - run: npm --prefix worker ci
       - run: npm --prefix worker test
       - run: node -e "JSON.parse(require('fs').readFileSync('release/store-submission-checklist.json', 'utf8')); console.log('release checklist valid')"
 
