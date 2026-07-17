@@ -519,7 +519,7 @@ function homeCard(show) {
 function renderHomeFeatured() {
   const visibleShows = homeGenre === 'Все' ? shows.slice(0, 6) : shows.filter((show) => show.genre === homeGenre).slice(0, 6);
   homeFeaturedNode.innerHTML = visibleShows.map(homeCard).join('');
-  homeGenreNode.innerHTML = ['Все', ...new Set(shows.map((show) => show.genre))].map((genre) => `<button class="${genre === homeGenre ? 'is-active' : ''}" data-home-genre="${genre}" type="button">${genre === 'Все' ? t('all') : genre}</button>`).join('');
+  homeGenreNode.innerHTML = ['Все', ...new Set(shows.map((show) => show.genre))].map((genre) => `<button class="${genre === homeGenre ? 'is-active' : ''}" data-home-genre="${escapeHTML(genre)}" type="button">${genre === 'Все' ? t('all') : escapeHTML(genre)}</button>`).join('');
 }
 
 function renderCarousel() {
@@ -550,7 +550,7 @@ function startCarousel() {
 
 function renderGenres() {
   const genres = ['Все', ...new Set(shows.map((show) => show.genre))];
-  chipsNode.innerHTML = genres.map((genre) => `<button class="chip ${genre === activeGenre ? 'is-active' : ''}" data-genre="${genre}" type="button">${genre === 'Все' ? t('all') : genre}</button>`).join('');
+  chipsNode.innerHTML = genres.map((genre) => `<button class="chip ${genre === activeGenre ? 'is-active' : ''}" data-genre="${escapeHTML(genre)}" type="button">${genre === 'Все' ? t('all') : escapeHTML(genre)}</button>`).join('');
 }
 
 function renderProfile() {
