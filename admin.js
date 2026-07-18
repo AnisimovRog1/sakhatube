@@ -850,7 +850,7 @@ function renderBanners() {
   const banners = studio.banners;
   bannerList.innerHTML = phaseNotice + (banners.map((banner, index) => {
     const linked = contentById(banner.contentId);
-    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}" data-banner-art="${escapeHTML(banner.id)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${escapeHTML(banner.id)}" type="button">Изменить</button><button data-action="toggle-banner" data-id="${escapeHTML(banner.id)}" type="button">${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="down" type="button" ${index === banners.length - 1 ? 'disabled' : ''} aria-label="Опустить баннер">↓</button></div></div></article>`;
+    return `<article class="banner-card ${banner.active ? '' : 'is-paused'}"><div class="banner-art ${escapeHTML(banner.tone)}" data-banner-art="${escapeHTML(banner.id)}"><span>${index + 1}</span></div><div class="banner-copy"><div><strong>${escapeHTML(banner.title)}</strong><small>${linked ? escapeHTML(linked.title) : 'Без привязанного контента'} · ${banner.active ? 'виден зрителю' : 'скрыт'}</small></div><div class="banner-actions"><button data-action="edit-banner" data-id="${escapeHTML(banner.id)}" type="button">Изменить</button><button data-action="toggle-banner" data-id="${escapeHTML(banner.id)}" type="button">${banner.active ? 'Скрыть' : 'Показать'}</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="up" type="button" ${index === 0 ? 'disabled' : ''} aria-label="Поднять баннер">↑</button><button data-action="move-banner" data-id="${escapeHTML(banner.id)}" data-direction="down" type="button" ${index === banners.length - 1 ? 'disabled' : ''} aria-label="Опустить баннер">↓</button><button class="is-danger" data-action="delete-banner" data-id="${escapeHTML(banner.id)}" type="button">Удалить</button></div></div></article>`;
   }).join('') || '<p class="empty-copy">Добавь первый баннер, чтобы собрать верхний экран.</p>');
   studio.banners.forEach((banner) => applyBannerMedia(bannerList.querySelector(`[data-banner-art="${banner.id}"]`), banner.media));
 }
@@ -1024,6 +1024,20 @@ async function moveBanner(id, direction) {
   renderHomePreview();
   renderBanners();
   showToast('Порядок баннеров обновлён');
+}
+
+async function deleteBanner(id) {
+  const banner = bannerById(id);
+  if (!banner) return;
+  if (!window.confirm(`Удалить баннер «${banner.title}»? Это нельзя отменить.`)) return;
+  if (isApiMode()) {
+    try { await apiRequest(`/v1/admin/banners/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+    catch (error) { showToast(error.message || 'Не удалось удалить баннер'); return; }
+  } else saveStudio();
+  studio.banners = studio.banners.filter((item) => item.id !== id);
+  renderHomePreview();
+  renderBanners();
+  showToast('Баннер удалён');
 }
 
 async function updateComment(id, status) {
@@ -1209,16 +1223,18 @@ async function archiveOrDeleteContent() {
   button.textContent = isApiMode() ? 'Архивируем…' : 'Удаляем…';
   try {
     if (isApiMode()) {
-      const result = await apiRequest(`/v1/admin/content/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status: 'archived' } });
+      // The archive endpoint already removes the card from the home slots
+      // server-side, so this only needs to sync local state -- no separate
+      // saveHomeSlots call.
+      const result = await apiRequest(`/v1/admin/content/${encodeURIComponent(id)}/archive`, { method: 'POST', body: {} });
       const archived = normalizeApiContent(result.item);
       studio.content = studio.content.map((item) => item.id === id ? { ...item, ...archived } : item);
       studio.homeOrder = studio.homeOrder.filter((contentId) => contentId !== id);
-      homeHasUnsavedChanges = true;
-      const homeSaved = await saveHomeSlots({ silent: true });
+      homeHasUnsavedChanges = false;
       closeDialog(confirmDialog);
       pendingDeleteId = null;
       renderStudio();
-      showToast(homeSaved ? 'Карточка архивирована и снята с витрины' : 'Карточка архивирована. Не забудь сохранить витрину.');
+      showToast('Карточка архивирована и снята с витрины');
       return;
     }
     studio.content = studio.content.filter((item) => item.id !== id);
@@ -1351,6 +1367,7 @@ async function handleAction(name, action) {
       renderHomePreview(); renderBanners(); showToast(active ? 'Баннер показан зрителям' : 'Баннер скрыт');
     }
   }
+  if (name === 'delete-banner') await deleteBanner(id);
   if (name === 'save-home') await saveHomeSlots();
   if (name === 'approve-comment') await updateComment(id, 'approved');
   if (name === 'hide-comment') await updateComment(id, 'hidden');

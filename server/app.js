@@ -601,6 +601,7 @@ const contentParams = z.object({ id: z.string().min(1).max(80) });
 const submitReviewInput = z.object({ note: z.string().trim().max(500).optional() }).default({});
 const publishInput = z.object({ scheduledAt: z.string().datetime({ offset: true }).optional() }).default({});
 const unpublishInput = z.object({ reason: z.string().trim().min(3).max(500) });
+const archiveInput = z.object({}).strict().default({});
 const publicRequestInput = z.object({
   email: z.string().trim().email().max(254),
   accountEmail: z.string().trim().email().max(254).optional(),
@@ -1918,6 +1919,24 @@ export function buildApp(options = {}) {
     if (!['published', 'scheduled'].includes(before.status)) return lifecycleConflict(reply, before, 'Снять с показа можно только опубликованный или запланированный материал');
     const item = await store.updateContent(params.id, { status: 'unpublished', scheduledAt: null, unpublishedReason: body.reason });
     await audit(request, 'content.unpublish', 'content', item.id, before, item);
+    return { item };
+  });
+
+  // Studio's "delete" action on a content card. There is no hard delete --
+  // archiving keeps the record (and its audit trail) but removes it from
+  // every listing isPubliclyAvailable gates on, same as unpublish. Allowed
+  // from any status (unlike unpublish, which only applies to a live show)
+  // since drafts and in-review cards need a way to be discarded too.
+  app.post('/v1/admin/content/:id/archive', { preHandler: app.allowRoles(['superadmin', 'content_editor']) }, async (request, reply) => {
+    const params = parseOrReply(contentParams, request.params, reply);
+    const body = parseOrReply(archiveInput, request.body, reply);
+    if (!params || !body) return;
+    const before = await store.getContent(params.id);
+    if (!before) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
+    if (before.status === 'archived') return lifecycleConflict(reply, before, 'Материал уже в архиве');
+    const item = await store.updateContent(params.id, { status: 'archived', scheduledAt: null });
+    await store.replaceHomeSlots?.((await store.listHomeSlots()).map((slot) => slot.id).filter((id) => id !== item.id));
+    await audit(request, 'content.archive', 'content', item.id, before, item);
     return { item };
   });
 

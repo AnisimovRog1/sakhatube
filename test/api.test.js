@@ -421,6 +421,13 @@ test('Studio manages home banners while public home exposes only active publishe
   assert.equal(unpublish.statusCode, 200);
   const hidden = await app.inject({ method: 'GET', url: '/v1/catalog/home' });
   assert.equal(JSON.parse(hidden.body).banners.some((banner) => banner.id === 'banner-signal'), false);
+
+  const remove = await app.inject({ method: 'DELETE', url: `/v1/admin/banners/${item.id}`, headers: { authorization: `Bearer ${editor}` } });
+  assert.equal(remove.statusCode, 204);
+  const afterDelete = await app.inject({ method: 'GET', url: '/v1/admin/banners', headers: { authorization: `Bearer ${editor}` } });
+  assert.equal(JSON.parse(afterDelete.body).items.some((banner) => banner.id === item.id), false);
+  const missing = await app.inject({ method: 'DELETE', url: `/v1/admin/banners/${item.id}`, headers: { authorization: `Bearer ${editor}` } });
+  assert.equal(missing.statusCode, 404);
 });
 
 test('content lifecycle enforces review, publication roles, reasons, and audit', async (t) => {
@@ -528,6 +535,39 @@ test('content lifecycle enforces review, publication roles, reasons, and audit',
   const catalog = await app.inject({ method: 'GET', url: '/v1/catalog' });
   assert.equal(JSON.parse(catalog.body).items.some((item) => item.id === created.id), false);
   assert.deepEqual(store.listAudit().slice(0, 3).map((item) => item.action), ['content.unpublish', 'content.publish', 'content.rights.verify']);
+
+  // Studio's "delete" action -- allowed from any status, unlike unpublish.
+  const archive = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/archive`,
+    headers: { authorization: `Bearer ${editor}` },
+    payload: {}
+  });
+  assert.equal(archive.statusCode, 200);
+  assert.equal(JSON.parse(archive.body).item.status, 'archived');
+
+  const doubleArchive = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/content/${created.id}/archive`,
+    headers: { authorization: `Bearer ${editor}` },
+    payload: {}
+  });
+  assert.equal(doubleArchive.statusCode, 409);
+});
+
+test('archiving content removes it from the home shelf', async (t) => {
+  const store = createMemoryStore();
+  const app = await createTestApp({ store });
+  t.after(() => app.close());
+  const superadmin = await tokenFor(app, ['superadmin']);
+  const before = await app.inject({ method: 'GET', url: '/v1/admin/home/slots', headers: { authorization: `Bearer ${superadmin}` } });
+  assert.equal(JSON.parse(before.body).items.some((item) => item.id === 'midnight'), true);
+
+  const archive = await app.inject({ method: 'POST', url: '/v1/admin/content/midnight/archive', headers: { authorization: `Bearer ${superadmin}` }, payload: {} });
+  assert.equal(archive.statusCode, 200);
+
+  const after = await app.inject({ method: 'GET', url: '/v1/admin/home/slots', headers: { authorization: `Bearer ${superadmin}` } });
+  assert.equal(JSON.parse(after.body).items.some((item) => item.id === 'midnight'), false);
 });
 
 test('superadmin can schedule reviewed content without exposing it early', async (t) => {
