@@ -20,3 +20,4 @@ apps/ios/SakhaTube/GoogleService-Info.plist
 # durable outside this repo — a password manager or encrypted cloud storage.
 apps/android/keystore/
 .staff-credentials-DO-NOT-COMMIT.txt
+.local-jdk/
