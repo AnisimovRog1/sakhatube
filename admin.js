@@ -96,12 +96,29 @@ function getAccessToken() {
   }
 }
 
+// Decoded client-side purely to gate which buttons render -- never trusted
+// for authorization, since every mutation is re-checked by allowRoles() on
+// the server regardless of what this returns. Reading it straight from the
+// JWT (rather than only from a login response) is what makes connectToApi's
+// manual-paste path (no login response to read roles from at all) behave
+// correctly, and prevents a stale cached role set surviving into a new,
+// lower-privilege token pasted over an old session.
+function decodeJwtRoles(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return Array.isArray(payload.roles) ? payload.roles : [];
+  } catch {
+    return [];
+  }
+}
+
 function setAccessToken(token) {
   try {
     sessionStorage.setItem(tokenKey, token);
   } catch {
     throw new Error('Браузер не позволил сохранить сессию Studio. Разреши session storage и повтори попытку.');
   }
+  setStaffRoles(decodeJwtRoles(token));
 }
 
 function clearAccessToken() {
@@ -855,7 +872,7 @@ function renderContent() {
     return verification;
   };
   const complianceHint = (item) => item.compliance?.ageRating ? ` · ${escapeHTML(item.compliance.ageRating)}` : isApiMode() ? ' · паспорт публикации не заполнен' : '';
-  const rows = visible.map((item) => `<article class="content-row"><div class="content-title"><div class="content-poster ${item.poster}"></div><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.kind)} · ${escapeHTML(item.genre)} · ${item.episodes} ${item.episodes === 1 ? 'видео' : 'серий'}${complianceHint(item)}</small></div></div><div><span class="status ${item.status}">${statusLabel(item.status)}</span></div><span class="access ${item.access}">${accessLabel(item.access, item.price)}</span><span class="table-value"><strong>${compact(item.views)}</strong>всего</span><span class="table-value"><strong>${compact(item.likes)}</strong>нравится</span><span class="table-value"><strong>${compact(item.comments)}</strong>всего</span><div class="row-menu">${workflowAction(item)}<button data-action="edit-content" data-id="${escapeHTML(item.id)}" type="button">Изменить</button><button data-action="delete-content" data-id="${escapeHTML(item.id)}" type="button">${isApiMode() ? 'В архив' : 'Удалить'}</button></div></article>`).join('');
+  const rows = visible.map((item) => `<article class="content-row"><div class="content-title"><div class="content-poster ${item.poster}"></div><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.kind)} · ${escapeHTML(item.genre)} · ${Number.isFinite(item.episodes) ? item.episodes : 1} ${item.episodes === 1 ? 'видео' : 'серий'}${complianceHint(item)}</small></div></div><div><span class="status ${escapeHTML(item.status)}">${escapeHTML(statusLabel(item.status))}</span></div><span class="access ${escapeHTML(item.access)}">${escapeHTML(accessLabel(item.access, item.price))}</span><span class="table-value"><strong>${compact(item.views)}</strong>всего</span><span class="table-value"><strong>${compact(item.likes)}</strong>нравится</span><span class="table-value"><strong>${compact(item.comments)}</strong>всего</span><div class="row-menu">${workflowAction(item)}<button data-action="edit-content" data-id="${escapeHTML(item.id)}" type="button">Изменить</button><button data-action="delete-content" data-id="${escapeHTML(item.id)}" type="button">${isApiMode() ? 'В архив' : 'Удалить'}</button></div></article>`).join('');
   contentTable.innerHTML = head + (rows || '<div class="empty-table">Ничего не найдено. Сбрось фильтр или добавь новый контент.</div>');
 }
 
@@ -1001,7 +1018,7 @@ function openBannerDialog(banner = null) {
   bannerForm.reset();
   bannerMediaDraft = isSafeBannerMedia(banner?.media) ? clone(banner.media) : null;
   const contentSelect = document.querySelector('#banner-content');
-  contentSelect.innerHTML = studio.content.map((item) => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.title)} · ${statusLabel(item.status)}</option>`).join('');
+  contentSelect.innerHTML = studio.content.map((item) => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.title)} · ${escapeHTML(statusLabel(item.status))}</option>`).join('');
   document.querySelector('#banner-id').value = banner?.id || '';
   document.querySelector('#banner-dialog-eyebrow').textContent = banner ? 'РЕДАКТИРОВАНИЕ БАННЕРА' : 'НОВЫЙ БАННЕР';
   document.querySelector('#banner-dialog-title').textContent = banner ? 'Изменить баннер' : 'Добавить баннер';
@@ -1071,20 +1088,32 @@ async function saveHomeSlots({ silent = false } = {}) {
   }
 }
 
+let bannerReorderInFlight = false;
+
 async function moveBanner(id, direction) {
+  // Without this guard, a double-click sent two overlapping PUT requests
+  // with different bodies (the second built on the first's already-mutated
+  // local order); whichever response landed last silently won, which could
+  // undo the other click's move with no indication anything went wrong.
+  if (bannerReorderInFlight) return;
   const index = studio.banners.findIndex((item) => item.id === id);
   const nextIndex = direction === 'up' ? index - 1 : index + 1;
   if (index < 0 || nextIndex < 0 || nextIndex >= studio.banners.length) return;
+  bannerReorderInFlight = true;
   [studio.banners[index], studio.banners[nextIndex]] = [studio.banners[nextIndex], studio.banners[index]];
-  if (isApiMode()) {
-    try {
-      const result = await apiRequest('/v1/admin/banners/order', { method: 'PUT', body: { ids: studio.banners.map((item) => item.id) } });
-      studio.banners = result.items.map(normalizeApiBanner);
-    } catch (error) { await loadRemoteStudio({ silent: true }); showToast(error.message || 'Не удалось изменить порядок баннеров'); return; }
-  } else saveStudio();
-  renderHomePreview();
-  renderBanners();
-  showToast('Порядок баннеров обновлён');
+  try {
+    if (isApiMode()) {
+      try {
+        const result = await apiRequest('/v1/admin/banners/order', { method: 'PUT', body: { ids: studio.banners.map((item) => item.id) } });
+        studio.banners = result.items.map(normalizeApiBanner);
+      } catch (error) { await loadRemoteStudio({ silent: true }); showToast(error.message || 'Не удалось изменить порядок баннеров'); return; }
+    } else saveStudio();
+    renderHomePreview();
+    renderBanners();
+    showToast('Порядок баннеров обновлён');
+  } finally {
+    bannerReorderInFlight = false;
+  }
 }
 
 async function deleteBanner(id) {
@@ -1101,26 +1130,39 @@ async function deleteBanner(id) {
   showToast('Баннер удалён');
 }
 
+const commentsInFlight = new Set();
+
 async function updateComment(id, status) {
+  // A pending comment shows Approve/Hide/Delete simultaneously with no
+  // per-button disabling -- e.g. clicking "Hide" then immediately "Delete"
+  // (a plausible correction) fired two concurrent PATCH requests, and
+  // whichever response landed last silently won, leaving the comment in
+  // whatever state the moderator did not intend.
+  if (commentsInFlight.has(id)) return;
   const comment = studio.comments.find((item) => item.id === id);
   if (!comment) return;
-  if (!isApiMode()) {
-    comment.status = status;
-    saveStudio();
-  } else {
-    try {
-      const result = await apiRequest(`/v1/admin/comments/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status } });
-      Object.assign(comment, normalizeApiComment(result.item));
-      remoteOverview = null;
-      await loadRemoteStudio({ silent: true });
-    } catch (error) {
-      showToast(error.message || 'Не удалось изменить статус комментария.');
-      return;
+  commentsInFlight.add(id);
+  try {
+    if (!isApiMode()) {
+      comment.status = status;
+      saveStudio();
+    } else {
+      try {
+        const result = await apiRequest(`/v1/admin/comments/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status } });
+        Object.assign(comment, normalizeApiComment(result.item));
+        remoteOverview = null;
+        await loadRemoteStudio({ silent: true });
+      } catch (error) {
+        showToast(error.message || 'Не удалось изменить статус комментария.');
+        return;
+      }
     }
+    renderDashboard();
+    renderComments();
+    showToast(status === 'approved' ? 'Комментарий опубликован' : status === 'hidden' ? 'Комментарий скрыт' : 'Комментарий удалён');
+  } finally {
+    commentsInFlight.delete(id);
   }
-  renderDashboard();
-  renderComments();
-  showToast(status === 'approved' ? 'Комментарий опубликован' : status === 'hidden' ? 'Комментарий скрыт' : 'Комментарий удалён');
 }
 
 function dateTimeLocalValue(value) {
@@ -1239,7 +1281,7 @@ async function saveContentFromForm() {
   }
 }
 
-async function updateContentLifecycle(id, action) {
+async function updateContentLifecycle(id, action, button) {
   if (!isApiMode()) return;
   const item = contentById(id);
   if (!item) return;
@@ -1262,6 +1304,10 @@ async function updateContentLifecycle(id, action) {
     request = { path: 'unpublish', body: { reason: reason.trim() }, success: 'Материал снят с показа.' };
   }
   if (!request) return;
+  // A double-click between the prompt() resolving and the request landing
+  // sent two lifecycle POSTs for submit-review/publish-content (the only
+  // two actions here without a blocking prompt() serializing them already).
+  if (button) button.disabled = true;
   try {
     const result = await apiRequest(`/v1/admin/content/${encodeURIComponent(id)}/${request.path}`, { method: 'POST', body: request.body });
     const updated = normalizeApiContent(result.item);
@@ -1272,6 +1318,8 @@ async function updateContentLifecycle(id, action) {
   } catch (error) {
     const blocks = Array.isArray(error.payload?.blocks) ? error.payload.blocks : [];
     showToast(blocks.length ? `Публикация заблокирована: ${blocks.join('; ')}.` : (error.message || 'Не удалось изменить статус публикации.'));
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -1364,8 +1412,8 @@ async function loginToApi() {
     }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.message || 'Неверный email или пароль.');
+    // setAccessToken already derives roles straight from the JWT itself.
     setAccessToken(payload.accessToken);
-    setStaffRoles(payload.roles);
     const connected = await loadRemoteStudio({ silent: true });
     if (!connected) { setConnectionError('Вход выполнен, но Studio API не отвечает. Попробуй ещё раз.'); return; }
     passwordField.value = '';
@@ -1414,7 +1462,7 @@ async function handleAction(name, action) {
   if (name === 'select-banner-media') document.querySelector('#banner-media').click();
   if (name === 'remove-banner-media') { bannerMediaDraft = null; document.querySelector('#banner-media').value = ''; renderBannerMediaState(); showToast('Изображение убрано из баннера'); }
   if (name === 'edit-content') openContentDialog(contentById(id));
-  if (name === 'submit-review' || name === 'verify-rights' || name === 'publish-content' || name === 'unpublish-content') await updateContentLifecycle(id, name);
+  if (name === 'submit-review' || name === 'verify-rights' || name === 'publish-content' || name === 'unpublish-content') await updateContentLifecycle(id, name, action);
   if (name === 'delete-content') askDelete(id);
   if (name === 'move-home') moveHome(id, action.dataset.direction);
   if (name === 'move-banner') await moveBanner(id, action.dataset.direction);
@@ -1423,9 +1471,10 @@ async function handleAction(name, action) {
     const banner = bannerById(id);
     if (banner) {
       const active = !banner.active;
+      action.disabled = true;
       if (isApiMode()) {
         try { Object.assign(banner, normalizeApiBanner((await apiRequest(`/v1/admin/banners/${encodeURIComponent(id)}`, { method: 'PATCH', body: { active } })).item)); }
-        catch (error) { showToast(error.message || 'Не удалось изменить баннер'); return; }
+        catch (error) { showToast(error.message || 'Не удалось изменить баннер'); action.disabled = false; return; }
       } else { banner.active = active; saveStudio(); }
       renderHomePreview(); renderBanners(); showToast(active ? 'Баннер показан зрителям' : 'Баннер скрыт');
     }
@@ -1483,24 +1532,33 @@ bannerForm.addEventListener('submit', (event) => {
     media: bannerMediaDraft,
     mediaId: bannerMediaDraft?.id || null
   };
-  if (isApiMode()) {
-    try {
-      // `media` is only a browser preview descriptor.  The API accepts the
-      // opaque mediaId, never a user-controlled URL or data URL.
-      const { media, ...payload } = data;
-      const result = await apiRequest(id ? `/v1/admin/banners/${encodeURIComponent(id)}` : '/v1/admin/banners', { method: id ? 'PATCH' : 'POST', body: payload });
-      if (id) Object.assign(bannerById(id), normalizeApiBanner(result.item));
-      else studio.banners.push(normalizeApiBanner(result.item));
-    } catch (error) { showToast(error.message || 'Не удалось сохранить баннер'); return; }
-  } else {
-    if (id) Object.assign(bannerById(id), data);
-    else studio.banners.push({ id: `banner-${Date.now()}`, ...data });
-    saveStudio();
+  // Unlike saveContentFromForm, this never disabled its submit button --
+  // a fast double-click created two duplicate banners (two POSTs, each
+  // pushing its own row) instead of a harmless duplicate no-op.
+  const submitButton = bannerForm.querySelector('[type="submit"]');
+  submitButton.disabled = true;
+  try {
+    if (isApiMode()) {
+      try {
+        // `media` is only a browser preview descriptor.  The API accepts the
+        // opaque mediaId, never a user-controlled URL or data URL.
+        const { media, ...payload } = data;
+        const result = await apiRequest(id ? `/v1/admin/banners/${encodeURIComponent(id)}` : '/v1/admin/banners', { method: id ? 'PATCH' : 'POST', body: payload });
+        if (id) Object.assign(bannerById(id), normalizeApiBanner(result.item));
+        else studio.banners.push(normalizeApiBanner(result.item));
+      } catch (error) { showToast(error.message || 'Не удалось сохранить баннер'); return; }
+    } else {
+      if (id) Object.assign(bannerById(id), data);
+      else studio.banners.push({ id: `banner-${Date.now()}`, ...data });
+      saveStudio();
+    }
+    closeDialog(bannerDialog);
+    renderHomePreview();
+    renderBanners();
+    showToast(id ? 'Баннер сохранён' : 'Баннер добавлен');
+  } finally {
+    submitButton.disabled = false;
   }
-  closeDialog(bannerDialog);
-  renderHomePreview();
-  renderBanners();
-  showToast(id ? 'Баннер сохранён' : 'Баннер добавлен');
   })();
 });
 
