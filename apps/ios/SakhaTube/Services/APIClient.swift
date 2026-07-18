@@ -131,10 +131,18 @@ actor APIClient {
 
     /// Playback analytics are deliberately best-effort. A missed event must
     /// never keep a viewer from watching a video.
-    func reportPlaybackEvent(_ event: PlaybackEventRequest) async {
+    ///
+    /// accessToken is optional (anonymous playback is allowed), but when a
+    /// viewer is signed in it must be sent -- the server only attributes an
+    /// event to a viewerId when it can verify a Bearer token.
+    func reportPlaybackEvent(_ event: PlaybackEventRequest, accessToken: String?) async {
         let url = AppConfiguration.apiBaseURL.appending(path: "v1/events/playback")
         do {
-            _ = try await request(url, method: "POST", body: event) as PlaybackEventAcceptance
+            if let accessToken {
+                _ = try await request(url, method: "POST", body: event, bearerToken: accessToken) as PlaybackEventAcceptance
+            } else {
+                _ = try await request(url, method: "POST", body: event) as PlaybackEventAcceptance
+            }
         } catch {
             // Intentionally ignored: telemetry is not a playback dependency.
         }
@@ -287,15 +295,20 @@ actor APIClient {
         return try await execute(request)
     }
 
+    // All three overloads below decode the server's APIErrorResponse body on
+    // failure, matching execute() -- they used to throw a bare
+    // .httpStatus(Int), which discarded the specific error code/message the
+    // server sends (e.g. "Этот логин уже занят.", "Можно удалить только свой
+    // комментарий."). Callers reading error.localizedDescription only ever
+    // saw a generic "code NNN" message.
     private func requestNoContent(_ url: URL, method: String, bearerToken: String) async throws {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
-        let (_, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else { throw APIClientError.invalidResponse }
-        guard (200..<300).contains(httpResponse.statusCode) else { throw APIClientError.httpStatus(httpResponse.statusCode) }
+        let (data, response) = try await session.data(for: request)
+        try Self.checkNoContentResponse(data: data, response: response)
     }
 
     private func requestNoContent<Body: Encodable>(_ url: URL, method: String, body: Body) async throws {
@@ -305,9 +318,8 @@ actor APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
-        let (_, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else { throw APIClientError.invalidResponse }
-        guard (200..<300).contains(httpResponse.statusCode) else { throw APIClientError.httpStatus(httpResponse.statusCode) }
+        let (data, response) = try await session.data(for: request)
+        try Self.checkNoContentResponse(data: data, response: response)
     }
 
     private func requestNoContent<Body: Encodable>(_ url: URL, method: String, body: Body, bearerToken: String) async throws {
@@ -318,9 +330,20 @@ actor APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(body)
-        let (_, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request)
+        try Self.checkNoContentResponse(data: data, response: response)
+    }
+
+    private static func checkNoContentResponse(data: Data, response: URLResponse) throws {
         guard let httpResponse = response as? HTTPURLResponse else { throw APIClientError.invalidResponse }
-        guard (200..<300).contains(httpResponse.statusCode) else { throw APIClientError.httpStatus(httpResponse.statusCode) }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data)
+            throw APIClientError.server(
+                code: apiError?.error,
+                statusCode: httpResponse.statusCode,
+                message: apiError?.message
+            )
+        }
     }
 
     private func execute<Response: Decodable>(_ request: URLRequest) async throws -> Response {

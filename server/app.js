@@ -2307,6 +2307,11 @@ export function buildApp(options = {}) {
   app.post('/v1/events/playback', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
     const body = parseOrReply(playbackInput, request.body, reply);
     if (!body) return;
+    // request.user is never populated on this route without this call --
+    // there's no preHandler that runs jwtVerify, so `request.user?.sub`
+    // below was always null even when a client sent a valid Bearer token.
+    const viewerId = await app.optionalViewerId(request, reply);
+    if (reply.sent) return;
     if (!await store.getContent(body.contentId)) return reply.code(404).send({ error: 'NOT_FOUND', message: 'Контент не найден' });
     // A sessionId that was never granted by POST /v1/playback/sessions (or
     // that belongs to a different content item) is either forged or stale —
@@ -2315,7 +2320,7 @@ export function buildApp(options = {}) {
     const grant = await store.findPlaybackSession(body.sessionId);
     const validGrant = grant && grant.contentId === body.contentId && new Date(grant.expiresAt).getTime() > Date.now();
     if (!validGrant) return reply.code(202).send({ accepted: true, recorded: false });
-    const recorded = await store.addPlayback({ ...body, viewerId: request.user?.sub ?? null });
+    const recorded = await store.addPlayback({ ...body, viewerId });
     // Keep the transport idempotent for clients: a retry receives success, but
     // a duplicate first-frame event does not change analytics.
     return reply.code(202).send({ accepted: true, recorded: recorded !== false });

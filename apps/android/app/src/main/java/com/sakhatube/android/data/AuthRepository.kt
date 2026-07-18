@@ -24,11 +24,17 @@ class AuthRepository(
         val user = result.user ?: throw IOException("Firebase не вернул аккаунт.")
         Tasks.await(user.updateProfile(UserProfileChangeRequest.Builder().setDisplayName(displayName?.trim().takeUnless { it.isNullOrEmpty() } ?: username.trim()).build()))
         val idToken = Tasks.await(user.getIdToken(true)).token ?: throw IOException("Firebase не выдал ID-токен.")
+        // server/app.js returns 201 for a genuine new registration (the
+        // normal case) and only 200 when the Firebase identity was already
+        // linked to an existing pending account -- request() defaults to
+        // expecting only 200, so every first-time sign-up was throwing here
+        // despite the account, username reservation, and verification email
+        // all having already succeeded server-side.
         request("/v1/auth/firebase/register-pending", "POST", JSONObject().apply {
             put("idToken", idToken)
             put("username", username.trim())
             displayName?.trim()?.takeIf { it.isNotEmpty() }?.let { put("displayName", it) }
-        })
+        }, expectedCodes = setOf(200, 201))
         profileDrafts().edit().putString("username.${user.uid}", username.trim()).putString("displayName.${user.uid}", displayName?.trim()).apply()
         Tasks.await(user.sendEmailVerification())
         auth.signOut()

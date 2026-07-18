@@ -24,7 +24,7 @@ struct PlayerView: View {
                         Text(item.description).font(.body).foregroundStyle(.white.opacity(0.85))
 
                         if playback.canRetry {
-                            Button("Повторить") { Task { await playback.start(item: item) } }
+                            Button("Повторить") { Task { await playback.start(item: item, accessToken: viewerSession.accessTokenForAuthenticatedRequest) } }
                                 .buttonStyle(.borderedProminent)
                                 .tint(AppTheme.primary)
                         }
@@ -59,7 +59,7 @@ struct PlayerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
         }
-        .task { await playback.start(item: item) }
+        .task { await playback.start(item: item, accessToken: viewerSession.accessTokenForAuthenticatedRequest) }
         .onDisappear { playback.stop() }
         .sheet(isPresented: $isShowingComments) {
             CommentsView(contentId: item.id)
@@ -120,6 +120,7 @@ private final class ProtectedPlaybackController: ObservableObject {
     private let api = APIClient()
     private var sessionId: String?
     private var contentId: String?
+    private var accessToken: String?
     private var statusObservation: NSKeyValueObservation?
     private var timeControlObservation: NSKeyValueObservation?
     private var completionObserver: NSObjectProtocol?
@@ -133,10 +134,11 @@ private final class ProtectedPlaybackController: ObservableObject {
         }
     }
 
-    func start(item: CatalogItem) async {
+    func start(item: CatalogItem, accessToken: String?) async {
         stop()
         state = .preparing
         contentId = item.id
+        self.accessToken = accessToken
 
         do {
             let session = try await api.createPlaybackSession(contentId: item.id)
@@ -227,7 +229,7 @@ private final class ProtectedPlaybackController: ObservableObject {
             event: event,
             positionMs: positionMs,
             errorCode: errorCode
-        ))
+        ), accessToken: accessToken)
     }
 
     private static func presentationState(for error: Error) -> State {
