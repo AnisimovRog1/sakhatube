@@ -64,10 +64,9 @@ export async function runWorkerLoop({ config, api, adapter, shouldStop }) {
       continue;
     }
     console.log(`claimed job ${job.jobId} for content ${job.contentId}`);
+    let rendition;
     try {
-      const { rendition } = await processJob(job, adapter);
-      await api.settle(job.jobId, { leaseToken: job.leaseToken, outcome: 'succeeded', renditionAssetId: rendition.id });
-      console.log(`job ${job.jobId} succeeded -> rendition ${rendition.id}`);
+      ({ rendition } = await processJob(job, adapter));
     } catch (error) {
       const code = error instanceof JobError ? error.code : 'WORKER_INTERNAL_ERROR';
       const permanent = error instanceof JobError && PERMANENT_CODES.has(error.code);
@@ -82,6 +81,21 @@ export async function runWorkerLoop({ config, api, adapter, shouldStop }) {
       } catch (settleError) {
         console.error(`could not settle job ${job.jobId} after failure:`, settleError.message);
       }
+      await adapter.cleanupPending?.();
+      continue;
+    }
+    // processJob already succeeded here -- a settle failure past this point
+    // (e.g. a transient network blip on the settle call itself) must never
+    // fall into the failure path above and misreport a genuinely successful
+    // transcode as retryable_failure, which would discard the completed
+    // rendition and redo the work from scratch for no reason. Left to expire
+    // and be reclaimed instead; see the worker audit notes on lease renewal
+    // and settle/createMedia atomicity for the larger fix this still needs.
+    try {
+      await api.settle(job.jobId, { leaseToken: job.leaseToken, outcome: 'succeeded', renditionAssetId: rendition.id });
+      console.log(`job ${job.jobId} succeeded -> rendition ${rendition.id}`);
+    } catch (settleError) {
+      console.error(`job ${job.jobId} succeeded but could not settle (will retry on lease expiry):`, settleError.message);
     } finally {
       // Covers the failure paths that never reach transcode() — e.g. a
       // corrupt/unsupported upload rejected by ffprobe validation — where the

@@ -45,6 +45,37 @@ test('a fully successful job is settled with the created rendition id', async ()
   assert.equal(api.settleCalls[0].payload.renditionAssetId, 'rendition-1');
 });
 
+test('a transient failure settling a successful job is never misreported as a job failure', async () => {
+  const queue = [baseJob];
+  const settleCalls = [];
+  let settleAttempts = 0;
+  const api = {
+    settleCalls,
+    async claim() { return queue.shift() ?? null; },
+    async settle(jobId, payload) {
+      settleAttempts += 1;
+      settleCalls.push({ jobId, payload });
+      if (settleAttempts === 1) throw new Error('network blip on the settle call itself');
+      return { job: { status: payload.outcome } };
+    }
+  };
+  const adapter = {
+    getSource: async () => ({ localPath: '/tmp/x', sizeBytes: 10, isPublic: false }),
+    run: async () => ({ exitCode: 0, stdout: JSON.stringify(workingProbe) }),
+    transcode: async () => {},
+    verifyOutput: async () => true,
+    createMedia: async (asset) => ({ ...asset, id: 'rendition-1' }),
+    markSource: async () => {},
+    cleanupPending: async () => {}
+  };
+  await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1 }, api, adapter, shouldStop: stopAfter(1) });
+  // Exactly one settle attempt was made, for the real (successful) outcome --
+  // never a second call reclassifying it as retryable_failure/permanent_failure.
+  assert.equal(settleCalls.length, 1);
+  assert.equal(settleCalls[0].payload.outcome, 'succeeded');
+  assert.equal(settleCalls[0].payload.renditionAssetId, 'rendition-1');
+});
+
 test('a malformed job fails validateJob before touching the adapter, and settles as permanent', async () => {
   const api = fakeApi([{ ...baseJob, sourceKey: 'incoming/../../escape.mp4' }]);
   let adapterCalled = false;

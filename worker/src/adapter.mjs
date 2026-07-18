@@ -75,10 +75,12 @@ export function createAdapter({ storage, store }) {
         const variantPrefix = rendition.playlistKey.slice(0, rendition.playlistKey.lastIndexOf('/') + 1);
         for (const segment of segments) {
           if (segment.startsWith('/') || segment.includes('://')) return false;
-          if (!(await storage.objectExists(`${variantPrefix}${segment}`))) return false;
+          const size = await storage.objectSize(`${variantPrefix}${segment}`);
+          if (!size) return false;
         }
       }
-      return storage.objectExists(plan.posterKey);
+      const posterSize = await storage.objectSize(plan.posterKey);
+      return Boolean(posterSize);
     },
 
     createMedia: (asset) => store.createMedia(asset),

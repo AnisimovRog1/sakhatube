@@ -49,6 +49,20 @@ export function createWorkerStorage(config) {
         throw error;
       }
     },
+    // Distinct from objectExists: a HEAD that succeeds only tells you the
+    // key was written, not that ffmpeg produced a real segment there -- an
+    // anomalous zero-byte upload (e.g. a truncated last segment written
+    // without ffmpeg exiting non-zero) would pass objectExists and still get
+    // reported as a verified, playable rendition.
+    async objectSize(key) {
+      try {
+        const response = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+        return Number(response.ContentLength ?? 0);
+      } catch (error) {
+        if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NotFound') return null;
+        throw error;
+      }
+    },
     async readText(key, maxBytes = 1_048_576) {
       const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
       const chunks = [];
