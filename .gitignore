@@ -19,3 +19,4 @@ apps/ios/SakhaTube/GoogleService-Info.plist
 # keystore/upload-keystore.jks and keystore/keystore.properties somewhere
 # durable outside this repo — a password manager or encrypted cloud storage.
 apps/android/keystore/
+.staff-credentials-DO-NOT-COMMIT.txt
