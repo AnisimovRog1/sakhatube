@@ -1327,6 +1327,29 @@ test('media worker queue leases a private job once and never exposes it to Studi
   assert.equal(store.getMedia(source.id).status, 'processed');
 });
 
+test('media worker queue claims the oldest eligible job first (FIFO, matching postgres-store.js)', async (t) => {
+  const store = createMemoryStore();
+  const workerToken = 'worker-token-that-is-longer-than-thirty-two-characters';
+  const app = await createTestApp({ store, mediaWorkerToken: workerToken });
+  t.after(() => app.close());
+  const makeSource = (id) => store.createMedia({
+    kind: 'video_source', relation: 'source', status: 'queued', contentId: 'signal',
+    storageKey: `incoming/2026-07-16/${id}/source.mp4`,
+    fileName: 'episode.mp4', contentType: 'video/mp4', size: 1, metadata: { processingState: 'queued' }
+  });
+  const older = makeSource('40000000-0000-4000-8000-000000000002');
+  // Newer job queued first (unshift puts it at index 0) -- if the store
+  // naively picked the front of the array, it would claim this one, not
+  // the actually-oldest job below.
+  store.createMediaJob({ sourceAssetId: older.id, contentId: 'signal', sourceKey: older.storageKey, contentType: older.contentType, sizeBytes: older.size, createdAt: '2026-07-16T00:00:00.000Z', availableAt: '2026-07-16T00:00:00.000Z' });
+  const newer = makeSource('40000000-0000-4000-8000-000000000003');
+  store.createMediaJob({ sourceAssetId: newer.id, contentId: 'signal', sourceKey: newer.storageKey, contentType: newer.contentType, sizeBytes: newer.size, createdAt: '2026-07-16T00:00:10.000Z', availableAt: '2026-07-16T00:00:10.000Z' });
+
+  const claim = await app.inject({ method: 'POST', url: '/v1/internal/media-jobs/claim', headers: { 'x-sakhatube-worker-token': workerToken }, payload: { workerId: 'worker-a' } });
+  assert.equal(claim.statusCode, 200);
+  assert.equal(JSON.parse(claim.body).job.sourceKey, older.storageKey);
+});
+
 test('production refuses a memory store unless preview mode is explicitly enabled', () => {
   assert.throws(() => buildApp({ nodeEnv: 'production', jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters' }), /DATABASE_URL/);
   assert.doesNotThrow(() => buildApp({ nodeEnv: 'production', allowDemoStore: true, jwtSecret: 'a-production-secret-that-is-longer-than-thirty-two-characters' }));

@@ -26,6 +26,7 @@ const studioDefaults = {
 
 const storageKey = 'sakhatube-studio-demo';
 const tokenKey = 'sakhatube-studio-access-token';
+const rolesKey = 'sakhatube-studio-roles';
 const posterTones = ['poster-one', 'poster-two', 'poster-three', 'poster-four', 'poster-five'];
 const apiKindByStudioKind = { 'Сериал': 'series', 'Эпизод': 'episode', 'Трейлер': 'trailer', 'Короткое видео': 'clip' };
 const studioKindByApiKind = { series: 'Сериал', episode: 'Эпизод', trailer: 'Трейлер', clip: 'Короткое видео' };
@@ -109,6 +110,35 @@ function clearAccessToken() {
   } catch {
     // The visible state is still reset even if the browser storage is unavailable.
   }
+}
+
+function getStaffRoles() {
+  try {
+    return JSON.parse(sessionStorage.getItem(rolesKey) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function setStaffRoles(roles) {
+  try {
+    sessionStorage.setItem(rolesKey, JSON.stringify(Array.isArray(roles) ? roles : []));
+  } catch {
+    // Non-fatal: buttons the server would reject just won't be hidden client-side.
+  }
+}
+
+function clearStaffRoles() {
+  try {
+    sessionStorage.removeItem(rolesKey);
+  } catch {
+    // The visible state is still reset even if the browser storage is unavailable.
+  }
+}
+
+function hasAnyRole(...roles) {
+  const mine = getStaffRoles();
+  return roles.some((role) => mine.includes(role));
 }
 
 function isApiMode() {
@@ -812,12 +842,16 @@ function renderContent() {
   const workflowAction = (item) => {
     if (!isApiMode()) return '';
     const status = item.apiStatus || apiStatusFromStudio(item.status);
-    const verification = item.compliance && !item.compliance.verifiedAt
+    // Roles must mirror the server's allowRoles() for each action exactly
+    // (server/app.js) -- a button the server would 403 must never render,
+    // or staff get a confusing "failed" toast for something they were
+    // never allowed to do in the first place.
+    const verification = item.compliance && !item.compliance.verifiedAt && hasAnyRole('superadmin', 'legal_reviewer')
       ? `<button data-action="verify-rights" data-id="${escapeHTML(item.id)}" type="button">Проверить права</button>`
       : '';
-    if (status === 'draft' || status === 'unpublished') return `${verification}<button data-action="submit-review" data-id="${escapeHTML(item.id)}" type="button">На проверку</button>`;
-    if (status === 'review') return `${verification}<button data-action="publish-content" data-id="${escapeHTML(item.id)}" type="button">Опубликовать</button>`;
-    if (status === 'published' || status === 'scheduled') return `${verification}<button data-action="unpublish-content" data-id="${escapeHTML(item.id)}" type="button">Снять с показа</button>`;
+    if ((status === 'draft' || status === 'unpublished') && hasAnyRole('superadmin', 'content_editor')) return `${verification}<button data-action="submit-review" data-id="${escapeHTML(item.id)}" type="button">На проверку</button>`;
+    if (status === 'review' && hasAnyRole('superadmin')) return `${verification}<button data-action="publish-content" data-id="${escapeHTML(item.id)}" type="button">Опубликовать</button>`;
+    if ((status === 'published' || status === 'scheduled') && hasAnyRole('superadmin')) return `${verification}<button data-action="unpublish-content" data-id="${escapeHTML(item.id)}" type="button">Снять с показа</button>`;
     return verification;
   };
   const complianceHint = (item) => item.compliance?.ageRating ? ` · ${escapeHTML(item.compliance.ageRating)}` : isApiMode() ? ' · паспорт публикации не заполнен' : '';
@@ -882,6 +916,32 @@ function renderUploads() {
   }).join('') || '<p class="empty-copy">Файлов пока нет.</p>';
 }
 
+// Must mirror server/app.js's allowRoles() for each action exactly. A
+// button the server would 403 must never be clickable, or a viewer/analyst
+// staffer gets a confusing "failed" toast for something they were never
+// allowed to do. Covers actions not already gated inline where they're
+// built (workflowAction handles submit-review/verify-rights/publish/
+// unpublish itself, since those also depend on content status).
+const ACTION_ROLES = {
+  'new-series': ['superadmin', 'content_editor'],
+  'edit-content': ['superadmin', 'content_editor'],
+  'delete-content': ['superadmin', 'content_editor'],
+  upload: ['superadmin', 'content_editor'],
+  'new-banner': ['superadmin', 'content_editor'],
+  'edit-banner': ['superadmin', 'content_editor'],
+  'toggle-banner': ['superadmin', 'content_editor'],
+  'move-banner': ['superadmin', 'content_editor'],
+  'delete-banner': ['superadmin', 'content_editor']
+};
+
+function applyRoleGating() {
+  if (!isApiMode()) return;
+  document.querySelectorAll('[data-action]').forEach((element) => {
+    const allowed = ACTION_ROLES[element.dataset.action];
+    if (allowed && !hasAnyRole(...allowed)) element.hidden = true;
+  });
+}
+
 function renderStudio() {
   renderDashboard();
   renderContent();
@@ -891,6 +951,7 @@ function renderStudio() {
   renderComments();
   renderUploads();
   renderConnectionState();
+  applyRoleGating();
 }
 
 function navigate(view) {
@@ -1304,6 +1365,7 @@ async function loginToApi() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.message || 'Неверный email или пароль.');
     setAccessToken(payload.accessToken);
+    setStaffRoles(payload.roles);
     const connected = await loadRemoteStudio({ silent: true });
     if (!connected) { setConnectionError('Вход выполнен, но Studio API не отвечает. Попробуй ещё раз.'); return; }
     passwordField.value = '';
@@ -1320,6 +1382,7 @@ async function loginToApi() {
 function disconnectApi() {
   if (activeUpload || abortingUpload) { showToast('Сначала заверши текущую операцию с загрузкой.'); return; }
   clearAccessToken();
+  clearStaffRoles();
   remoteOverview = null;
   homeHasUnsavedChanges = false;
   studio = loadStudio();

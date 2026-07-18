@@ -175,7 +175,10 @@ export function createMemoryStore(seed = defaultSeed) {
   }
 
   return {
-    listContent() { return state.content.map(clone); },
+    // Sorted to match postgres-store.js's ORDER BY updated_at DESC -- an
+    // edit surfacing its card at the top of Studio's list must behave the
+    // same in preview mode as it does in production.
+    listContent() { return state.content.map(clone).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()); },
     getContent(id) { const item = findContent(id); return item && clone(item); },
     createContent(data) {
       const record = {
@@ -186,6 +189,7 @@ export function createMemoryStore(seed = defaultSeed) {
         scheduledAt: null,
         publishedAt: null,
         unpublishedReason: null,
+        compliance: null,
         createdAt: now(),
         updatedAt: now(),
         ...data
@@ -258,7 +262,10 @@ export function createMemoryStore(seed = defaultSeed) {
     updateComment(id, status, moderationNote) {
       const comment = state.comments.find((item) => item.id === id);
       if (!comment) return null;
-      Object.assign(comment, { status, moderationNote, updatedAt: now() });
+      // ?? null matches postgres-store.js: without it, an omitted note
+      // leaves moderationNote absent from the cloned JSON (JSON.stringify
+      // drops undefined keys) instead of present-as-null like production.
+      Object.assign(comment, { status, moderationNote: moderationNote ?? null, updatedAt: now() });
       return clone(comment);
     },
     createViewerBlock({ blockerId, blockedId }) {
@@ -321,10 +328,13 @@ export function createMemoryStore(seed = defaultSeed) {
       state.publicRequests.unshift(record);
       return clone(record);
     },
+    // Sorted oldest-first to match postgres-store.js's ORDER BY created_at
+    // ASC -- this is a support/legal queue, so FIFO order matters for SLA.
     listPublicRequests({ type, status } = {}) {
       return state.publicRequests
         .filter((item) => (!type || item.type === type) && (!status || item.status === status))
-        .map(clone);
+        .map(clone)
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     },
     getPublicRequest(id) { const item = findPublicRequest(id); return item && clone(item); },
     updatePublicRequest(id, patch) {
@@ -502,7 +512,13 @@ export function createMemoryStore(seed = defaultSeed) {
           Object.assign(item, { status: 'dead', leaseToken: null, leaseExpiresAt: null, completedAt: at, updatedAt: at });
         }
       }
-      const job = state.mediaJobs.find((item) => (item.status === 'queued' || item.status === 'retry_wait' || (item.status === 'running' && new Date(item.leaseExpiresAt).getTime() <= timestamp)) && new Date(item.availableAt).getTime() <= timestamp && item.attempt < item.maxAttempts);
+      // Picks the oldest eligible job (by availableAt, then createdAt) to
+      // match postgres-store.js's `ORDER BY available_at ASC, created_at
+      // ASC` -- state.mediaJobs is newest-first (unshift), so a plain
+      // .find() here would claim the newest job instead and starve
+      // whatever's been waiting longest.
+      const eligible = state.mediaJobs.filter((item) => (item.status === 'queued' || item.status === 'retry_wait' || (item.status === 'running' && new Date(item.leaseExpiresAt).getTime() <= timestamp)) && new Date(item.availableAt).getTime() <= timestamp && item.attempt < item.maxAttempts);
+      const job = eligible.sort((a, b) => new Date(a.availableAt).getTime() - new Date(b.availableAt).getTime() || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0];
       if (!job) return null;
       Object.assign(job, { status: 'running', workerId, attempt: job.attempt + 1, leaseToken, leaseExpiresAt: new Date(timestamp + leaseMs).toISOString(), startedAt: job.startedAt ?? at, updatedAt: at });
       return clone(job);

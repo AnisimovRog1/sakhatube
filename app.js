@@ -783,10 +783,22 @@ async function submitAccount(event) {
   const submit = document.querySelector('#account-submit');
   error.hidden = true;
   error.textContent = '';
+  // Mirrors server/app.js's viewerRegistrationInput username regex exactly
+  // (^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$) -- without this check, a Cyrillic
+  // username (a very plausible input on a Russian/Sakha-language product)
+  // passes every client-side check, then fails registration server-side
+  // with only a generic "Проверьте введённые данные" and no indication
+  // the username field specifically is the problem.
+  const usernamePattern = /^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/;
   if (!password || (mode === 'register' && (!displayName || !username || !email || password.length < 12)) || (mode === 'login' && !login)) {
     error.textContent = mode === 'register'
       ? 'Укажите имя, логин, e-mail и пароль минимум из 12 символов.'
       : (firebaseEnabled ? 'Укажите e-mail и пароль.' : 'Укажите логин и пароль.');
+    error.hidden = false;
+    return;
+  }
+  if (mode === 'register' && !usernamePattern.test(username)) {
+    error.textContent = 'Логин должен начинаться с латинской буквы или цифры и может содержать только латиницу, цифры, «.», «_», «-» (от 3 до 32 символов).';
     error.hidden = false;
     return;
   }
@@ -1066,7 +1078,10 @@ async function loadComments() {
     return;
   }
   try {
-    const response = await fetch(`/v1/content/${encodeURIComponent(activeCommentsContentId)}/comments?limit=50`, {
+    // viewerFetch (not plain fetch) so a signed-in viewer's blocks are
+    // actually applied server-side -- server/app.js resolves viewerId from
+    // the Authorization header here to filter out blocked comment authors.
+    const response = await viewerFetch(`/v1/content/${encodeURIComponent(activeCommentsContentId)}/comments?limit=50`, {
       headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store'
     });
     const payload = await response.json().catch(() => ({}));
