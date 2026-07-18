@@ -50,6 +50,11 @@ enum ViewerAuthState: Equatable {
 final class ViewerSessionStore: ObservableObject {
     @Published private(set) var state: ViewerAuthState = .guest
     @Published private(set) var isWorking = false
+    /// Set when the refresh token couldn't actually be written to Keychain.
+    /// The in-memory session (state/accessToken) is still valid for the rest
+    /// of this app run -- this only means the session won't survive the app
+    /// being relaunched, and previously failed completely silently.
+    @Published private(set) var sessionWillNotPersist = false
 
     private let api: any ViewerAuthServing & ViewerSessionRenewing & ViewerDeletionRequesting
     private let refreshTokens: RefreshTokenStoring
@@ -161,6 +166,7 @@ final class ViewerSessionStore: ObservableObject {
     func signOut() {
         accessToken = nil
         accessTokenExpiresAt = nil
+        sessionWillNotPersist = false
         refreshTokens.remove()
         try? Auth.auth().signOut()
         state = .guest
@@ -188,7 +194,7 @@ final class ViewerSessionStore: ObservableObject {
         accessToken = session.accessToken
         accessTokenExpiresAt = Date().addingTimeInterval(TimeInterval(session.expiresIn))
         state = .signedIn(session.viewer)
-        refreshTokens.save(session.refreshToken)
+        sessionWillNotPersist = !refreshTokens.save(session.refreshToken)
     }
 }
 
@@ -255,7 +261,12 @@ enum ViewerDeletionError: LocalizedError {
 
 protocol RefreshTokenStoring: Sendable {
     func read() -> String?
-    func save(_ token: String)
+    /// Returns whether the token was actually persisted. A caller that
+    /// ignores this return value and proceeds to show "signed in" anyway
+    /// risks a silent logout on next launch if the underlying write failed
+    /// (Keystore/Keychain contention, interaction-not-allowed, etc.).
+    @discardableResult
+    func save(_ token: String) -> Bool
     func remove()
 }
 
@@ -279,7 +290,8 @@ final class RefreshTokenKeychain: RefreshTokenStoring, @unchecked Sendable {
         return String(data: data, encoding: .utf8)
     }
 
-    func save(_ token: String) {
+    @discardableResult
+    func save(_ token: String) -> Bool {
         let data = Data(token.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -290,11 +302,12 @@ final class RefreshTokenKeychain: RefreshTokenStoring, @unchecked Sendable {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecItemNotFound {
-            var create = query
-            attributes.forEach { create[$0.key] = $0.value }
-            SecItemAdd(create as CFDictionary, nil)
-        }
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess { return true }
+        guard updateStatus == errSecItemNotFound else { return false }
+        var create = query
+        attributes.forEach { create[$0.key] = $0.value }
+        return SecItemAdd(create as CFDictionary, nil) == errSecSuccess
     }
 
     func remove() {

@@ -160,7 +160,17 @@ private final class ProtectedPlaybackController: ObservableObject {
     }
 
     func stop() {
-        if player != nil { Task { await sendEvent("pause", positionMs: currentPositionMs) } }
+        // Captured before the synchronous nil-outs below: stop() is not
+        // itself async, so the Task body below can't run until every
+        // statement after it finishes -- by the time it did, contentId/
+        // sessionId were already nil and sendEvent's guard silently
+        // dropped the pause event on every normal close/replay, 100% of
+        // the time, not just under a race.
+        if let contentId, let sessionId {
+            let request = PlaybackEventRequest(contentId: contentId, sessionId: sessionId, event: "pause", positionMs: currentPositionMs, errorCode: nil)
+            let token = accessToken
+            Task { await api.reportPlaybackEvent(request, accessToken: token) }
+        }
         player?.pause()
         player = nil
         statusObservation = nil

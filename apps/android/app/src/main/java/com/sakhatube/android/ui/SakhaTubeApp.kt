@@ -487,7 +487,7 @@ private fun CommentsSection(contentId: String, viewModel: CommentsViewModel, onS
                     }
                     Text(comment.text)
                     if (comment.status != null && viewModel.canDelete(comment)) {
-                        TextButton(onClick = { viewModel.delete(comment.id) }) {
+                        TextButton(onClick = { viewModel.delete(comment.id) }, enabled = comment.id !in state.deletingIds) {
                             Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
                             Text("Удалить")
@@ -676,6 +676,14 @@ private fun ProfileScreen(
         "Пользовательское соглашение" to BuildConfig.TERMS_URL,
         "Удаление аккаунта и данных" to BuildConfig.ACCOUNT_DELETION_URL
     )
+    // authState is Activity-scoped (survives tab switches) while email/
+    // username/password/mode above reset every time this composable leaves
+    // and re-enters composition -- without this, a failed login attempt
+    // followed by Home -> Profile showed the old error over a blank,
+    // untouched form, looking like the freshly-loaded screen already failed.
+    LaunchedEffect(Unit) {
+        if (authViewModel.state.value is AuthUiState.Error) authViewModel.dismissError()
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),

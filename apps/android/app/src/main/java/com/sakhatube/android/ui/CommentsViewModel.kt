@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sakhatube.android.data.CommentsRepository
 import com.sakhatube.android.data.ViewerComment
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,7 +15,11 @@ data class CommentsUiState(
     val loading: Boolean = true,
     val items: List<ViewerComment> = emptyList(),
     val error: String? = null,
-    val notice: String? = null
+    val notice: String? = null,
+    // The delete button is tappable continuously (unlike report/block, which
+    // close their confirmation dialog on the same tap) -- without this, a
+    // fast double-tap fired two DELETE requests for the same comment.
+    val deletingIds: Set<String> = emptySet()
 )
 
 class CommentsViewModel(application: Application) : AndroidViewModel(application) {
@@ -30,11 +35,20 @@ class CommentsViewModel(application: Application) : AndroidViewModel(application
     fun canBlock(comment: ViewerComment): Boolean =
         comment.status == null && repository.currentViewer()?.displayName != comment.authorName && repository.isSignedIn()
 
-    fun load(contentId: String) = viewModelScope.launch {
-        _state.value = _state.value.copy(loading = true, error = null)
-        runCatching { repository.approved(contentId) }
-            .onSuccess { _state.value = CommentsUiState(items = it) }
-            .onFailure { _state.value = _state.value.copy(loading = false, error = it.message ?: "Не удалось загрузить комментарии.") }
+    // Shared across every content item whose comment sheet is opened (same
+    // reasoning as PlaybackViewModel.openJob) -- without cancelling the
+    // previous load, switching content quickly could show item B's title
+    // with item A's stale comment thread if A's response landed after B's.
+    private var loadJob: Job? = null
+
+    fun load(contentId: String) {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
+            _state.value = _state.value.copy(loading = true, error = null)
+            runCatching { repository.approved(contentId) }
+                .onSuccess { _state.value = CommentsUiState(items = it) }
+                .onFailure { _state.value = _state.value.copy(loading = false, error = it.message ?: "Не удалось загрузить комментарии.") }
+        }
     }
 
     fun post(contentId: String, text: String) = viewModelScope.launch {
@@ -65,10 +79,14 @@ class CommentsViewModel(application: Application) : AndroidViewModel(application
             .onFailure { _state.value = _state.value.copy(error = it.message ?: "Не удалось отправить жалобу.") }
     }
 
-    fun delete(commentId: String) = viewModelScope.launch {
-        runCatching { repository.delete(commentId) }
-            .onSuccess { _state.value = _state.value.copy(items = _state.value.items.filterNot { it.id == commentId }, notice = "Комментарий удалён.", error = null) }
-            .onFailure { _state.value = _state.value.copy(error = it.message ?: "Не удалось удалить комментарий.") }
+    fun delete(commentId: String) {
+        if (commentId in _state.value.deletingIds) return
+        _state.value = _state.value.copy(deletingIds = _state.value.deletingIds + commentId)
+        viewModelScope.launch {
+            runCatching { repository.delete(commentId) }
+                .onSuccess { _state.value = _state.value.copy(items = _state.value.items.filterNot { it.id == commentId }, deletingIds = _state.value.deletingIds - commentId, notice = "Комментарий удалён.", error = null) }
+                .onFailure { _state.value = _state.value.copy(deletingIds = _state.value.deletingIds - commentId, error = it.message ?: "Не удалось удалить комментарий.") }
+        }
     }
 
     fun blockAuthor(commentId: String) = viewModelScope.launch {
