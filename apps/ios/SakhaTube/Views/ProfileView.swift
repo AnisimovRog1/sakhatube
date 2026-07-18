@@ -10,7 +10,6 @@ struct ProfileView: View {
     @State private var preferredLanguage = "Русский"
     @State private var isShowingAccount = false
     @State private var isShowingDeletion = false
-    @State private var isShowingSubscription = false
 
     var body: some View {
         let currentAvatar = avatar
@@ -74,10 +73,9 @@ struct ProfileView: View {
                             Task { await viewerSession.signOutEverywhereForThisDevice() }
                         }
                     }
-                    Button("SakhaTube Plus") { isShowingSubscription = true }
-                    Text("Покупки открывают доступ только после проверки на сервере.")
-                        .font(.footnote)
-                        .foregroundStyle(AppTheme.secondaryText)
+                    // SakhaTube Plus entry point is hidden until server-side billing
+                    // validation is live (see /health billing.status) -- shipping this
+                    // button with purchases that always fail would fail App Store review.
                 }
 
                 Section("Настройки") {
@@ -131,7 +129,6 @@ struct ProfileView: View {
                     DeletionRequestView(viewer: viewer)
                 }
             }
-            .sheet(isPresented: $isShowingSubscription) { SubscriptionView() }
             .task(id: selectedPhoto) {
                 guard let selectedPhoto,
                       let data = try? await selectedPhoto.loadTransferable(type: Data.self),

@@ -660,13 +660,11 @@ private fun CatalogError(message: String, onRetry: () -> Unit, modifier: Modifie
 @Composable
 private fun ProfileScreen(
     authViewModel: AuthViewModel,
-    billingViewModel: BillingViewModel = viewModel(),
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val authState by authViewModel.state.collectAsStateWithLifecycle()
     val deletionState by authViewModel.deletionState.collectAsStateWithLifecycle()
-    val billingState by billingViewModel.state.collectAsStateWithLifecycle()
     var isShowingDeletion by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
@@ -721,16 +719,9 @@ private fun ProfileScreen(
                 )
             }
         }
-        item {
-            BillingCard(
-                state = billingState,
-                onLoad = billingViewModel::load,
-                onRestore = billingViewModel::restore,
-                onPurchase = {
-                    (context as? android.app.Activity)?.let(billingViewModel::purchase)
-                }
-            )
-        }
+        // BillingCard is hidden until server-side billing validation is live (see
+        // /health billing.status) -- shipping this with purchases that always fail
+        // would fail Play Store review.
         item { Text("Документы", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         items(legalLinks, key = { it.first }) { (title, url) ->
             val validUrl = url.takeIf { it.startsWith("https://") }
