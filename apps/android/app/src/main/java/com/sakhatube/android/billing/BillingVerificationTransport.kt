@@ -1,6 +1,7 @@
 package com.sakhatube.android.billing
 
 import com.sakhatube.android.BuildConfig
+import com.sakhatube.android.data.AuthRepository
 import com.sakhatube.android.data.EncryptedViewerSessionStore
 import com.sakhatube.android.data.ViewerSessionStore
 import android.content.Context
@@ -19,10 +20,14 @@ import java.net.URL
 class BillingVerificationTransport(
     context: Context,
     private val baseUrl: String = BuildConfig.AUTH_BASE_URL,
-    private val sessions: ViewerSessionStore = EncryptedViewerSessionStore(context)
+    private val sessions: ViewerSessionStore = EncryptedViewerSessionStore(context),
+    private val authRepository: AuthRepository = AuthRepository(context.applicationContext, sessionStore = sessions)
 ) {
     suspend fun submitGooglePurchase(productKey: String, purchaseToken: String) = withContext(Dispatchers.IO) {
-        val accessToken = sessions.current()?.accessToken
+        // ensureValidAccessToken so a purchase attempted after 15 minutes of
+        // browsing doesn't get rejected with "sign in" for a viewer who
+        // never signed out.
+        val accessToken = authRepository.ensureValidAccessToken()
             ?: throw IOException("Войди в SakhaTube перед оплатой.")
         require(productKey.matches(Regex("[a-z][a-z0-9_]{2,63}"))) { "Некорректный продукт." }
         require(purchaseToken.length in 20..4096) { "Некорректное подтверждение Google Play." }

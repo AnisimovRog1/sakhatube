@@ -37,7 +37,7 @@ struct SubscriptionView: View {
                     }
 
                     Button("Восстановить покупки") {
-                        Task { await storefront.restorePurchases(accessToken: viewerSession.accessTokenForAuthenticatedRequest) }
+                        Task { await storefront.restorePurchases(accessToken: viewerSession.validAccessToken()) }
                     }
                     .frame(maxWidth: .infinity)
                     .buttonStyle(.bordered)
@@ -85,7 +85,7 @@ struct SubscriptionView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.secondaryText)
             }
-            Button("Выбрать") { Task { await storefront.purchase(product, accessToken: viewerSession.accessTokenForAuthenticatedRequest) } }
+            Button("Выбрать") { Task { await storefront.purchase(product, accessToken: viewerSession.validAccessToken()) } }
                 .frame(maxWidth: .infinity)
                 .buttonStyle(.borderedProminent)
                 .tint(AppTheme.primary)

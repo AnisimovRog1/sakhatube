@@ -54,6 +54,8 @@ final class ViewerSessionStore: ObservableObject {
     private let api: any ViewerAuthServing & ViewerSessionRenewing & ViewerDeletionRequesting
     private let refreshTokens: RefreshTokenStoring
     private var accessToken: String?
+    private var accessTokenExpiresAt: Date?
+    private var refreshTask: Task<String?, Never>?
 
     init(api: any ViewerAuthServing & ViewerSessionRenewing & ViewerDeletionRequesting = APIClient(), refreshTokens: RefreshTokenStoring = RefreshTokenKeychain()) {
         self.api = api
@@ -65,9 +67,32 @@ final class ViewerSessionStore: ObservableObject {
         return viewer
     }
 
-    /// Only UI components that issue a request on behalf of the signed-in
-    /// viewer may read this short-lived token. It is never persisted here.
-    var accessTokenForAuthenticatedRequest: String? { accessToken }
+    /// The access token expires in 15 minutes; without this, every UI call
+    /// site that reads a token still valid at request-construction time but
+    /// expired by the time the request actually lands would just fail, and
+    /// nothing on this screen would ever retry -- the user just looks
+    /// signed-out mid-session. Callers must await this instead of reading a
+    /// stored token directly. refreshTask collapses concurrent callers (e.g.
+    /// two screens both waking up right as the token expires) into a single
+    /// network refresh instead of racing two rotations against the server's
+    /// reuse-detection, which would revoke the whole session family.
+    func validAccessToken() async -> String? {
+        if let accessToken, let accessTokenExpiresAt, accessTokenExpiresAt > Date().addingTimeInterval(10) {
+            return accessToken
+        }
+        if let refreshTask {
+            return await refreshTask.value
+        }
+        guard refreshTokens.read() != nil else { return nil }
+        let task = Task<String?, Never> { [weak self] in
+            await self?.restoreSession()
+            return await self?.accessToken
+        }
+        refreshTask = task
+        let result = await task.value
+        refreshTask = nil
+        return result
+    }
 
     func register(email: String, username: String, password: String, displayName: String?) async throws -> ViewerRegistrationResponse {
         isWorking = true
@@ -135,6 +160,7 @@ final class ViewerSessionStore: ObservableObject {
 
     func signOut() {
         accessToken = nil
+        accessTokenExpiresAt = nil
         refreshTokens.remove()
         try? Auth.auth().signOut()
         state = .guest
@@ -160,6 +186,7 @@ final class ViewerSessionStore: ObservableObject {
 
     private func accept(_ session: ViewerSessionResponse) {
         accessToken = session.accessToken
+        accessTokenExpiresAt = Date().addingTimeInterval(TimeInterval(session.expiresIn))
         state = .signedIn(session.viewer)
         refreshTokens.save(session.refreshToken)
     }

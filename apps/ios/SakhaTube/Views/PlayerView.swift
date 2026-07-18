@@ -24,7 +24,7 @@ struct PlayerView: View {
                         Text(item.description).font(.body).foregroundStyle(.white.opacity(0.85))
 
                         if playback.canRetry {
-                            Button("Повторить") { Task { await playback.start(item: item, accessToken: viewerSession.accessTokenForAuthenticatedRequest) } }
+                            Button("Повторить") { Task { await playback.start(item: item, accessToken: viewerSession.validAccessToken()) } }
                                 .buttonStyle(.borderedProminent)
                                 .tint(AppTheme.primary)
                         }
@@ -59,7 +59,7 @@ struct PlayerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
         }
-        .task { await playback.start(item: item, accessToken: viewerSession.accessTokenForAuthenticatedRequest) }
+        .task { await playback.start(item: item, accessToken: viewerSession.validAccessToken()) }
         .onDisappear { playback.stop() }
         .sheet(isPresented: $isShowingComments) {
             CommentsView(contentId: item.id)

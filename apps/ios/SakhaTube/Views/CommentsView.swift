@@ -173,7 +173,7 @@ struct CommentsView: View {
             // blocked. Anonymous viewers still receive the public feed.
             comments = try await api.comments(
                 contentId: contentId,
-                accessToken: viewerSession.accessTokenForAuthenticatedRequest
+                accessToken: await viewerSession.validAccessToken()
             ).items
         } catch {
             errorMessage = error.localizedDescription
@@ -181,7 +181,7 @@ struct CommentsView: View {
     }
 
     private func send() async {
-        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+        guard let token = await viewerSession.validAccessToken() else {
             isShowingAuth = true
             return
         }
@@ -193,7 +193,7 @@ struct CommentsView: View {
     }
 
     private func publishComment(using existingToken: String? = nil) async {
-        guard let token = existingToken ?? viewerSession.accessTokenForAuthenticatedRequest else {
+        guard let token = existingToken ?? await viewerSession.validAccessToken() else {
             isShowingAuth = true
             return
         }
@@ -218,7 +218,7 @@ struct CommentsView: View {
     }
 
     private func acceptCommunityRulesAndPublish() async {
-        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+        guard let token = await viewerSession.validAccessToken() else {
             isShowingCommunityRulesConsent = false
             isShowingAuth = true
             return
@@ -240,7 +240,7 @@ struct CommentsView: View {
 
     private func report(_ comment: ViewerCommentDTO, reason: CommentReportReason) async {
         defer { reportTarget = nil }
-        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+        guard let token = await viewerSession.validAccessToken() else {
             isShowingAuth = true
             return
         }
@@ -253,7 +253,7 @@ struct CommentsView: View {
     }
 
     private func delete(_ comment: ViewerCommentDTO) async {
-        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+        guard let token = await viewerSession.validAccessToken() else {
             isShowingAuth = true
             return
         }
@@ -268,7 +268,7 @@ struct CommentsView: View {
 
     private func blockAuthor(of comment: ViewerCommentDTO) async {
         defer { blockTarget = nil }
-        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+        guard let token = await viewerSession.validAccessToken() else {
             isShowingAuth = true
             return
         }
@@ -412,7 +412,7 @@ private struct BlockedViewersView: View {
     }
 
     private func load() async {
-        guard let token = viewerSession.accessTokenForAuthenticatedRequest else {
+        guard let token = await viewerSession.validAccessToken() else {
             isLoading = false
             return
         }
@@ -426,7 +426,7 @@ private struct BlockedViewersView: View {
     }
 
     private func unblock(_ block: ViewerBlockDTO) async {
-        guard let token = viewerSession.accessTokenForAuthenticatedRequest else { return }
+        guard let token = await viewerSession.validAccessToken() else { return }
         do {
             try await api.unblockViewer(id: block.id, accessToken: token)
             blocks.removeAll { $0.id == block.id }

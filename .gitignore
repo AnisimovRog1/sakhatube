@@ -21,3 +21,4 @@ apps/ios/SakhaTube/GoogleService-Info.plist
 apps/android/keystore/
 .staff-credentials-DO-NOT-COMMIT.txt
 .local-jdk/
+apps/ios/build/

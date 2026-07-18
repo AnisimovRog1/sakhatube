@@ -6,13 +6,22 @@ import { createWorkerStore } from './store.mjs';
 import { createApiClient } from './api-client.mjs';
 
 // Retrying these will never succeed: the source file itself is bad
-// (malformed job, wrong MIME, no video stream, impossible dimensions/size).
+// (malformed job, wrong MIME, no video stream, impossible dimensions/size),
+// or the worker's own wiring is broken (WORKER_CONFIG -- a missing adapter
+// method is identical on every retry, so retrying just retry-storms every
+// job the misconfigured worker touches). FFPROBE_FAILED (ffprobe exited
+// non-zero against the downloaded source) is permanent for the same reason
+// as PROBE_NO_VIDEO/PROBE_DIMENSIONS -- it means the source is unreadable,
+// not that something transient happened.
+// FFPROBE_INVALID_JSON is deliberately NOT permanent: ffprobe exiting 0 but
+// producing stdout that doesn't parse as JSON is a rarer, less clearly
+// source-fault anomaly than a nonzero exit code, and worth one retry.
 // Everything else (network blip, ffmpeg crash, transient S3 error) is
 // retried by the server's own lease-expiry/attempt bookkeeping.
 const PERMANENT_CODES = new Set([
   'INVALID_JOB', 'INVALID_SOURCE_KEY', 'UNSUPPORTED_MEDIA_TYPE', 'INVALID_SIZE',
-  'PROBE_NO_VIDEO', 'PROBE_DURATION', 'PROBE_DIMENSIONS', 'FFPROBE_INVALID_JSON',
-  'SOURCE_SIZE_MISMATCH', 'PRIVATE_SOURCE_REQUIRED'
+  'PROBE_NO_VIDEO', 'PROBE_DURATION', 'PROBE_DIMENSIONS', 'FFPROBE_FAILED',
+  'SOURCE_SIZE_MISMATCH', 'PRIVATE_SOURCE_REQUIRED', 'WORKER_CONFIG'
 ]);
 
 function requireEnv(name) {

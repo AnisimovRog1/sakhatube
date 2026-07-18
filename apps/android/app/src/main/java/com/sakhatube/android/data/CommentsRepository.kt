@@ -25,13 +25,16 @@ data class ViewerComment(
 class CommentsRepository(
     context: Context,
     private val baseUrl: String = BuildConfig.CATALOG_BASE_URL,
-    private val sessionStore: ViewerSessionStore = EncryptedViewerSessionStore(context)
+    private val sessionStore: ViewerSessionStore = EncryptedViewerSessionStore(context),
+    private val authRepository: AuthRepository = AuthRepository(context.applicationContext, sessionStore = sessionStore)
 ) {
     private val consentStore = CommentCommunityConsentStore(context.applicationContext)
     suspend fun approved(contentId: String): List<ViewerComment> = withContext(Dispatchers.IO) {
         // The feed stays public, but an authenticated viewer must send their
         // short-lived session so the server can filter authors they blocked.
-        request("/v1/content/$contentId/comments?limit=50", "GET", null, sessionStore.current()?.accessToken)
+        // ensureValidAccessToken (not sessionStore.current() directly) so a
+        // session open longer than 15 minutes doesn't start looking guest.
+        request("/v1/content/$contentId/comments?limit=50", "GET", null, authRepository.ensureValidAccessToken())
             .optJSONArray("items").toComments()
     }
 
@@ -82,7 +85,10 @@ class CommentsRepository(
         consentStore.accept(viewerId)
     }
 
-    private fun requireToken(): String = sessionStore.current()?.accessToken
+    // ensureValidAccessToken (not sessionStore.current() directly) so a
+    // session open longer than 15 minutes doesn't start throwing "sign in
+    // again" for a viewer who never actually signed out.
+    private suspend fun requireToken(): String = authRepository.ensureValidAccessToken()
         ?: throw IOException("Войди в аккаунт, чтобы продолжить.")
 
     private fun request(path: String, method: String, body: JSONObject?, token: String?, expected: Set<Int> = setOf(200, 201)): JSONObject {

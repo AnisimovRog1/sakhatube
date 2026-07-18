@@ -7,6 +7,8 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.IOException
@@ -18,6 +20,7 @@ class AuthRepository(
     private val baseUrl: String = BuildConfig.AUTH_BASE_URL,
     private val sessionStore: ViewerSessionStore = EncryptedViewerSessionStore(appContext)
 ) {
+    private val refreshMutex = Mutex()
     suspend fun register(email: String, username: String, password: CharArray, displayName: String?): String = withContext(Dispatchers.IO) {
         val auth = firebaseAuth()
         val result = Tasks.await(auth.createUserWithEmailAndPassword(email.trim(), password.concatToString()))
@@ -47,16 +50,33 @@ class AuthRepository(
     }
 
     /**
-     * Rotates the stored refresh token on every app start, mirroring
-     * ViewerSessionStore.restoreSession() on iOS — the 15-minute access token is
-     * never itself treated as a persistent login; the refresh token is. This
-     * keeps sessionStore.current() fresh for CommentsRepository/
-     * BillingVerificationTransport (which read it independently) for the
-     * remainder of this app process. It does NOT re-run mid-session: a session
-     * kept open continuously past the access token's 15-minute lifetime will
-     * still see those two repositories require a fresh sign-in until the next
-     * app start. Same limitation as the iOS client today — neither platform
-     * refreshes reactively yet.
+     * Returns a currently-valid access token, refreshing first if the stored
+     * one has expired (sessionStore.current() goes null at that point) but a
+     * refresh token is still on hand. Null means the viewer is genuinely
+     * signed out. This is what makes a session survive past the 15-minute
+     * access-token lifetime -- CommentsRepository/BillingVerificationTransport
+     * call this instead of reading sessionStore directly, so a session that's
+     * been open longer than 15 minutes doesn't silently start looking
+     * signed-out. refreshMutex collapses concurrent callers (e.g. two
+     * comment actions firing back to back right as the token expires) into a
+     * single network refresh instead of racing two rotations against the
+     * server's reuse-detection, which would revoke the whole session family.
+     */
+    suspend fun ensureValidAccessToken(): String? = withContext(Dispatchers.IO) {
+        sessionStore.current()?.accessToken?.let { return@withContext it }
+        if (sessionStore.currentRefreshToken() == null) return@withContext null
+        refreshMutex.withLock {
+            sessionStore.current()?.accessToken ?: run {
+                refreshSession()
+                sessionStore.current()?.accessToken
+            }
+        }
+    }
+
+    /**
+     * Rotates the stored refresh token. Called both at app start
+     * (mirroring ViewerSessionStore.restoreSession() on iOS) and reactively
+     * by [ensureValidAccessToken] whenever the access token has expired.
      * A reused or expired refresh token always means "sign in again" — the
      * server has already revoked the whole session family in that case.
      */
