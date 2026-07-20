@@ -108,8 +108,14 @@ class AuthRepository(
      * SakhaTube sessions. Local credentials are cleared only after success.
      */
     suspend fun deleteAccount(): Unit = withContext(Dispatchers.IO) {
-        val session = sessionStore.current() ?: throw IOException("Сначала войди в аккаунт.")
-        request("/v1/account/delete", "POST", JSONObject().put("confirmation", "DELETE"), bearerToken = session.accessToken)
+        // Reads through ensureValidAccessToken() (refreshing first if the
+        // 15-minute access token has expired), not sessionStore.current()
+        // directly -- Profile keeps showing the account as signed in for as
+        // long as the refresh token is valid, so a stale-session check here
+        // threw "sign in first" on a screen that still looked signed in for
+        // any session simply left open past 15 minutes.
+        val accessToken = ensureValidAccessToken() ?: throw IOException("Сначала войди в аккаунт.")
+        request("/v1/account/delete", "POST", JSONObject().put("confirmation", "DELETE"), bearerToken = accessToken)
         sessionStore.clear()
         FirebaseApp.initializeApp(appContext)?.let { FirebaseAuth.getInstance(it).signOut() }
         Unit

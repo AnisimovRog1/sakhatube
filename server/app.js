@@ -36,6 +36,10 @@ const mediaJobLeaseMs = 15 * 60 * 1000;
 const scrypt = promisify(scryptCallback);
 const viewerAccessTokenTtlSeconds = 15 * 60;
 const staffAccessTokenTtlSeconds = 12 * 60 * 60;
+// Every manifest/segment fetch re-verifies this token (see GET /v1/playback/:token/*),
+// and nothing renews it mid-playback on either client. It must outlast the longest
+// realistic single viewing session (long-form video plus pauses), not just be "short".
+const playbackSessionTtlSeconds = 6 * 60 * 60;
 const viewerRefreshTokenTtlMsDefault = 14 * 24 * 60 * 60 * 1000;
 const emailVerificationTtlMsDefault = 24 * 60 * 60 * 1000;
 const billingContractVersion = '2026-07-16';
@@ -902,7 +906,12 @@ function configFrom(overrides = {}) {
   if (production && deletionVerificationSecret.length < 32) throw new Error('DELETION_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
   if (production && emailVerificationSecret.length < 32) throw new Error('EMAIL_VERIFICATION_SECRET должен содержать не менее 32 символов в production');
   if (production && viewerRefreshTokenSecret.length < 32) throw new Error('VIEWER_REFRESH_TOKEN_SECRET должен содержать не менее 32 символов в production');
-  if (production && mediaWorkerEnabled && mediaWorkerToken.length < 32) throw new Error('MEDIA_WORKER_TOKEN должен содержать не менее 32 символов в production');
+  // mediaWorkerEnabled is not checked here on purpose: requireMediaWorker's
+  // only real gate is whether a token is configured at all, so any token
+  // that IS configured must clear this bar in production regardless of that
+  // separate (and currently unenforced) flag -- otherwise a short token set
+  // before someone remembers to flip the flag is already live and weak.
+  if (production && mediaWorkerToken && mediaWorkerToken.length < 32) throw new Error('MEDIA_WORKER_TOKEN должен содержать не менее 32 символов в production');
   if ((firebaseProjectId && !firebaseServiceAccountJson) || (!firebaseProjectId && firebaseServiceAccountJson)) throw new Error('Для Firebase укажи и FIREBASE_PROJECT_ID, и FIREBASE_SERVICE_ACCOUNT_JSON');
   return { production, jwtSecret, allowedOrigins, allowDevTokens: overrides.allowDevTokens ?? !production, allowDemoStore, paymentsEnabled, billing, billingProducts, appleAppBundleId, googlePlayPackageName, staffAccounts, databaseUrl, media, deletionVerificationSecret, deletionVerificationTtlMs, emailVerificationSecret, emailVerificationTtlMs, viewerRefreshTokenSecret, viewerRefreshTokenTtlMs, publicBaseUrl, mailerWebhookUrl, mailerWebhookBearerToken, mailer, mediaWorkerToken, mediaWorkerEnabled, firebaseProjectId, firebaseServiceAccountJson, firebaseWebApiKey, firebaseAuthDomain, firebaseWebAppId, firebaseVerifier, firebaseUserDeleter };
 }
@@ -1190,7 +1199,11 @@ export function buildApp(options = {}) {
   // gateway can verify it.
   // Playback JWTs are opaque and longer than Fastify's small routing default.
   // Keep a finite cap, but allow a signed session to travel in the path.
-  const app = Fastify({ logger: options.logger ?? false, requestIdHeader: 'x-request-id', genReqId: () => randomUUID(), routerOptions: { maxParamLength: 4096 } });
+  // Railway's edge proxy is the only path to this container -- without
+  // trustProxy, request.ip is the proxy's address for every request, so the
+  // per-IP rate limiter (and the audit log's ip field) collapse onto one
+  // shared bucket/value across all visitors instead of limiting per-visitor.
+  const app = Fastify({ logger: options.logger ?? false, requestIdHeader: 'x-request-id', genReqId: () => randomUUID(), trustProxy: true, routerOptions: { maxParamLength: 4096 } });
 
   app.register(helmet, {
     contentSecurityPolicy: {
@@ -2472,17 +2485,17 @@ export function buildApp(options = {}) {
       return reply.code(409).send({ error: 'PLAYBACK_NOT_READY', message: 'Обработанная версия HLS для просмотра ещё не готова' });
     }
     const sessionId = randomUUID();
-    const token = app.jwt.sign({ kind: 'playback', cid: content.id, rid: rendition.id, sid: sessionId }, { expiresIn: 300 });
+    const token = app.jwt.sign({ kind: 'playback', cid: content.id, rid: rendition.id, sid: sessionId }, { expiresIn: playbackSessionTtlSeconds });
     await store.createPlaybackSession({
       id: sessionId,
       contentId: content.id,
       renditionId: rendition.id,
-      expiresAt: new Date(Date.now() + 300_000).toISOString()
+      expiresAt: new Date(Date.now() + playbackSessionTtlSeconds * 1000).toISOString()
     });
     await audit(request, 'playback.session.grant', 'content', content.id, null, { access: 'free', renditionId: rendition.id, sessionId });
     return reply.code(201).send({
       sessionId,
-      expiresIn: 300,
+      expiresIn: playbackSessionTtlSeconds,
       manifestUrl: `/v1/playback/${token}/master.m3u8`
     });
   });

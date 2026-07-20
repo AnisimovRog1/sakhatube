@@ -554,7 +554,12 @@ function renderGenres() {
 }
 
 function renderProfile() {
-  const displayName = viewerAuth?.viewer?.displayName || profile.name.trim() || defaultProfile.name;
+  // profile comes from loadProfile(), which spreads whatever shape happens
+  // to be in localStorage with no field-level validation -- a non-string
+  // `name` there (corrupted value, manual edit, future regression) used to
+  // throw here on the very first render, before any UI was interactive.
+  const savedName = typeof profile.name === 'string' ? profile.name.trim() : '';
+  const displayName = viewerAuth?.viewer?.displayName || savedName || defaultProfile.name;
   const initial = [...displayName][0].toLocaleUpperCase();
   document.querySelectorAll('[data-profile-name]').forEach((node) => { node.textContent = displayName; });
   document.querySelectorAll('[data-profile-initial], .avatar-button').forEach((node) => {
@@ -594,15 +599,25 @@ function compressAvatar(file) {
       const image = new Image();
       image.onerror = () => reject(new Error('image'));
       image.onload = () => {
-        const size = 320;
-        const crop = Math.min(image.naturalWidth, image.naturalHeight);
-        const startX = (image.naturalWidth - crop) / 2;
-        const startY = (image.naturalHeight - crop) / 2;
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        canvas.getContext('2d').drawImage(image, startX, startY, crop, crop, 0, 0, size, size);
-        resolve(canvas.toDataURL('image/jpeg', 0.86));
+        // Without this try/catch, a null 2D context or a degenerate image
+        // throws inside this callback uncaught -- reject() never runs, so
+        // the promise hangs forever and the caller's await never returns,
+        // leaving the settings dialog stuck with no error shown.
+        try {
+          const size = 320;
+          const crop = Math.min(image.naturalWidth, image.naturalHeight);
+          const startX = (image.naturalWidth - crop) / 2;
+          const startY = (image.naturalHeight - crop) / 2;
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('canvas-context');
+          context.drawImage(image, startX, startY, crop, crop, 0, 0, size, size);
+          resolve(canvas.toDataURL('image/jpeg', 0.86));
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error('canvas'));
+        }
       };
       image.src = reader.result;
     };
@@ -813,6 +828,7 @@ async function submitAccount(event) {
         ? await firebaseAuth.register({ email, password, displayName: displayName || username })
         : await firebaseAuth.login({ email: login, password });
       if (mode === 'register') {
+        let pendingSucceeded = false;
         try {
           const pending = await fetch('/v1/auth/firebase/register-pending', {
             method: 'POST',
@@ -822,10 +838,20 @@ async function submitAccount(event) {
           const pendingPayload = await pending.json().catch(() => ({}));
           if (!pending.ok) throw new Error(pendingPayload.message || 'Не удалось подготовить аккаунт. Попробуйте ещё раз.');
           payload = pendingPayload;
+          pendingSucceeded = true;
         } finally {
-          // Registration is deliberately not a login. The user confirms the
-          // e-mail, then signs in to receive a SakhaTube session.
-          await firebaseAuth.logout();
+          if (pendingSucceeded) {
+            // Registration is deliberately not a login. The user confirms
+            // the e-mail, then signs in to receive a SakhaTube session.
+            await firebaseAuth.logout();
+          } else {
+            // The server rejected registration (e.g. username taken) after
+            // Firebase already created the account. Leaving it behind with
+            // just a sign-out permanently strands that e-mail: any retry
+            // throws auth/email-already-in-use for an account with no
+            // matching SakhaTube record and no way to complete it.
+            await firebaseAuth.discardUnregisteredAccount();
+          }
         }
       } else {
         const exchange = await fetch('/v1/auth/firebase/exchange', {

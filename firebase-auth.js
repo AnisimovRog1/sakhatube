@@ -123,6 +123,28 @@
     async logout() {
       const current = await load();
       if (current) await current.auth.signOut(current.instance);
+    },
+    // register() creates the Firebase Auth account and sends the
+    // verification e-mail before the SakhaTube server is ever consulted. If
+    // the server then rejects registration (e.g. the chosen username is
+    // taken), that Firebase account used to be left behind -- app.js only
+    // signed the browser out, never deleted it -- permanently stranding the
+    // e-mail: any retry throws auth/email-already-in-use even though no
+    // SakhaTube account exists for it. Call this from that failure path
+    // instead of logout() so the e-mail is free to register again.
+    async discardUnregisteredAccount() {
+      const current = await load();
+      if (!current) return;
+      const user = current.instance.currentUser;
+      if (!user) return;
+      try {
+        await current.auth.deleteUser(user);
+      } catch {
+        // requires-recent-login or similar edge case -- deleting failed, but
+        // at least drop the local session so a retry doesn't immediately
+        // fail with a stale "already signed in" state.
+        await current.auth.signOut(current.instance).catch(() => {});
+      }
     }
   });
 })();

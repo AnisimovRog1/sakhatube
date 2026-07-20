@@ -126,6 +126,15 @@ private final class ProtectedPlaybackController: ObservableObject {
     private var completionObserver: NSObjectProtocol?
     private var firstFrameReported = false
     private var bufferOpen = false
+    // The retry button (and the initial `.task`) each launch start() inside
+    // their own bare `Task { }`, which SwiftUI does not cancel on dismiss --
+    // only its own `.task` modifier's task is. Without this, dismissing the
+    // screen right after a retry let the pending network call resume after
+    // dismiss and silently start playback on a screen already closed, with
+    // nothing left to stop it. Every start()/stop() bumps this; any call
+    // resuming after an await checks it's still the current attempt before
+    // touching player/state.
+    private var generation = 0
 
     var canRetry: Bool {
         switch state {
@@ -136,18 +145,22 @@ private final class ProtectedPlaybackController: ObservableObject {
 
     func start(item: CatalogItem, accessToken: String?) async {
         stop()
+        generation += 1
+        let myGeneration = generation
         state = .preparing
         contentId = item.id
         self.accessToken = accessToken
 
         do {
             let session = try await api.createPlaybackSession(contentId: item.id)
+            guard myGeneration == generation else { return }
             guard let manifestURL = session.resolvedManifestURL(baseURL: AppConfiguration.apiBaseURL) else {
                 state = .failed("Сервис вернул небезопасный адрес просмотра.")
                 return
             }
             sessionId = session.sessionId
             await sendEvent("intent", positionMs: 0)
+            guard myGeneration == generation else { return }
 
             let newPlayer = AVPlayer(url: manifestURL)
             player = newPlayer
@@ -155,11 +168,13 @@ private final class ProtectedPlaybackController: ObservableObject {
             state = .playing
             newPlayer.play()
         } catch {
+            guard myGeneration == generation else { return }
             state = Self.presentationState(for: error)
         }
     }
 
     func stop() {
+        generation += 1
         // Captured before the synchronous nil-outs below: stop() is not
         // itself async, so the Task body below can't run until every
         // statement after it finishes -- by the time it did, contentId/

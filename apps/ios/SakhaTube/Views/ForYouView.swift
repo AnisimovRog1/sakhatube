@@ -151,14 +151,22 @@ private final class VerticalClipPlaybackController: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private let api = APIClient()
+    // The retry button launches start() inside its own bare `Task { }`, which
+    // isn't cancelled when the user swipes to the next clip -- without this,
+    // a slow retry response could resolve after the user moved on and start
+    // playback (or flip isLoading back on) for a clip no longer on screen.
+    private var generation = 0
 
     func start(item: CatalogItem) async {
         stop()
+        generation += 1
+        let myGeneration = generation
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer { if myGeneration == generation { isLoading = false } }
         do {
             let session = try await api.createPlaybackSession(contentId: item.id)
+            guard myGeneration == generation else { return }
             guard let url = session.resolvedManifestURL(baseURL: AppConfiguration.apiBaseURL) else {
                 errorMessage = "Не удалось безопасно открыть клип."
                 return
@@ -168,6 +176,7 @@ private final class VerticalClipPlaybackController: ObservableObject {
             player = next
             next.play()
         } catch {
+            guard myGeneration == generation else { return }
             errorMessage = "Клип пока недоступен. Проверь подключение и повтори попытку."
         }
     }
@@ -176,6 +185,7 @@ private final class VerticalClipPlaybackController: ObservableObject {
     func pause() { player?.pause() }
 
     func stop() {
+        generation += 1
         player?.pause()
         player = nil
         isLoading = false

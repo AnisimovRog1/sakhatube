@@ -36,8 +36,7 @@ test('a fully successful job is settled with the created rendition id', async ()
     run: async () => ({ exitCode: 0, stdout: JSON.stringify(workingProbe) }),
     transcode: async () => {},
     verifyOutput: async () => true,
-    createMedia: async (asset) => ({ ...asset, id: 'rendition-1' }),
-    markSource: async () => {}
+    completeTranscode: async (asset) => ({ ...asset, id: 'rendition-1' })
   };
   await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1 }, api, adapter, shouldStop: stopAfter(1) });
   assert.equal(api.settleCalls.length, 1);
@@ -56,8 +55,7 @@ test('the lease is renewed periodically while a slow transcode is still running,
     // to fire before processJob resolves.
     transcode: async () => new Promise((resolve) => setTimeout(resolve, 45)),
     verifyOutput: async () => true,
-    createMedia: async (asset) => ({ ...asset, id: 'rendition-1' }),
-    markSource: async () => {},
+    completeTranscode: async (asset) => ({ ...asset, id: 'rendition-1' }),
     cleanupPending: async () => {}
   };
   await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1, leaseRenewIntervalMs: 10 }, api, adapter, shouldStop: stopAfter(1) });
@@ -89,8 +87,7 @@ test('a transient failure settling a successful job is never misreported as a jo
     run: async () => ({ exitCode: 0, stdout: JSON.stringify(workingProbe) }),
     transcode: async () => {},
     verifyOutput: async () => true,
-    createMedia: async (asset) => ({ ...asset, id: 'rendition-1' }),
-    markSource: async () => {},
+    completeTranscode: async (asset) => ({ ...asset, id: 'rendition-1' }),
     cleanupPending: async () => {}
   };
   await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1 }, api, adapter, shouldStop: stopAfter(1) });
@@ -129,14 +126,40 @@ test('a failure after a rendition plan was created cleans up whatever was alread
     run: async () => ({ exitCode: 0, stdout: JSON.stringify(workingProbe) }),
     transcode: async () => {},
     verifyOutput: async () => false,
-    createMedia: async () => { throw new Error('must not be called'); },
-    markSource: async () => { throw new Error('must not be called'); },
+    completeTranscode: async () => { throw new Error('must not be called'); },
     cleanupPrefix: async (prefix) => { cleanedPrefixes.push(prefix); },
     cleanupPending: async () => {}
   };
   await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1 }, api, adapter, shouldStop: stopAfter(1) });
   assert.equal(cleanedPrefixes.length, 1);
   assert.match(cleanedPrefixes[0], /^renditions\/.+\/$/);
+});
+
+test('a failure inside completeTranscode (e.g. the source-asset update half of the transaction) still cleans up the uploaded prefix, and never settles as succeeded', async () => {
+  // Regression test: completeTranscode used to be two independent calls
+  // (createMedia then markSource). If the DB insert committed but the
+  // update failed, the rendition row was never rolled back, yet this
+  // failure path still deleted the S3 objects that row pointed to --
+  // leaving a permanently 404ing 'ready' rendition. completeTranscode is
+  // now one transaction, so any failure inside it must leave nothing
+  // committed; a thrown error here must be handled exactly like any other
+  // mid-transcode failure (settled as retryable, prefix cleaned up).
+  const api = fakeApi([baseJob]);
+  const cleanedPrefixes = [];
+  const adapter = {
+    getSource: async () => ({ localPath: '/tmp/x', sizeBytes: 10, isPublic: false }),
+    run: async () => ({ exitCode: 0, stdout: JSON.stringify(workingProbe) }),
+    transcode: async () => {},
+    verifyOutput: async () => true,
+    completeTranscode: async () => { throw new Error('connection dropped mid-transaction'); },
+    cleanupPrefix: async (prefix) => { cleanedPrefixes.push(prefix); },
+    cleanupPending: async () => {}
+  };
+  await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1 }, api, adapter, shouldStop: stopAfter(1) });
+  assert.equal(cleanedPrefixes.length, 1);
+  assert.match(cleanedPrefixes[0], /^renditions\/.+\/$/);
+  assert.equal(api.settleCalls[0].payload.outcome, 'retryable_failure');
+  assert.equal(api.settleCalls[0].payload.errorCode, 'WORKER_INTERNAL_ERROR');
 });
 
 test('a failure before any rendition plan exists (e.g. a bad source) never calls cleanupPrefix', async () => {
@@ -158,8 +181,7 @@ test('an incomplete rendition (verifyOutput false) never settles as succeeded', 
     run: async () => ({ exitCode: 0, stdout: JSON.stringify(workingProbe) }),
     transcode: async () => {},
     verifyOutput: async () => false,
-    createMedia: async () => { throw new Error('must not be called'); },
-    markSource: async () => { throw new Error('must not be called'); }
+    completeTranscode: async () => { throw new Error('must not be called'); }
   };
   await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1 }, api, adapter, shouldStop: stopAfter(1) });
   assert.equal(api.settleCalls[0].payload.outcome, 'retryable_failure');

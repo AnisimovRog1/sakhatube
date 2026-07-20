@@ -1241,7 +1241,7 @@ test('playback sessions fail closed and stream only an explicitly ready free HLS
   assert.equal(granted.statusCode, 201);
   const session = JSON.parse(granted.body);
   assert.equal(typeof session.sessionId, 'string');
-  assert.equal(session.expiresIn, 300);
+  assert.equal(session.expiresIn, 6 * 60 * 60);
   assert.match(session.manifestUrl, /^\/v1\/playback\/.+\/master\.m3u8$/);
   assert.equal(JSON.stringify(session).includes('renditions/'), false);
   assert.equal(JSON.stringify(session).includes('storageKey'), false);

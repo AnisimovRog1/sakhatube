@@ -32,18 +32,24 @@ export function createAdapter({ storage, store }) {
     },
 
     async cleanupPending() {
-      await Promise.all([...pendingSourceDirs].map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})));
+      await Promise.all([...pendingSourceDirs].map((dir) => rm(dir, { recursive: true, force: true }).catch((error) => {
+        console.error(`could not remove temp source dir ${dir} (will leak on this host until manually cleaned up):`, error.message);
+      })));
       pendingSourceDirs.clear();
     },
 
     // Deletes whatever was already uploaded under this attempt's release
     // prefix. service.mjs calls this from the failure path when the thrown
     // error carries a .plan (i.e. transcode had already started uploading
-    // before something failed) -- swallows its own errors so a cleanup
-    // failure never masks or replaces the original job failure being
-    // reported.
+    // before something failed) -- swallows the error itself (a cleanup
+    // failure must never mask or replace the original job failure being
+    // reported), but logs it: silently swallowing it here made a real,
+    // ongoing S3-orphan leak (e.g. a bucket policy change breaking
+    // DeleteObjects) indistinguishable from cleanup working correctly.
     async cleanupPrefix(prefix) {
-      await storage.deletePrefix(prefix).catch(() => {});
+      await storage.deletePrefix(prefix).catch((error) => {
+        console.error(`could not clean up orphaned prefix ${prefix} (objects will remain in the bucket):`, error.message);
+      });
     },
 
     // Only ever invoked by processJob() for the ffprobe validation step.
@@ -93,7 +99,6 @@ export function createAdapter({ storage, store }) {
       return Boolean(posterSize);
     },
 
-    createMedia: (asset) => store.createMedia(asset),
-    markSource: (id, patch) => store.updateMedia(id, patch)
+    completeTranscode: (asset, sourceAssetId, sourcePatch) => store.completeTranscode({ asset, sourceAssetId, sourcePatch })
   };
 }

@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { validateJob, validateProbe, createRenditionPlan, toReadyAsset, JobError } from './contract.mjs';
 
 // Integration boundary. The API/queue adapter must implement only these private
-// operations: getSource(key), putPrivate(key, body, type), createMedia(asset),
-// markSource(id, patch), and run(command, args). It must not return public URLs.
+// operations: getSource(key), putPrivate(key, body, type),
+// completeTranscode(asset, sourceAssetId, sourcePatch), and run(command, args).
+// It must not return public URLs.
 export async function processJob(input, deps) {
   const job = validateJob(input);
   if (!deps || typeof deps.getSource !== 'function' || typeof deps.run !== 'function') throw new JobError('WORKER_CONFIG', 'Private storage and runner are required');
@@ -23,10 +25,17 @@ export async function processJob(input, deps) {
     await deps.transcode({ source, plan, probe });
     const outputOk = await deps.verifyOutput(plan);
     if (outputOk !== true) throw new JobError('OUTPUT_VERIFY_FAILED', 'Rendition is incomplete');
-    const ready = toReadyAsset(plan);
-    if (typeof deps.createMedia !== 'function' || typeof deps.markSource !== 'function') throw new JobError('WORKER_CONFIG', 'Media persistence is required');
-    const rendition = await deps.createMedia(ready);
-    await deps.markSource(job.sourceAssetId, { status: 'processed', durationMs: plan.durationMs, metadata: { processingState: 'ready', renditionAssetId: rendition.id, posterKey: plan.posterKey } });
+    const ready = { id: randomUUID(), ...toReadyAsset(plan) };
+    if (typeof deps.completeTranscode !== 'function') throw new JobError('WORKER_CONFIG', 'Media persistence is required');
+    // Both writes must land together: a rendition row a viewer can be handed
+    // a playback session for must never exist unless the source asset was
+    // also marked processed, and vice versa. Previously these were two
+    // independent calls -- if the second failed after the first committed,
+    // the failure handler below would delete the S3 objects the now-orphaned
+    // 'ready' row still pointed to, serving 404s to real viewers. The id is
+    // minted here (not left to the store's insert-time fallback) so it can
+    // be referenced in the source patch's metadata within the same call.
+    const rendition = await deps.completeTranscode(ready, job.sourceAssetId, { status: 'processed', durationMs: plan.durationMs, metadata: { processingState: 'ready', renditionAssetId: ready.id, posterKey: plan.posterKey } });
     return { rendition, plan };
   } catch (error) {
     // plan.prefix is a fresh randomUUID() per attempt (createRenditionPlan),

@@ -90,7 +90,7 @@ final class ViewerSessionStore: ObservableObject {
         }
         guard refreshTokens.read() != nil else { return nil }
         let task = Task<String?, Never> { [weak self] in
-            await self?.restoreSession()
+            await self?.performRestoreSession()
             return await self?.accessToken
         }
         refreshTask = task
@@ -149,9 +149,22 @@ final class ViewerSessionStore: ObservableObject {
         accept(session)
     }
 
+    /// Public entry point for app launch. Goes through validAccessToken()'s
+    /// refreshTask de-dup instead of hitting the network directly: a bare
+    /// call here used to race a concurrent validAccessToken() call from any
+    /// screen that woke up while launch's own refresh was still in flight --
+    /// two independent restores reading and submitting the same one-time-use
+    /// refresh token, with the server's reuse-detection revoking the loser's
+    /// (or both's) session out from under a user who never did anything wrong.
+    func restoreSession() async {
+        _ = await validAccessToken()
+    }
+
     /// Rotates the stored refresh token on every restoration. If the server
     /// rejects it, the unusable credential is removed and the app stays guest.
-    func restoreSession() async {
+    /// Only ever reached through validAccessToken()'s de-dup -- call
+    /// restoreSession() or validAccessToken() instead of this directly.
+    private func performRestoreSession() async {
         guard let refreshToken = refreshTokens.read() else { return }
         isWorking = true
         defer { isWorking = false }

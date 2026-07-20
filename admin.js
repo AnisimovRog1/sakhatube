@@ -799,7 +799,14 @@ async function loadRemoteStudio({ silent = false } = {}) {
   refreshCommentMetadata();
   if (overviewResult.status === 'fulfilled') remoteOverview = overviewResult.value;
   homeHasUnsavedChanges = false;
-  if (contentResult.status === 'rejected' && overviewResult.status === 'rejected') {
+  // Some staff roles are intentionally not allowlisted for overview or
+  // content at all (legal_reviewer only has verify-rights/assets) -- both
+  // rejecting is expected for them, not a broken connection, and gating on
+  // just these two locked that role out of Studio entirely: a valid login
+  // always landed on "токен недействителен" with no way to reach the one
+  // action (verify-rights) the role exists to perform. Only treat the
+  // connection as actually broken when every request in the batch failed.
+  if (rejected.length === allResults.length) {
     apiState = { state: 'error', message: accessError ? 'Studio API · токен недействителен' : 'Studio API · нет связи', loading: false };
     renderConnectionState();
     renderStudio();
@@ -912,7 +919,7 @@ function commentStatusLabel(status) {
 
 function renderComments() {
   const visible = studio.comments.filter((comment) => commentFilter === 'all' || comment.status === commentFilter);
-  commentList.innerHTML = visible.map((comment) => `<article class="comment-card ${comment.status === 'deleted' ? 'is-deleted' : ''}"><span class="comment-avatar">${escapeHTML(comment.initials)}</span><div class="comment-copy"><h3>${escapeHTML(comment.author)}<span>${escapeHTML(comment.time)}</span></h3><p>${escapeHTML(comment.text)}</p><small>${escapeHTML(comment.content)} · ${commentStatusLabel(comment.status)}</small></div><div class="comment-actions">${comment.status !== 'approved' && comment.status !== 'deleted' ? `<button data-action="approve-comment" data-id="${escapeHTML(comment.id)}" type="button">Одобрить</button>` : ''}${comment.status !== 'hidden' && comment.status !== 'deleted' ? `<button data-action="hide-comment" data-id="${escapeHTML(comment.id)}" type="button">Скрыть</button>` : ''}${comment.status !== 'deleted' ? `<button class="is-danger" data-action="delete-comment" data-id="${escapeHTML(comment.id)}" type="button">Удалить</button>` : ''}</div></article>`).join('') || '<article class="comment-card"><span class="comment-avatar">✓</span><div class="comment-copy"><h3>Нет комментариев</h3><p>В этой папке пока пусто.</p></div></article>';
+  commentList.innerHTML = visible.map((comment) => `<article class="comment-card ${comment.status === 'deleted' ? 'is-deleted' : ''}"><span class="comment-avatar">${escapeHTML(comment.initials)}</span><div class="comment-copy"><h3>${escapeHTML(comment.author)}<span>${escapeHTML(comment.time)}</span></h3><p>${escapeHTML(comment.text)}</p><small>${escapeHTML(comment.content)} · ${escapeHTML(commentStatusLabel(comment.status))}</small></div><div class="comment-actions">${comment.status !== 'approved' && comment.status !== 'deleted' ? `<button data-action="approve-comment" data-id="${escapeHTML(comment.id)}" type="button">Одобрить</button>` : ''}${comment.status !== 'hidden' && comment.status !== 'deleted' ? `<button data-action="hide-comment" data-id="${escapeHTML(comment.id)}" type="button">Скрыть</button>` : ''}${comment.status !== 'deleted' ? `<button class="is-danger" data-action="delete-comment" data-id="${escapeHTML(comment.id)}" type="button">Удалить</button>` : ''}</div></article>`).join('') || '<article class="comment-card"><span class="comment-avatar">✓</span><div class="comment-copy"><h3>Нет комментариев</h3><p>В этой папке пока пусто.</p></div></article>';
 }
 
 function renderUploads() {
@@ -948,7 +955,12 @@ const ACTION_ROLES = {
   'edit-banner': ['superadmin', 'content_editor'],
   'toggle-banner': ['superadmin', 'content_editor'],
   'move-banner': ['superadmin', 'content_editor'],
-  'delete-banner': ['superadmin', 'content_editor']
+  'delete-banner': ['superadmin', 'content_editor'],
+  // PATCH /v1/admin/home/slots (server/app.js) only allows these two roles,
+  // but GET allows analyst as well -- an analyst could otherwise reorder the
+  // Home tab locally and only discover it 403s once they click Save.
+  'save-home': ['superadmin', 'content_editor'],
+  'move-home': ['superadmin', 'content_editor']
 };
 
 function applyRoleGating() {
@@ -1250,7 +1262,15 @@ async function saveContentFromForm() {
     if (isApiMode()) {
       const result = await apiRequest(id ? `/v1/admin/content/${encodeURIComponent(id)}` : '/v1/admin/content', { method: id ? 'PATCH' : 'POST', body: contentPayloadFromForm(data, existing) });
       const updated = normalizeApiContent(result.item);
+      // The server's content schema has no price field at all -- it is
+      // never sent by contentPayloadFromForm and never persisted. This
+      // cache assignment is the only place price lives; it's why
+      // normalizeApiContent falls back to `previous?.price` (line 242) to
+      // survive a studio refresh in *this* browser, and why it silently
+      // reverts to 0 on any other device/session/staffer despite the
+      // access type still reading "purchase".
       updated.price = data.price;
+      const priceNotPersisted = data.access === 'purchase' && data.price > 0;
       if (id) studio.content = studio.content.map((item) => item.id === id ? { ...item, ...updated } : item);
       else {
         studio.content.unshift(updated);
@@ -1260,7 +1280,11 @@ async function saveContentFromForm() {
       refreshCommentMetadata();
       closeDialog(contentDialog);
       renderStudio();
-      showToast(id ? 'Карточка обновлена на сервере' : 'Черновик создан. Сохрани витрину, если хочешь показать его на главной.');
+      if (priceNotPersisted) {
+        showToast('Карточка обновлена на сервере. Цена пока сохраняется только в этом браузере — на других устройствах и после обновления страницы её нужно будет указать заново.');
+      } else {
+        showToast(id ? 'Карточка обновлена на сервере' : 'Черновик создан. Сохрани витрину, если хочешь показать его на главной.');
+      }
       return;
     }
     if (id) Object.assign(existing, data);
@@ -1395,8 +1419,15 @@ async function loginToApi() {
   const password = passwordField.value;
   if (!email || !password) { setConnectionError('Укажи email и пароль сотрудника.'); return; }
   const submit = document.querySelector('[data-action="staff-login"]');
+  // #connection-submit is the form's actual type="submit" control (labelled
+  // "Подключить токеном", for the token flow below) -- it's what the browser
+  // checks for implicit submission on Enter. Disabling only the visible
+  // "Войти" button left it enabled, so pressing Enter twice quickly fired
+  // two concurrent real logins with the same credentials.
+  const formSubmit = document.querySelector('#connection-submit');
   const original = submit.textContent;
   submit.disabled = true;
+  formSubmit.disabled = true;
   submit.textContent = 'Входим…';
   setConnectionError('');
   try {
@@ -1423,6 +1454,7 @@ async function loginToApi() {
     setConnectionError(error.message || 'Не удалось войти.');
   } finally {
     submit.disabled = false;
+    formSubmit.disabled = false;
     submit.textContent = original;
   }
 }
