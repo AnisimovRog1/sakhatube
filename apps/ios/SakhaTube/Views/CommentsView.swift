@@ -193,7 +193,13 @@ struct CommentsView: View {
     }
 
     private func publishComment(using existingToken: String? = nil) async {
-        guard let token = existingToken ?? await viewerSession.validAccessToken() else {
+        let resolvedToken: String?
+        if let existingToken {
+            resolvedToken = existingToken
+        } else {
+            resolvedToken = await viewerSession.validAccessToken()
+        }
+        guard let token = resolvedToken else {
             isShowingAuth = true
             return
         }
