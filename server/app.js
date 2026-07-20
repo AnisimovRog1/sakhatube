@@ -523,6 +523,19 @@ export function createMemoryStore(seed = defaultSeed) {
       Object.assign(job, { status: 'running', workerId, attempt: job.attempt + 1, leaseToken, leaseExpiresAt: new Date(timestamp + leaseMs).toISOString(), startedAt: job.startedAt ?? at, updatedAt: at });
       return clone(job);
     },
+    // A transcode can legitimately outlast a single lease window (large
+    // source, several renditions). The worker calls this periodically while
+    // still actively working a job so claimMediaJob's own eligibility check
+    // (leaseExpiresAt <= now) doesn't hand the same job to a second worker
+    // out from under it mid-transcode.
+    renewMediaJobLease(id, { leaseToken, leaseMs = mediaJobLeaseMs, at = now() }) {
+      const item = findMediaJob(id);
+      if (!item) return { status: 'not_found' };
+      if (item.status !== 'running' || item.leaseToken !== leaseToken || new Date(item.leaseExpiresAt).getTime() <= new Date(at).getTime()) return { status: 'lease_lost' };
+      item.leaseExpiresAt = new Date(new Date(at).getTime() + leaseMs).toISOString();
+      item.updatedAt = at;
+      return { status: 'renewed', job: clone(item) };
+    },
     settleMediaJob(id, { leaseToken, outcome, errorCode = null, retryAt = null, at = now() }) {
       const item = findMediaJob(id);
       if (!item) return { status: 'not_found' };
@@ -735,6 +748,7 @@ const uploadPartsQuery = z.object({
 }).strict();
 const workerClaimInput = z.object({ workerId: z.string().trim().min(3).max(80) }).strict();
 const workerJobParams = z.object({ id: z.string().uuid() });
+const workerJobRenewInput = z.object({ leaseToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
 const workerJobSettleInput = z.object({
   leaseToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   outcome: z.enum(['succeeded', 'retryable_failure', 'permanent_failure']),
@@ -2388,6 +2402,19 @@ export function buildApp(options = {}) {
         leaseExpiresAt: job.leaseExpiresAt
       }
     };
+  });
+
+  // Called periodically by the worker while a job is still actively being
+  // transcoded, so a source that takes longer than a single lease window
+  // doesn't become claimable again by another worker mid-job.
+  app.post('/v1/internal/media-jobs/:id/renew', { preHandler: app.requireMediaWorker }, async (request, reply) => {
+    const params = parseOrReply(workerJobParams, request.params, reply);
+    const body = parseOrReply(workerJobRenewInput, request.body, reply);
+    if (!params || !body) return;
+    const renewed = await store.renewMediaJobLease?.(params.id, { leaseToken: body.leaseToken, leaseMs: mediaJobLeaseMs, at: now() });
+    if (!renewed || renewed.status === 'lease_lost') return reply.code(409).send({ error: 'JOB_LEASE_LOST' });
+    if (renewed.status === 'not_found') return reply.code(404).send({ error: 'NOT_FOUND' });
+    return { leaseExpiresAt: renewed.job.leaseExpiresAt };
   });
 
   app.post('/v1/internal/media-jobs/:id/settle', { preHandler: app.requireMediaWorker }, async (request, reply) => {

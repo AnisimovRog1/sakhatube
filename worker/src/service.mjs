@@ -37,6 +37,10 @@ function loadConfig() {
     workerId: process.env.WORKER_ID || `worker-${process.pid}`,
     databaseUrl: requireEnv('DATABASE_URL'),
     pollIntervalMs: Number(process.env.WORKER_POLL_INTERVAL_MS || 8000),
+    // A third of the server's 15-minute lease window (server/app.js's
+    // mediaJobLeaseMs) -- leaves two renewal attempts of margin before the
+    // lease actually expires if one renew call fails transiently.
+    leaseRenewIntervalMs: Number(process.env.WORKER_LEASE_RENEW_INTERVAL_MS || 5 * 60 * 1000),
     s3: {
       endpoint: requireEnv('S3_ENDPOINT'),
       accessKeyId: requireEnv('S3_ACCESS_KEY_ID'),
@@ -65,6 +69,16 @@ export async function runWorkerLoop({ config, api, adapter, shouldStop }) {
     }
     console.log(`claimed job ${job.jobId} for content ${job.contentId}`);
     let rendition;
+    // A transcode can legitimately outlast a single lease window (large
+    // source, several sequential renditions) -- without this, claimMediaJob's
+    // own eligibility check would make the same job claimable by a second
+    // worker while this one is still actively working it. Runs only for the
+    // duration of processJob, not the (fast) settle call after it.
+    const renewTimer = setInterval(() => {
+      api.renew(job.jobId, job.leaseToken).catch((error) => {
+        console.error(`could not renew lease for job ${job.jobId} (will let the lease run out if this keeps failing):`, error.message);
+      });
+    }, config.leaseRenewIntervalMs);
     try {
       ({ rendition } = await processJob(job, adapter));
     } catch (error) {
@@ -81,7 +95,15 @@ export async function runWorkerLoop({ config, api, adapter, shouldStop }) {
       } catch (settleError) {
         console.error(`could not settle job ${job.jobId} after failure:`, settleError.message);
       }
+      // error.plan is only set once runner.mjs has actually created a
+      // rendition plan (see runner.mjs) -- i.e. transcode() may have already
+      // uploaded some renditions/segments under that attempt's prefix before
+      // this failed. Without this, every failed-partway or timed-out-lease
+      // retry left those objects in the bucket forever with nothing to
+      // reclaim them.
+      if (error.plan) await adapter.cleanupPrefix?.(error.plan.prefix);
       await adapter.cleanupPending?.();
+      clearInterval(renewTimer);
       continue;
     }
     // processJob already succeeded here -- a settle failure past this point
@@ -89,8 +111,13 @@ export async function runWorkerLoop({ config, api, adapter, shouldStop }) {
     // fall into the failure path above and misreport a genuinely successful
     // transcode as retryable_failure, which would discard the completed
     // rendition and redo the work from scratch for no reason. Left to expire
-    // and be reclaimed instead; see the worker audit notes on lease renewal
-    // and settle/createMedia atomicity for the larger fix this still needs.
+    // and be reclaimed instead. Lease renewal (above) keeps that expiry from
+    // happening prematurely mid-transcode; the remaining gap is the worker
+    // writing createMedia/markSource directly rather than that being
+    // transactional with settle on the server -- a real duplicate-processing
+    // window only if settle itself keeps failing for the full lease window,
+    // not the everyday case this fix targets.
+    clearInterval(renewTimer);
     try {
       await api.settle(job.jobId, { leaseToken: job.leaseToken, outcome: 'succeeded', renditionAssetId: rendition.id });
       console.log(`job ${job.jobId} succeeded -> rendition ${rendition.id}`);

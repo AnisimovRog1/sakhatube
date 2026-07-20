@@ -36,6 +36,16 @@ export function createAdapter({ storage, store }) {
       pendingSourceDirs.clear();
     },
 
+    // Deletes whatever was already uploaded under this attempt's release
+    // prefix. service.mjs calls this from the failure path when the thrown
+    // error carries a .plan (i.e. transcode had already started uploading
+    // before something failed) -- swallows its own errors so a cleanup
+    // failure never masks or replaces the original job failure being
+    // reported.
+    async cleanupPrefix(prefix) {
+      await storage.deletePrefix(prefix).catch(() => {});
+    },
+
     // Only ever invoked by processJob() for the ffprobe validation step.
     run: (binary, args) => runProcess(resolveBinary(binary), args),
 

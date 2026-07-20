@@ -1327,6 +1327,33 @@ test('media worker queue leases a private job once and never exposes it to Studi
   assert.equal(store.getMedia(source.id).status, 'processed');
 });
 
+test('media worker queue lease can be renewed mid-transcode, and only by the current lease holder', async (t) => {
+  const store = createMemoryStore();
+  const workerToken = 'worker-token-that-is-longer-than-thirty-two-characters';
+  const app = await createTestApp({ store, mediaWorkerToken: workerToken });
+  t.after(() => app.close());
+  const source = store.createMedia({
+    kind: 'video_source', relation: 'source', status: 'queued', contentId: 'signal',
+    storageKey: 'incoming/2026-07-16/40000000-0000-4000-8000-000000000004/source.mp4',
+    fileName: 'episode.mp4', contentType: 'video/mp4', size: 1, metadata: { processingState: 'queued' }
+  });
+  const job = store.createMediaJob({ sourceAssetId: source.id, contentId: 'signal', sourceKey: source.storageKey, contentType: source.contentType, sizeBytes: source.size });
+  const claim = await app.inject({ method: 'POST', url: '/v1/internal/media-jobs/claim', headers: { 'x-sakhatube-worker-token': workerToken }, payload: { workerId: 'worker-a' } });
+  const claimed = JSON.parse(claim.body).job;
+
+  const wrongToken = await app.inject({ method: 'POST', url: `/v1/internal/media-jobs/${job.id}/renew`, headers: { 'x-sakhatube-worker-token': workerToken }, payload: { leaseToken: 'a'.repeat(43) } });
+  assert.equal(wrongToken.statusCode, 409);
+
+  const renew = await app.inject({ method: 'POST', url: `/v1/internal/media-jobs/${job.id}/renew`, headers: { 'x-sakhatube-worker-token': workerToken }, payload: { leaseToken: claimed.leaseToken } });
+  assert.equal(renew.statusCode, 200);
+  assert.ok(new Date(JSON.parse(renew.body).leaseExpiresAt).getTime() > new Date(claimed.leaseExpiresAt).getTime());
+
+  // The renewed lease is what settle must be checked against -- confirms
+  // renew actually persisted, not just returned a value.
+  const settle = await app.inject({ method: 'POST', url: `/v1/internal/media-jobs/${job.id}/settle`, headers: { 'x-sakhatube-worker-token': workerToken }, payload: { leaseToken: claimed.leaseToken, outcome: 'permanent_failure', errorCode: 'TEST_FAILURE' } });
+  assert.equal(settle.statusCode, 200);
+});
+
 test('media worker queue claims the oldest eligible job first (FIFO, matching postgres-store.js)', async (t) => {
   const store = createMemoryStore();
   const workerToken = 'worker-token-that-is-longer-than-thirty-two-characters';

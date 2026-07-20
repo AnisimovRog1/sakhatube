@@ -23,6 +23,15 @@ export function createApiClient({ baseUrl, token }) {
       });
       if (!response.ok) throw new Error(`settle вернул ${response.status}`);
       return response.json();
+    },
+    async renew(jobId, leaseToken) {
+      const response = await fetch(`${baseUrl}/v1/internal/media-jobs/${jobId}/renew`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ leaseToken })
+      });
+      if (!response.ok) throw new Error(`renew вернул ${response.status}`);
+      return (await response.json()).leaseExpiresAt;
     }
   };
 }

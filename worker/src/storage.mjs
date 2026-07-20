@@ -2,8 +2,10 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import {
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client
 } from '@aws-sdk/client-s3';
@@ -73,6 +75,27 @@ export function createWorkerStorage(config) {
         chunks.push(chunk);
       }
       return Buffer.concat(chunks).toString('utf8');
+    },
+    // Every failed-partway or retried job leaves whatever renditions/*
+    // objects it already uploaded (a fresh randomUUID() releaseId prefix is
+    // minted per attempt, see contract.mjs's createRenditionPlan) with no
+    // other code path that ever deletes them. Called from service.mjs's
+    // failure handler whenever a plan was already created for the attempt
+    // that just failed.
+    async deletePrefix(prefix) {
+      let continuationToken;
+      do {
+        const page = await client.send(new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken
+        }));
+        const keys = (page.Contents ?? []).map((object) => ({ Key: object.Key }));
+        if (keys.length) {
+          await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: keys, Quiet: true } }));
+        }
+        continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (continuationToken);
     }
   };
 }

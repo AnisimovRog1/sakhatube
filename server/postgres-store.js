@@ -1066,6 +1066,20 @@ export async function createPostgresStore(connectionString, seedData) {
         return mapMediaJob(updated.rows[0]);
       } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
     },
+    async renewMediaJobLease(id, { leaseToken, leaseMs = 900000, at = now() }) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const selected = await client.query('SELECT * FROM media_transcode_jobs WHERE id = $1 FOR UPDATE', [id]);
+        const current = mapMediaJob(selected.rows[0]);
+        if (!current) { await client.query('COMMIT'); return { status: 'not_found' }; }
+        if (current.status !== 'running' || current.leaseToken !== leaseToken || new Date(current.leaseExpiresAt).getTime() <= new Date(at).getTime()) { await client.query('COMMIT'); return { status: 'lease_lost' }; }
+        const expiresAt = new Date(new Date(at).getTime() + leaseMs).toISOString();
+        const updated = await client.query('UPDATE media_transcode_jobs SET lease_expires_at = $1, updated_at = $2 WHERE id = $3 RETURNING *', [expiresAt, at, id]);
+        await client.query('COMMIT');
+        return { status: 'renewed', job: mapMediaJob(updated.rows[0]) };
+      } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    },
     async settleMediaJob(id, { leaseToken, outcome, errorCode = null, retryAt = null, at = now() }) {
       const client = await pool.connect();
       try {

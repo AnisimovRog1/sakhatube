@@ -45,6 +45,31 @@ test('a fully successful job is settled with the created rendition id', async ()
   assert.equal(api.settleCalls[0].payload.renditionAssetId, 'rendition-1');
 });
 
+test('the lease is renewed periodically while a slow transcode is still running, and renewal stops once it settles', async () => {
+  const api = fakeApi([baseJob]);
+  const renewCalls = [];
+  api.renew = async (jobId, leaseToken) => { renewCalls.push({ jobId, leaseToken }); return new Date(Date.now() + 900_000).toISOString(); };
+  const adapter = {
+    getSource: async () => ({ localPath: '/tmp/x', sizeBytes: 10, isPublic: false }),
+    run: async () => ({ exitCode: 0, stdout: JSON.stringify(workingProbe) }),
+    // Slow enough that a 10ms renewal interval gets at least one real chance
+    // to fire before processJob resolves.
+    transcode: async () => new Promise((resolve) => setTimeout(resolve, 45)),
+    verifyOutput: async () => true,
+    createMedia: async (asset) => ({ ...asset, id: 'rendition-1' }),
+    markSource: async () => {},
+    cleanupPending: async () => {}
+  };
+  await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1, leaseRenewIntervalMs: 10 }, api, adapter, shouldStop: stopAfter(1) });
+  assert.ok(renewCalls.length >= 1, `expected at least one renew call, got ${renewCalls.length}`);
+  assert.equal(renewCalls[0].jobId, baseJob.jobId);
+  assert.equal(renewCalls[0].leaseToken, baseJob.leaseToken);
+  // No leaked timer still trying to renew a job this loop already moved past.
+  const callsAtSettle = renewCalls.length;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(renewCalls.length, callsAtSettle);
+});
+
 test('a transient failure settling a successful job is never misreported as a job failure', async () => {
   const queue = [baseJob];
   const settleCalls = [];
@@ -94,6 +119,36 @@ test('an adapter/infrastructure failure (not a JobError) settles as retryable wi
   assert.equal(api.settleCalls[0].payload.outcome, 'retryable_failure');
   assert.equal(api.settleCalls[0].payload.errorCode, 'WORKER_INTERNAL_ERROR');
   assert.equal(api.settleCalls[0].payload.retryAfterSeconds, 60);
+});
+
+test('a failure after a rendition plan was created cleans up whatever was already uploaded under it', async () => {
+  const api = fakeApi([baseJob]);
+  const cleanedPrefixes = [];
+  const adapter = {
+    getSource: async () => ({ localPath: '/tmp/x', sizeBytes: 10, isPublic: false }),
+    run: async () => ({ exitCode: 0, stdout: JSON.stringify(workingProbe) }),
+    transcode: async () => {},
+    verifyOutput: async () => false,
+    createMedia: async () => { throw new Error('must not be called'); },
+    markSource: async () => { throw new Error('must not be called'); },
+    cleanupPrefix: async (prefix) => { cleanedPrefixes.push(prefix); },
+    cleanupPending: async () => {}
+  };
+  await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1 }, api, adapter, shouldStop: stopAfter(1) });
+  assert.equal(cleanedPrefixes.length, 1);
+  assert.match(cleanedPrefixes[0], /^renditions\/.+\/$/);
+});
+
+test('a failure before any rendition plan exists (e.g. a bad source) never calls cleanupPrefix', async () => {
+  const api = fakeApi([baseJob]);
+  let cleanupPrefixCalled = false;
+  const adapter = {
+    getSource: async () => { throw new Error('S3 timed out'); },
+    cleanupPrefix: async () => { cleanupPrefixCalled = true; },
+    cleanupPending: async () => {}
+  };
+  await runWorkerLoop({ config: { workerId: 'w', pollIntervalMs: 1 }, api, adapter, shouldStop: stopAfter(1) });
+  assert.equal(cleanupPrefixCalled, false);
 });
 
 test('an incomplete rendition (verifyOutput false) never settles as succeeded', async () => {

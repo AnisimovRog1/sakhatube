@@ -15,18 +15,28 @@ export async function processJob(input, deps) {
   try { raw = JSON.parse(probeRun.stdout); } catch { throw new JobError('FFPROBE_INVALID_JSON', 'ffprobe did not return JSON'); }
   const probe = validateProbe(raw);
   const plan = createRenditionPlan(job, probe, deps.now?.() || new Date());
-  // The actual adapter is responsible for isolated temp paths, HLS generation,
-  // upload of every relative URI, and atomic completion. This foundation refuses
-  // to mark an item ready until that adapter explicitly proves all output exists.
-  if (typeof deps.transcode !== 'function' || typeof deps.verifyOutput !== 'function') throw new JobError('WORKER_CONFIG', 'Transcode and output verification are required');
-  await deps.transcode({ source, plan, probe });
-  const outputOk = await deps.verifyOutput(plan);
-  if (outputOk !== true) throw new JobError('OUTPUT_VERIFY_FAILED', 'Rendition is incomplete');
-  const ready = toReadyAsset(plan);
-  if (typeof deps.createMedia !== 'function' || typeof deps.markSource !== 'function') throw new JobError('WORKER_CONFIG', 'Media persistence is required');
-  const rendition = await deps.createMedia(ready);
-  await deps.markSource(job.sourceAssetId, { status: 'processed', durationMs: plan.durationMs, metadata: { processingState: 'ready', renditionAssetId: rendition.id, posterKey: plan.posterKey } });
-  return { rendition, plan };
+  try {
+    // The actual adapter is responsible for isolated temp paths, HLS generation,
+    // upload of every relative URI, and atomic completion. This foundation refuses
+    // to mark an item ready until that adapter explicitly proves all output exists.
+    if (typeof deps.transcode !== 'function' || typeof deps.verifyOutput !== 'function') throw new JobError('WORKER_CONFIG', 'Transcode and output verification are required');
+    await deps.transcode({ source, plan, probe });
+    const outputOk = await deps.verifyOutput(plan);
+    if (outputOk !== true) throw new JobError('OUTPUT_VERIFY_FAILED', 'Rendition is incomplete');
+    const ready = toReadyAsset(plan);
+    if (typeof deps.createMedia !== 'function' || typeof deps.markSource !== 'function') throw new JobError('WORKER_CONFIG', 'Media persistence is required');
+    const rendition = await deps.createMedia(ready);
+    await deps.markSource(job.sourceAssetId, { status: 'processed', durationMs: plan.durationMs, metadata: { processingState: 'ready', renditionAssetId: rendition.id, posterKey: plan.posterKey } });
+    return { rendition, plan };
+  } catch (error) {
+    // plan.prefix is a fresh randomUUID() per attempt (createRenditionPlan),
+    // so transcode() may already have uploaded some renditions/segments
+    // under it before this failed -- attach the plan so service.mjs's
+    // failure handler can clean up whatever got orphaned, without this
+    // module needing to know anything about S3 itself.
+    error.plan = plan;
+    throw error;
+  }
 }
 
 // A queue adapter belongs to deployment infrastructure, not this process. This
